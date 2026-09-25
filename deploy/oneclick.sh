@@ -19,7 +19,7 @@ BRANCH="${BRANCH:-main}"
 say() { printf '\n\033[1;34m→ %s\033[0m\n' "$*"; }
 gen() { head -c 18 /dev/urandom | base64 | tr -d '/+=' | head -c 20; }
 
-if [ -z "$REPO_URL" ]; then
+if [ -z "$REPO_URL" ] && [ ! -d "$DIR/.git" ]; then
   echo "Thiếu REPO_URL. Ví dụ: REPO_URL=https://github.com/user/pos-shop-saas.git bash deploy/oneclick.sh"
   exit 1
 fi
