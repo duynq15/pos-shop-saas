@@ -1,5 +1,6 @@
 {
   "info": {
+    "_postman_id": "8f3c2a10-6b1e-4d2a-9c3f-posshopvqr001",
     "name": "POS Shop – VietQR (P6)",
     "description": "Bộ test VietQR động + callback cho POS Shop (bản SaaS). Chạy A1→A7 cho luồng trong app (mock), B0→B4 cho webhook, C cho ca lỗi. Biến tự lưu: invoice_id, payment_ref, amount, token, txn_id.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -48,7 +49,17 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{base}}/api/auth/login",
+            "url": {
+              "raw": "{{base}}/api/auth/login",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"admin123\"\n}",
@@ -84,7 +95,16 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{base}}/api/settings",
+            "url": {
+              "raw": "{{base}}/api/settings",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "settings"
+              ]
+            },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"vqr_enabled\": \"1\",\n  \"vqr_env\": \"mock\",\n  \"bank_account\": \"99990001\",\n  \"bank_name\": \"MB Bank\",\n  \"bank_bin\": \"970422\",\n  \"account_holder\": \"NGUYEN VAN A\"\n}",
@@ -118,7 +138,16 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{base}}/api/invoices",
+            "url": {
+              "raw": "{{base}}/api/invoices",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices"
+              ]
+            },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"items\": [{ \"product_id\": 2, \"qty\": 2 }],\n  \"payment_method\": \"transfer\"\n}",
@@ -152,7 +181,18 @@
           "request": {
             "method": "POST",
             "header": [],
-            "url": "{{base}}/api/invoices/{{invoice_id}}/vietqr"
+            "url": {
+              "raw": "{{base}}/api/invoices/{{invoice_id}}/vietqr",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices",
+                "{{invoice_id}}",
+                "vietqr"
+              ]
+            }
           },
           "response": [],
           "event": [
@@ -175,7 +215,18 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{base}}/api/invoices/{{invoice_id}}/payment-status"
+            "url": {
+              "raw": "{{base}}/api/invoices/{{invoice_id}}/payment-status",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices",
+                "{{invoice_id}}",
+                "payment-status"
+              ]
+            }
           },
           "response": [],
           "event": [
@@ -200,7 +251,17 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{base}}/api/vietqr/simulate",
+            "url": {
+              "raw": "{{base}}/api/vietqr/simulate",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "vietqr",
+                "simulate"
+              ]
+            },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"invoice_id\": {{invoice_id}}\n}",
@@ -229,7 +290,18 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{base}}/api/invoices/{{invoice_id}}/payment-status"
+            "url": {
+              "raw": "{{base}}/api/invoices/{{invoice_id}}/payment-status",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices",
+                "{{invoice_id}}",
+                "payment-status"
+              ]
+            }
           },
           "response": [],
           "event": [
@@ -259,7 +331,16 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{base}}/api/invoices",
+            "url": {
+              "raw": "{{base}}/api/invoices",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices"
+              ]
+            },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"items\": [{ \"product_id\": 3, \"qty\": 4 }],\n  \"payment_method\": \"transfer\"\n}",
@@ -292,7 +373,17 @@
           "request": {
             "method": "POST",
             "header": [],
-            "url": "{{base}}/vqr/api/token_generate",
+            "url": {
+              "raw": "{{base}}/vqr/api/token_generate",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "vqr",
+                "api",
+                "token_generate"
+              ]
+            },
             "auth": {
               "type": "basic",
               "basic": [
@@ -333,7 +424,18 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{base}}/vqr/bank/api/transaction-sync",
+            "url": {
+              "raw": "{{base}}/vqr/bank/api/transaction-sync",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "vqr",
+                "bank",
+                "api",
+                "transaction-sync"
+              ]
+            },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"bankaccount\": \"99990001\",\n  \"amount\": {{amount}},\n  \"content\": \"{{payment_ref}}\",\n  \"orderId\": \"{{payment_ref}}\",\n  \"transactionid\": \"{{txn_id}}\",\n  \"transType\": \"C\"\n}",
@@ -382,7 +484,18 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{base}}/api/invoices/{{invoice_id}}/payment-status"
+            "url": {
+              "raw": "{{base}}/api/invoices/{{invoice_id}}/payment-status",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices",
+                "{{invoice_id}}",
+                "payment-status"
+              ]
+            }
           },
           "response": [],
           "event": [
@@ -407,7 +520,18 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{base}}/vqr/bank/api/transaction-sync",
+            "url": {
+              "raw": "{{base}}/vqr/bank/api/transaction-sync",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "vqr",
+                "bank",
+                "api",
+                "transaction-sync"
+              ]
+            },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"bankaccount\": \"99990001\",\n  \"amount\": {{amount}},\n  \"content\": \"{{payment_ref}}\",\n  \"orderId\": \"{{payment_ref}}\",\n  \"transactionid\": \"{{txn_id}}\",\n  \"transType\": \"C\"\n}",
@@ -455,7 +579,18 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{base}}/vqr/bank/api/transaction-sync",
+            "url": {
+              "raw": "{{base}}/vqr/bank/api/transaction-sync",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "vqr",
+                "bank",
+                "api",
+                "transaction-sync"
+              ]
+            },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"bankaccount\": \"99990001\",\n  \"amount\": 1000,\n  \"content\": \"X\",\n  \"orderId\": \"X\",\n  \"transactionid\": \"BAD-1\"\n}",
@@ -493,7 +628,17 @@
           "request": {
             "method": "POST",
             "header": [],
-            "url": "{{base}}/vqr/api/token_generate",
+            "url": {
+              "raw": "{{base}}/vqr/api/token_generate",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "vqr",
+                "api",
+                "token_generate"
+              ]
+            },
             "auth": {
               "type": "basic",
               "basic": [
@@ -531,7 +676,16 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{base}}/api/invoices",
+            "url": {
+              "raw": "{{base}}/api/invoices",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices"
+              ]
+            },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"items\": [{ \"product_id\": 2, \"qty\": 1 }],\n  \"payment_method\": \"transfer\"\n}",
@@ -568,7 +722,18 @@
                 "value": "application/json"
               }
             ],
-            "url": "{{base}}/vqr/bank/api/transaction-sync",
+            "url": {
+              "raw": "{{base}}/vqr/bank/api/transaction-sync",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "vqr",
+                "bank",
+                "api",
+                "transaction-sync"
+              ]
+            },
             "body": {
               "mode": "raw",
               "raw": "{\n  \"bankaccount\": \"99990001\",\n  \"amount\": 1000,\n  \"content\": \"{{payment_ref}}\",\n  \"orderId\": \"{{payment_ref}}\",\n  \"transactionid\": \"{{mismatch_txn}}\",\n  \"transType\": \"C\"\n}",
