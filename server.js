@@ -18,6 +18,7 @@ const sales = require('./src/routes/sales');
 const inventory = require('./src/routes/inventory');
 const reports = require('./src/routes/reports');
 const backup = require('./src/routes/backup');
+const vietqr = require('./src/routes/vietqr');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -28,6 +29,9 @@ app.use(express.json({ limit: '8mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, data: { status: 'up', time: new Date().toISOString() } }));
+
+// Webhook công khai cho VietQR gọi vào (không cần đăng nhập)
+app.use('/vqr', vietqr.webhook);
 
 // Xác thực & định tuyến theo tenant
 app.use(attachSession);
@@ -44,6 +48,7 @@ app.use('/api', (req, res, next) => {
 app.use('/api', usersRoutes);
 app.use('/api', admin.router);
 app.use('/api', backup.router);
+app.use('/api', vietqr.router);
 app.use('/api', catalog);
 app.use('/api', sales);
 app.use('/api', inventory);

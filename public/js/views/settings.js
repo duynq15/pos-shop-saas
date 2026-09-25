@@ -48,6 +48,22 @@ export default {
   </div>
 
   <div class="card">
+    <h3>VietQR động (thanh toán tự động)</h3>
+    <p class="muted">Bật để tạo QR động và tự xác nhận khi khách chuyển khoản. Môi trường <b>mock</b> để thử không cần tài khoản VietQR.</p>
+    <label class="chk"><input type="checkbox" data-s="vqr_enabled"> Bật VietQR động</label>
+    <div class="form-grid" style="margin-top:10px">
+      <label class="fld">Môi trường<select class="field" data-s="vqr_env"><option value="mock">mock (thử)</option><option value="dev">dev (sandbox)</option><option value="prod">prod (thật)</option></select></label>
+      <label class="fld">Mã ngân hàng (VietQR)<input class="field" data-s="vqr_bank_code" placeholder="MB / BIDV"></label>
+      <label class="fld">Terminal code<input class="field" data-s="vqr_terminal_code"></label>
+      <label class="fld">Username VietQR<input class="field" data-s="vqr_username" autocapitalize="none"></label>
+      <label class="fld">Password VietQR<input class="field" data-s="vqr_password" type="password"></label>
+      <label class="fld">Basic user (cấp cho VietQR)<input class="field" data-s="vqr_exposed_username" autocapitalize="none"></label>
+      <label class="fld">Basic pass (cấp cho VietQR)<input class="field" data-s="vqr_exposed_password" type="password"></label>
+    </div>
+    <p class="muted">Webhook cho VietQR: <code>/vqr/api/token_generate</code> · <code>/vqr/bank/api/transaction-sync</code></p>
+  </div>
+
+  <div class="card">
     <h3>Bán hàng &amp; kho</h3>
     <div class="form-grid">
       <label class="fld">Bảng giá mặc định<select class="field" data-s="default_price_list_id" id="pl-select"></select></label>

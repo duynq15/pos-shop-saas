@@ -4,7 +4,7 @@ const express = require('express');
 const db = require('../db');
 const { ok, fail, wrap, bad, round, num, str, bool } = require('../lib/util');
 const { priceCart } = require('../lib/pricing');
-const { makeCode } = require('../lib/codes');
+const { makeCode, nextPaymentRef } = require('../lib/codes');
 const { getSettings } = require('./admin');
 const { requirePerm } = require('../middleware');
 
@@ -115,10 +115,11 @@ router.post('/invoices', requirePerm('pos.sell'), wrap((req, res) => {
   try {
     const prefix = type === 'return' ? s.return_prefix || 'TH' : s.invoice_prefix || 'HD';
     const code = makeCode(db, prefix, 'invoices');
-    const r = db.prepare(`INSERT INTO invoices(code,type,parent_id,subtotal,item_discount,order_discount,discount,total,payment_method,paid_amount,change_amount,price_list_id,promo_order_id,customer_name,customer_phone,note,status)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    const paymentRef = type === 'sale' ? nextPaymentRef(db) : null;
+    const r = db.prepare(`INSERT INTO invoices(code,type,parent_id,subtotal,item_discount,order_discount,discount,total,payment_method,paid_amount,change_amount,price_list_id,promo_order_id,payment_ref,customer_name,customer_phone,note,status)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       code, type, b.parent_id ? Number(b.parent_id) : null, priced.subtotal, priced.item_discount, priced.order_discount, priced.discount,
-      priced.total, method, paid.tendered, paid.change, priced.price_list_id, priced.promo_order_id,
+      priced.total, method, paid.tendered, paid.change, priced.price_list_id, priced.promo_order_id, paymentRef,
       str(b.customer_name, 120) || null, str(b.customer_phone, 40) || null, str(b.note, 500) || null, status);
     const invId = Number(r.lastInsertRowid);
 
@@ -129,7 +130,9 @@ router.post('/invoices', requirePerm('pos.sell'), wrap((req, res) => {
       if (l.product_id) applyStock(l, type === 'return' ? 1 : -1, type, code);
     }
     const insPay = db.prepare('INSERT INTO invoice_payments(invoice_id,method,amount,note) VALUES (?,?,?,?)');
-    for (const p of paid.payments) insPay.run(invId, p.method, type === 'return' ? -p.amount : p.amount, null);
+    if (status === 'paid') {
+      for (const p of paid.payments) insPay.run(invId, p.method, type === 'return' ? -p.amount : p.amount, null);
+    }
 
     db.exec('COMMIT');
     ok(res, getInvoice(invId));
@@ -179,8 +182,13 @@ router.get('/invoices/:id/returnable', wrap((req, res) => {
 }));
 
 router.post('/invoices/:id/confirm', wrap((req, res) => {
-  db.prepare(`UPDATE invoices SET status='paid', paid_amount=total WHERE id=?`).run(Number(req.params.id));
-  ok(res, getInvoice(Number(req.params.id)));
+  const id = Number(req.params.id);
+  const inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(id);
+  if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
+  db.prepare(`UPDATE invoices SET status='paid', paid_amount=total, change_amount=0 WHERE id=?`).run(id);
+  const hasPay = db.prepare('SELECT COUNT(*) c FROM invoice_payments WHERE invoice_id=?').get(id).c;
+  if (!hasPay) db.prepare('INSERT INTO invoice_payments(invoice_id,method,amount,note) VALUES (?,?,?,?)').run(id, inv.payment_method === 'cash' ? 'cash' : 'transfer', inv.total, 'Xác nhận thủ công');
+  ok(res, getInvoice(id));
 }));
 
 router.post('/invoices/:id/cancel', requirePerm('invoice.cancel'), wrap((req, res) => {

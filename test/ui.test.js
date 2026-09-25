@@ -187,6 +187,20 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('QR confirm shows receipt', (await page.locator('#modal-box .receipt').count()) === 1);
     await page.keyboard.press('Escape'); await wait(300);
 
+    // VietQR động: tự xác nhận khi nhận tiền (mock)
+    await page.evaluate(() => fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vqr_enabled: '1', vqr_env: 'mock', bank_account: '99990001' }) }));
+    await wait(400);
+    await scan.fill('2000000000035'); await scan.press('Enter'); await wait(400);
+    await page.locator('.seg-btn[data-method="transfer"]').click(); await wait(200);
+    await page.locator('#btn-pay').click(); await wait(1200);
+    ok('Dynamic VietQR modal', (await page.locator('#modal-box .qr-wrap img').count()) === 1 && (await page.locator('#modal-box').innerText()).includes('Đang chờ'));
+    const pendId = await page.evaluate(async () => { const r = await fetch('/api/invoices?status=pending'); const j = await r.json(); return j.data[0] && j.data[0].id; });
+    await page.evaluate((id) => fetch('/api/vietqr/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invoice_id: id }) }), pendId);
+    await wait(4200);
+    ok('Auto receipt after payment', (await page.locator('#modal-box .receipt').count()) === 1);
+    await page.keyboard.press('Escape'); await wait(300);
+    await page.evaluate(() => fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vqr_enabled: '0' }) }));
+
     // Treo đơn
     await scan.fill('8935001111222'); await scan.press('Enter'); await wait(400);
     await page.locator('#btn-hold').click(); await wait(600);

@@ -178,6 +178,42 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const csvRes = await req('admin', '/reports/export?type=sales');
   ok('csv export', csvRes.status === 200 && /text\/csv/.test(csvRes.headers.get('content-type') || ''));
 
+  // ---------- VietQR động & callback ----------
+  const vset = await api('/settings', { method: 'PUT', body: { vqr_enabled: '1', vqr_env: 'mock', bank_account: '99990001', bank_name: 'MB Bank', bank_bin: '970422', account_holder: 'NGUYEN VAN A' } });
+  ok('enable vietqr', vset.ok && vset.data.vqr_enabled === '1');
+  ok('vietqr config enabled', (await api('/vietqr/config')).data.enabled === true);
+  const t1 = await api('/invoices', { method: 'POST', body: { items: [{ product_id: 2, qty: 2 }], payment_method: 'transfer' } });
+  ok('transfer invoice has payment_ref', t1.ok && t1.data.status === 'pending' && /^P\d{10}$/.test(t1.data.payment_ref));
+  const dyn = await api(`/invoices/${t1.data.id}/vietqr`, { method: 'POST' });
+  ok('dynamic QR generated (mock)', dyn.ok && String(dyn.data.qrDataUrl).startsWith('data:image/png') && dyn.data.mock === true);
+  ok('payment status pending', (await api(`/invoices/${t1.data.id}/payment-status`)).data.status === 'pending');
+  const sim = await api('/vietqr/simulate', { method: 'POST', body: { invoice_id: t1.data.id } });
+  ok('simulate marks paid', sim.ok && sim.data.paid === true);
+  ok('invoice paid after simulate', (await api(`/invoices/${t1.data.id}/payment-status`)).data.paid === true);
+  ok('simulate records one payment', (await api(`/invoices/${t1.data.id}`)).data.payments.length === 1);
+
+  // Webhook VietQR gọi vào
+  const t2 = await api('/invoices', { method: 'POST', body: { items: [{ product_id: 3, qty: 4 }], payment_method: 'transfer' } });
+  const tokenRes = await fetch(ROOT + '/vqr/api/token_generate', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('posshop:posshop-secret').toString('base64') } });
+  const tok = await tokenRes.json();
+  ok('webhook get token', tokenRes.status === 200 && !!tok.access_token && tok.token_type === 'Bearer' && tok.expires_in === 300);
+  const syncBody = { bankaccount: '99990001', amount: t2.data.total, content: t2.data.payment_ref, orderId: t2.data.payment_ref, transactionid: 'TEST-TXN-1', transType: 'C' };
+  const syncHeaders = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token };
+  const sync1 = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: syncHeaders, body: JSON.stringify(syncBody) })).json();
+  ok('webhook sync ok', sync1.error === false && sync1.object.reftransactionid === t2.data.payment_ref);
+  ok('invoice paid via webhook', (await api(`/invoices/${t2.data.id}/payment-status`)).data.paid === true);
+  const sync2 = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: syncHeaders, body: JSON.stringify(syncBody) })).json();
+  ok('webhook idempotent', sync2.error === false && /đã xử lý/.test(sync2.toastMessage));
+  ok('no duplicate payment', (await api(`/invoices/${t2.data.id}`)).data.payments.length === 1);
+
+  // Số tiền không khớp -> không tự xác nhận
+  const t3 = await api('/invoices', { method: 'POST', body: { items: [{ product_id: 2, qty: 1 }], payment_method: 'transfer' } });
+  const syncBad = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: syncHeaders, body: JSON.stringify({ ...syncBody, orderId: t3.data.payment_ref, content: t3.data.payment_ref, transactionid: 'TEST-TXN-2', amount: 1000 }) })).json();
+  ok('webhook mismatch not auto-paid', /không khớp/.test(syncBad.toastMessage) && (await api(`/invoices/${t3.data.id}/payment-status`)).data.paid === false);
+  ok('webhook bad token 401', (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer bad' }, body: '{}' })).status === 401);
+  ok('webhook bad basic auth', (await fetch(ROOT + '/vqr/api/token_generate', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('x:y').toString('base64') } })).status === 401);
+  await api('/settings', { method: 'PUT', body: { vqr_enabled: '0' } });
+
   // ---------- Phân quyền ----------
   ok('create cashier', (await api('/users', { method: 'POST', body: { username: 'thungan', password: '123456', role: 'cashier' } })).ok);
   let cl = await req('cash', '/auth/login', { method: 'POST', body: { username: 'thungan', password: '123456' } });
