@@ -65,34 +65,56 @@ EOF
   grep -E "ADMIN_PASS|ROOT_PASS|VQR_EXPOSED_PASS" .env | sed 's/^/    /'
 fi
 
-# 4) Caddyfile theo domain
-say "Cấu hình Caddy cho $DOMAIN..."
-cat > deploy/Caddyfile <<EOF
+# 4) Chạy
+if [ "${MODE:-caddy}" = "caddy" ]; then
+  say "Cấu hình Caddy cho $DOMAIN..."
+  cat > deploy/Caddyfile <<EOF
 $DOMAIN {
 	encode gzip
 	reverse_proxy app:3000
 }
 EOF
+  COMPOSE_FILE=docker-compose.prod.yml
+  HEALTH_URL="https://$DOMAIN/api/health"
+else
+  say "Chế độ proxy (không Caddy) — app ở 127.0.0.1:3005..."
+  COMPOSE_FILE=docker-compose.vps.yml
+  HEALTH_URL="http://127.0.0.1:3005/api/health"
+fi
 
-# 5) Chạy
 say "Build & khởi động (có thể mất 1–3 phút)..."
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose -f "$COMPOSE_FILE" up -d --build
 
-# 6) Kiểm tra
 say "Kiểm tra..."
+code=""
 for i in 1 2 3 4 5 6; do
-  code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 8 "https://$DOMAIN/api/health" || true)
+  code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 8 "$HEALTH_URL" || true)
   [ "$code" = "200" ] && break
   sleep 5
 done
 echo "  Health: ${code:-lỗi}"
+
+if [ "${MODE:-caddy}" = "caddy" ]; then
 cat <<EOF
 
 ✅ Hoàn tất.
    Truy cập:  https://$DOMAIN
-   Đăng nhập: admin / (mật khẩu ADMIN_PASS trong $DIR/.env)
+   Đăng nhập: admin / (ADMIN_PASS trong $DIR/.env)
    Webhook VietQR khai báo cho đối tác:
      https://$DOMAIN/vqr/api/token_generate
      https://$DOMAIN/vqr/bank/api/transaction-sync
-   Quản trị:  docker compose -f docker-compose.prod.yml ps|logs|restart
+   Quản trị: docker compose -f $COMPOSE_FILE ps|logs|restart
 EOF
+else
+cat <<EOF
+
+✅ App đã chạy nội bộ tại http://127.0.0.1:3005
+   VPS đã có reverse proxy giữ cổng 80/443 → thêm 1 site trỏ về 127.0.0.1:3005
+   (xem deploy/reverse-proxy.md; nginx dùng certbot --nginx -d $DOMAIN).
+   Sau đó: https://$DOMAIN · admin / (ADMIN_PASS trong $DIR/.env)
+   Webhook VietQR khai báo cho đối tác:
+     https://$DOMAIN/vqr/api/token_generate
+     https://$DOMAIN/vqr/bank/api/transaction-sync
+   Quản trị: docker compose -f $COMPOSE_FILE ps|logs|restart
+EOF
+fi

@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    image: pos-shop-saas
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DATA_DIR=/data
+    volumes:
+      - pos-data:/data
+    ports:
+      - "127.0.0.1:3005:3000"
+
+volumes:
+  pos-data:
