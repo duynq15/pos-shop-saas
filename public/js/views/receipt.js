@@ -84,6 +84,7 @@ export async function showTransferQR(inv) {
       ${qr ? `<img src="${qr.dataUrl}" alt="VietQR">` : '<p class="low">Chưa cấu hình tài khoản ngân hàng (Cài đặt).</p>'}
       <div class="amt">${money(inv.total)}</div>
       ${qr ? `<div class="info">${esc(qr.bank_name)} · <b>${esc(qr.bank_account)}</b><br>${esc(qr.account_holder)}<br>Nội dung: <b>${esc(qr.content || inv.code)}</b></div>` : ''}
+      <div class="hint">Mã HĐ: <b>${esc(inv.code)}</b> · ID: <b>${esc(inv.id)}</b></div>
       ${inv.status === 'pending' ? `<div class="hint" id="q-wait">${dynamic ? 'Đang chờ khách chuyển khoản… (tự cập nhật khi nhận tiền)' : 'Sau khi nhận tiền, bấm "Đã nhận tiền"'}</div>` : ''}
     </div>
     <div class="modal-actions" style="justify-content:center">
