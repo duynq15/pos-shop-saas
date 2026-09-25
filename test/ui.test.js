@@ -267,6 +267,7 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await view('reports');
     ok('Report stats cards', (await page.locator('#rp-stats .stat').count()) >= 10);
     ok('Report top chart', (await page.locator('#rp-top').innerText()).length > 0);
+    ok('Analytics section renders', (await page.locator('#an-abc').count()) === 1 && (await page.locator('#an-reorder').count()) === 1);
     await page.locator('[data-range="month"]').click(); await wait(700);
     ok('Month range', (await page.locator('#rp-from').inputValue()).endsWith('-01'));
 

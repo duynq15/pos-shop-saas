@@ -3,7 +3,7 @@
 const express = require('express');
 const db = require('../db');
 const { ok, wrap, round } = require('../lib/util');
-const { can } = require('../middleware');
+const { can, requirePerm } = require('../middleware');
 
 const router = express.Router();
 const DATE = "date(i.created_at)";
@@ -188,6 +188,52 @@ router.get('/reports/vat', wrap((req, res) => {
   const outputTax = output.reduce((s, r) => s + (r.tax || 0), 0);
   const inputTax = input.reduce((s, r) => s + (r.tax || 0), 0);
   ok(res, { from, to, output, input, output_tax: outputTax, input_tax: inputTax, payable: outputTax - inputTax });
+}));
+
+// ---------- Phân tích thông minh ----------
+router.get('/reports/analytics', requirePerm('report.view'), wrap((req, res) => {
+  const { from, to } = range(req.query);
+  const days = Math.max(1, Math.round((new Date(to) - new Date(from)) / 86400000) + 1);
+
+  // ABC (Pareto) theo doanh thu sản phẩm
+  const prod = db.prepare(`SELECT ii.product_id, ii.name, SUM(ii.base_qty) AS qty, SUM(ii.line_total) AS revenue
+    FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id
+    WHERE i.status='paid' AND i.type='sale' AND date(i.created_at)>=date(?) AND date(i.created_at)<=date(?)
+    GROUP BY ii.product_id, ii.name ORDER BY revenue DESC`).all(from, to);
+  const totalRev = prod.reduce((s, p) => s + p.revenue, 0) || 1;
+  let cum = 0;
+  const abc = prod.map((p) => {
+    cum += p.revenue;
+    const share = cum / totalRev;
+    return { ...p, cum_share: Number((share * 100).toFixed(1)), class: share <= 0.8 ? 'A' : share <= 0.95 ? 'B' : 'C' };
+  }).slice(0, 50);
+
+  // Gợi ý nhập hàng: dựa trên tốc độ bán và tồn hiện tại
+  const reorder = db.prepare(`SELECT p.id, p.name, p.unit, p.stock, p.min_stock,
+      COALESCE((SELECT SUM(ii.base_qty) FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id
+        WHERE ii.product_id=p.id AND i.status='paid' AND i.type='sale' AND date(i.created_at)>=date(?) AND date(i.created_at)<=date(?)),0) AS sold
+    FROM products p WHERE p.active=1`).all(from, to).map((p) => {
+    const perDay = p.sold / days;
+    const cover = perDay > 0 ? p.stock / perDay : 999;
+    const suggest = Math.max(0, Math.ceil(perDay * days * 0.5 - p.stock));
+    return { id: p.id, name: p.name, unit: p.unit, stock: p.stock, min_stock: p.min_stock, per_day: Number(perDay.toFixed(2)), days_cover: Number(cover.toFixed(1)), suggest };
+  }).filter((p) => p.stock <= p.min_stock || p.days_cover < 7).sort((a, b) => a.days_cover - b.days_cover).slice(0, 30);
+
+  // Thường mua kèm (top cặp sản phẩm cùng hóa đơn)
+  const basket = db.prepare(`SELECT a.name AS a, b.name AS b, COUNT(*) AS times
+    FROM invoice_items a JOIN invoice_items b ON a.invoice_id=b.invoice_id AND a.product_id<b.product_id
+    JOIN invoices i ON i.id=a.invoice_id
+    WHERE i.status='paid' AND i.type='sale' AND date(i.created_at)>=date(?) AND date(i.created_at)<=date(?)
+    GROUP BY a.name, b.name ORDER BY times DESC LIMIT 10`).all(from, to);
+
+  // Bất thường: hóa đơn giảm giá cao
+  const anomalies = db.prepare(`SELECT code, total, discount, created_at, customer_name,
+      ROUND(discount*100.0/NULLIF(subtotal,0)) AS pct
+    FROM invoices WHERE status='paid' AND type='sale' AND date(created_at)>=date(?) AND date(created_at)<=date(?)
+      AND subtotal>0 AND discount*100.0/subtotal>=30 ORDER BY pct DESC LIMIT 20`).all(from, to);
+  const cancelled = db.prepare(`SELECT COUNT(*) c FROM invoices WHERE status='cancelled' AND date(created_at)>=date(?) AND date(created_at)<=date(?)`).get(from, to).c;
+
+  ok(res, { from, to, days, abc, reorder, basket, anomalies, cancelled });
 }));
 
 module.exports = router;

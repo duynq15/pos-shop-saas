@@ -236,6 +236,10 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('payable after payment', pay && pay.paid === 20000 && pay.balance === 30000);
   ok('supplier payments list', (await api('/suppliers/' + sup.data.id + '/payments')).data.length === 1);
 
+  // ---------- Phân tích thông minh ----------
+  const ana = await api('/reports/analytics');
+  ok('analytics endpoint', ana.ok && Array.isArray(ana.data.abc) && Array.isArray(ana.data.reorder) && Array.isArray(ana.data.basket) && typeof ana.data.cancelled === 'number');
+
   // ---------- VAT ----------
   await api('/settings', { method: 'PUT', body: { vat_mode: 'inclusive' } });
   const vp = await api('/products', { method: 'POST', body: { name: 'SP VAT 10', sell_price: 11000, cost_price: 9000, vat_rate: 10, stock: 10 } });
