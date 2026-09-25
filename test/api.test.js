@@ -213,6 +213,14 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('webhook mismatch not auto-paid', /không khớp/.test(syncBad.toastMessage) && (await api(`/invoices/${t3.data.id}/payment-status`)).data.paid === false);
   ok('webhook bad token 401', (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer bad' }, body: '{}' })).status === 401);
   ok('webhook bad basic auth', (await fetch(ROOT + '/vqr/api/token_generate', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('x:y').toString('base64') } })).status === 401);
+  // Mỗi shop một Basic Auth riêng (mô hình tiền về tài khoản từng shop)
+  const exposed = await api('/settings', { method: 'PUT', body: { vqr_enabled: '1', vqr_env: 'mock', vqr_exposed_username: 'shopA', vqr_exposed_password: 'secretA' } });
+  ok('set per-shop exposed creds', exposed.ok && exposed.data.vqr_exposed_username === 'shopA');
+  const t4 = await api('/invoices', { method: 'POST', body: { items: [{ product_id: 2, qty: 1 }], payment_method: 'transfer' } });
+  const tokA = await (await fetch(ROOT + '/vqr/api/token_generate', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('shopA:secretA').toString('base64') } })).json();
+  ok('per-shop token issued', !!tokA.access_token);
+  const syncA = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokA.access_token }, body: JSON.stringify({ bankaccount: 'ACCOUNT-KHAC', amount: t4.data.total, content: t4.data.payment_ref, orderId: t4.data.payment_ref, transactionid: 'TENANT-TXN-1', transType: 'C' }) })).json();
+  ok('per-shop token resolves tenant', syncA.error === false && (await api(`/invoices/${t4.data.id}/payment-status`)).data.paid === true);
   await api('/settings', { method: 'PUT', body: { vqr_enabled: '0' } });
 
   // ---------- Phân quyền ----------
