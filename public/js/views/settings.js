@@ -70,6 +70,8 @@ export default {
     <div class="form-grid">
       <label class="fld">Bảng giá mặc định<select class="field" data-s="default_price_list_id" id="pl-select"></select></label>
       <label class="fld">Đơn vị tiền tệ<input class="field" data-s="currency"></label>
+      <label class="fld">Cách tính giá &amp; VAT<select class="field" data-s="vat_mode"><option value="inclusive">Giá đã gồm VAT</option><option value="exclusive">Giá chưa gồm VAT</option></select></label>
+      <label class="fld">Thuế VAT mặc định (%)<input class="field" type="number" min="0" max="100" data-s="vat_default_rate"></label>
     </div>
     <label class="chk" style="margin-bottom:10px"><input type="checkbox" data-s="allow_negative_stock"> Cho phép bán âm kho</label>
     <label class="chk" style="margin-bottom:10px"><input type="checkbox" data-s="low_stock_alert"> Cảnh báo sắp hết hàng</label>

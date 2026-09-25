@@ -31,7 +31,8 @@ export default {
   <div class="card"><h3>Doanh thu theo giờ</h3><div id="rp-hours"></div></div>
 </div>
 <div class="card" style="margin-bottom:14px"><h3>⚠️ Sản phẩm sắp hết hàng</h3><div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">Tối thiểu</th></tr></thead><tbody id="rp-low"></tbody></table></div></div>
-<div class="card"><h3>🐢 Hàng bán chậm / tồn lâu</h3><div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">Giá trị tồn</th><th class="r">Đã bán</th></tr></thead><tbody id="rp-slow"></tbody></table></div></div>`;
+<div class="card"><h3>🐢 Hàng bán chậm / tồn lâu</h3><div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">Giá trị tồn</th><th class="r">Đã bán</th></tr></thead><tbody id="rp-slow"></tbody></table></div></div>
+<div class="card" style="margin-top:14px"><h3>Thuế GTGT (VAT)</h3><div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr><th>Loại</th><th class="r">Giá trị</th><th class="r">Tiền thuế</th></tr></thead><tbody id="rp-vat"></tbody></table></div><div class="rowline total"><span>VAT phải nộp (đầu ra − đầu vào)</span><b id="rp-vat-pay">0</b></div></div>`;
     el.addEventListener('click', (e) => {
       const r = e.target.closest('[data-range]');
       if (r) return setRange(r.dataset.range);
@@ -73,10 +74,11 @@ function barList(data, valueKey, labelKey, color) {
 async function load() {
   const from = $('#rp-from').value, to = $('#rp-to').value;
   $('#rp-range').textContent = `Từ ${from} đến ${to}`;
-  const [r, inv, slow] = await Promise.all([
+  const [r, inv, slow, vat] = await Promise.all([
     api(`/api/reports/summary?from=${from}&to=${to}`),
     api('/api/reports/inventory'),
     api(`/api/reports/slow-moving?from=${from}&to=${to}`),
+    api(`/api/reports/vat?from=${from}&to=${to}`),
   ]);
   const cards = [
     ['Doanh thu thuần', money(r.revenue), 'primary'],
@@ -99,6 +101,12 @@ async function load() {
   $('#rp-hours').innerHTML = colChart(r.byHour, 'revenue', 'hour');
   $('#rp-low').innerHTML = r.lowStock.map((p) => `<tr><td>${esc(p.name)}</td><td class="r low">${num(p.stock)} ${esc(p.unit)}</td><td class="r">${num(p.min_stock)}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">Không có sản phẩm sắp hết</td></tr>';
   $('#rp-slow').innerHTML = slow.slice(0, 20).map((p) => `<tr><td>${esc(p.name)}</td><td class="r">${num(p.stock)} ${esc(p.unit)}</td><td class="r">${num(p.stock_value)}</td><td class="r">${num(p.sold)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Không có dữ liệu</td></tr>';
+  const vatRows = [
+    ...vat.output.map((t) => `<tr><td>Bán ra · VAT ${t.rate}%</td><td class="r">${num(t.taxable)}</td><td class="r">${num(t.tax)}</td></tr>`),
+    ...vat.input.map((t) => `<tr><td>Mua vào · VAT ${t.rate}%</td><td class="r">${num(t.base)}</td><td class="r">${num(t.tax)}</td></tr>`),
+  ];
+  $('#rp-vat').innerHTML = vatRows.join('') || '<tr><td colspan="3" class="empty">Chưa có dữ liệu thuế</td></tr>';
+  $('#rp-vat-pay').textContent = money(vat.payable);
 }
 
 function exportCSV(type) {

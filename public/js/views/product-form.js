@@ -42,6 +42,12 @@ export function openProductForm(product = {}, onSaved) {
       <label class="fld">Vị trí / kệ<input class="field" id="f-location" value="${esc(p.location || '')}"></label>
       <label class="fld">Giá vốn<input class="field" id="f-cost" type="number" min="0" value="${p.cost_price ?? 0}"></label>
       <label class="fld">Giá bán *<input class="field" id="f-price" type="number" min="0" value="${p.sell_price ?? ''}"></label>
+      <label class="fld">Thuế VAT (%)
+        <select class="field" id="f-vat">
+          ${[0, 5, 8, 10].map((r) => `<option value="${r}" ${Number(p.vat_rate || 0) === r ? 'selected' : ''}>${r}%${r === 0 ? ' (không thuế)' : ''}</option>`).join('')}
+          ${[0, 5, 8, 10].includes(Number(p.vat_rate || 0)) ? '' : `<option value="${p.vat_rate}" selected>${p.vat_rate}%</option>`}
+        </select>
+      </label>
       <label class="fld">${isNew ? 'Tồn đầu' : 'Tồn hiện tại'}<input class="field" id="f-stock" type="number" step="any" value="${p.stock ?? 0}" ${isNew ? '' : 'disabled'}></label>
       <label class="fld">Tồn tối thiểu<input class="field" id="f-min" type="number" step="any" value="${p.min_stock ?? 0}"></label>
       <label class="fld">Tồn tối đa<input class="field" id="f-max" type="number" step="any" value="${p.max_stock ?? 0}"></label>
@@ -117,6 +123,7 @@ export function openProductForm(product = {}, onSaved) {
       location: $('#f-location').value.trim(),
       cost_price: $('#f-cost').value,
       sell_price: $('#f-price').value,
+      vat_rate: $('#f-vat').value,
       stock: isNew ? $('#f-stock').value : undefined,
       min_stock: $('#f-min').value,
       max_stock: $('#f-max').value,

@@ -21,6 +21,7 @@ export function receiptHTML(inv, qr) {
       <tr><td>Tạm tính</td><td style="text-align:right">${num(inv.subtotal)}</td></tr>
       ${inv.item_discount ? `<tr><td>Giảm giá hàng</td><td style="text-align:right">-${num(inv.item_discount)}</td></tr>` : ''}
       ${inv.order_discount ? `<tr><td>Giảm giá đơn</td><td style="text-align:right">-${num(inv.order_discount)}</td></tr>` : ''}
+      ${inv.vat_amount ? `<tr><td>Tiền hàng (chưa VAT)</td><td style="text-align:right">${num(inv.net_amount)}</td></tr>${(inv.tax_lines || []).map((t) => `<tr><td>VAT ${t.rate}%</td><td style="text-align:right">${num(t.tax_amount)}</td></tr>`).join('')}` : ''}
       <tr class="tot"><td>${isReturn ? 'TIỀN TRẢ' : 'TỔNG CỘNG'}</td><td style="text-align:right">${num(inv.total)} ${esc(s.currency)}</td></tr>
       <tr><td>Thanh toán</td><td style="text-align:right">${pay}</td></tr>
       ${inv.payment_method === 'cash' ? `<tr><td>Khách đưa</td><td style="text-align:right">${num(inv.paid_amount)}</td></tr><tr><td>Tiền thừa</td><td style="text-align:right">${num(inv.change_amount)}</td></tr>` : ''}

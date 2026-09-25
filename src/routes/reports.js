@@ -60,6 +60,9 @@ router.get('/reports/summary', wrap((req, res) => {
 
   const lowStock = db.prepare('SELECT id,name,stock,min_stock,unit FROM products WHERE active=1 AND stock<=min_stock ORDER BY stock LIMIT 100').all();
 
+  const vatRow = db.prepare(`SELECT COALESCE(SUM(CASE WHEN i.type='return' THEN -i.vat_amount ELSE i.vat_amount END),0) AS vat,
+      COALESCE(SUM(CASE WHEN i.type='return' THEN -i.net_amount ELSE i.net_amount END),0) AS net
+    FROM invoices i WHERE i.status='paid' AND ${DATE}>=date(?) AND ${DATE}<=date(?)`).get(...P);
   const revenue = sale.revenue - ret.revenue;
   const items = profitRow.items;
   const out = {
@@ -70,6 +73,8 @@ router.get('/reports/summary', wrap((req, res) => {
     revenue,
     gross_revenue: sale.revenue,
     discount: sale.discount,
+    net: vatRow.net,
+    vat: vatRow.vat,
     profit: profitRow.profit,
     items,
     avg_order: sale.invoices ? round(revenue / sale.invoices) : 0,
@@ -165,6 +170,24 @@ router.get('/reports/export', wrap((req, res) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${name}.csv"`);
   res.send(csv);
+}));
+
+router.get('/reports/vat', wrap((req, res) => {
+  const { from, to } = range(req.query);
+  const output = db.prepare(`SELECT t.rate,
+      SUM(CASE WHEN i.type='return' THEN -t.taxable_amount ELSE t.taxable_amount END) AS taxable,
+      SUM(CASE WHEN i.type='return' THEN -t.tax_amount ELSE t.tax_amount END) AS tax
+    FROM invoice_tax_lines t JOIN invoices i ON i.id=t.invoice_id
+    WHERE i.status='paid' AND date(i.created_at)>=date(?) AND date(i.created_at)<=date(?)
+    GROUP BY t.rate ORDER BY t.rate`).all(from, to);
+  const input = db.prepare(`SELECT pi.vat_rate AS rate, SUM(pi.line_total) AS base,
+      SUM(ROUND(pi.line_total*pi.vat_rate/100)) AS tax
+    FROM purchase_items pi JOIN purchases p ON p.id=pi.purchase_id
+    WHERE p.status='received' AND pi.vat_rate>0 AND date(p.created_at)>=date(?) AND date(p.created_at)<=date(?)
+    GROUP BY pi.vat_rate ORDER BY pi.vat_rate`).all(from, to);
+  const outputTax = output.reduce((s, r) => s + (r.tax || 0), 0);
+  const inputTax = input.reduce((s, r) => s + (r.tax || 0), 0);
+  ok(res, { from, to, output, input, output_tax: outputTax, input_tax: inputTax, payable: outputTax - inputTax });
 }));
 
 module.exports = router;

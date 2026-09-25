@@ -152,11 +152,11 @@ router.post('/products', requirePerm('product.create'), wrap((req, res) => {
   validateProduct(b);
   try {
     const r = db.prepare(`INSERT INTO products(barcode,sku,name,category_id,unit,cost_price,sell_price,stock,min_stock,max_stock,location,
-        product_type,is_weighted,allow_negative,warranty_months,weight,description,image)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        product_type,is_weighted,allow_negative,warranty_months,weight,description,image,vat_rate)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       str(b.barcode, 80) || null, str(b.sku, 60) || null, str(b.name, 200), b.category_id || null, str(b.unit, 40) || 'cái',
       round(b.cost_price), round(b.sell_price), num(b.stock || 0), num(b.min_stock || 0), num(b.max_stock || 0), str(b.location, 60) || null,
-      str(b.product_type) || 'goods', bool(b.is_weighted), bool(b.allow_negative), round(b.warranty_months), num(b.weight || 0), str(b.description, 2000) || null, b.image || null);
+      str(b.product_type) || 'goods', bool(b.is_weighted), bool(b.allow_negative), round(b.warranty_months), num(b.weight || 0), str(b.description, 2000) || null, b.image || null, num(b.vat_rate || 0));
     const id = Number(r.lastInsertRowid);
     saveUnits(id, b);
     if (num(b.stock || 0) !== 0) {
@@ -177,12 +177,12 @@ router.put('/products/:id', requirePerm('product.edit'), wrap((req, res) => {
   validateProduct(b);
   try {
     db.prepare(`UPDATE products SET barcode=?,sku=?,name=?,category_id=?,unit=?,cost_price=?,sell_price=?,min_stock=?,max_stock=?,location=?,
-        product_type=?,is_weighted=?,allow_negative=?,warranty_months=?,weight=?,description=?,image=?,active=?,updated_at=datetime('now','localtime')
+        product_type=?,is_weighted=?,allow_negative=?,warranty_months=?,weight=?,description=?,image=?,vat_rate=?,active=?,updated_at=datetime('now','localtime')
       WHERE id=?`).run(
       str(b.barcode, 80) || null, str(b.sku, 60) || null, str(b.name, 200), b.category_id || null, str(b.unit, 40) || 'cái',
       round(b.cost_price), round(b.sell_price), num(b.min_stock || 0), num(b.max_stock || 0), str(b.location, 60) || null,
       str(b.product_type) || 'goods', bool(b.is_weighted), bool(b.allow_negative), round(b.warranty_months), num(b.weight || 0),
-      str(b.description, 2000) || null, b.image || null, b.active === 0 ? 0 : 1, id);
+      str(b.description, 2000) || null, b.image || null, num(b.vat_rate || 0), b.active === 0 ? 0 : 1, id);
     saveUnits(id, b);
     const p = db.prepare(PRODUCT_SELECT + ' WHERE p.id=?').get(id);
     attachUnits([p]);

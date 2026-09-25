@@ -59,6 +59,9 @@ function priceCart(db, cart) {
   if (!items.length) bad('Hóa đơn chưa có sản phẩm');
   const priceListId = cart.price_list_id ? Number(cart.price_list_id) : null;
   const promotions = loadActivePromotions(db, cart.date);
+  const st = Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map((r) => [r.key, r.value]));
+  const vatMode = st.vat_mode === 'exclusive' ? 'exclusive' : 'inclusive';
+  const vatDefault = Number(st.vat_default_rate) || 0;
 
   const lines = [];
   let grossSubtotal = 0;
@@ -74,6 +77,7 @@ function priceCart(db, cart) {
       if (!product) bad('Không tìm thấy sản phẩm trong giỏ');
       unit = getUnit(db, product.id, raw.unit_id);
     }
+    const vatRate = product ? Number(product.vat_rate != null ? product.vat_rate : vatDefault) : 0;
     const conversion = unit ? Number(unit.conversion) || 1 : 1;
     const baseQty = qty * conversion;
 
@@ -119,6 +123,7 @@ function priceCart(db, cart) {
       promo_name: promoName,
       line_total: lineTotal,
       note: raw.note || null,
+      vat_rate: vatRate,
     });
   }
 
@@ -131,20 +136,44 @@ function priceCart(db, cart) {
     if (p.kind !== 'order') continue;
     if (Number(p.min_subtotal || 0) > subtotal) continue;
     const v = p.discount_type === 'percent' ? round((subtotal * Number(p.discount_value)) / 100) : round(Number(p.discount_value));
-    if (v > promoOrderDiscount) {
-      promoOrderDiscount = v;
-      orderPromo = p;
-    }
+    if (v > promoOrderDiscount) { promoOrderDiscount = v; orderPromo = p; }
   }
   promoOrderDiscount = Math.min(promoOrderDiscount, subtotal);
 
   let manualDiscount = Math.max(0, round(cart.manual_discount || cart.discount || 0));
   let orderDiscount = promoOrderDiscount + manualDiscount;
-  if (orderDiscount > subtotal) {
-    manualDiscount = Math.max(0, subtotal - promoOrderDiscount);
-    orderDiscount = subtotal;
+  if (orderDiscount > subtotal) { manualDiscount = Math.max(0, subtotal - promoOrderDiscount); orderDiscount = subtotal; }
+  const afterDiscount = Math.max(0, subtotal - orderDiscount);
+  const factor = subtotal > 0 ? afterDiscount / subtotal : 1;
+
+  // VAT: tách theo từng mức thuế suất, sau chiết khấu hóa đơn.
+  let netSum = 0, vatSum = 0;
+  const taxMap = new Map();
+  for (const l of lines) {
+    const lineAfter = round(l.line_total * factor);
+    let netLine, vatLine;
+    if (vatMode === 'exclusive') {
+      netLine = lineAfter; vatLine = round((netLine * l.vat_rate) / 100);
+      l.net_amount = netLine; l.vat_amount = vatLine; l.gross_amount = netLine + vatLine;
+    } else {
+      netLine = Math.round(lineAfter / (1 + l.vat_rate / 100));
+      vatLine = lineAfter - netLine;
+      l.net_amount = netLine; l.vat_amount = vatLine; l.gross_amount = lineAfter;
+    }
+    netSum += netLine; vatSum += vatLine;
+    const key = String(l.vat_rate);
+    const t = taxMap.get(key) || { rate: l.vat_rate, taxable_amount: 0, tax_amount: 0 };
+    t.taxable_amount += netLine; t.tax_amount += vatLine; taxMap.set(key, t);
   }
-  const total = Math.max(0, subtotal - orderDiscount);
+  let netAmount, vatAmount, total;
+  if (vatMode === 'exclusive') {
+    netAmount = netSum; vatAmount = vatSum; total = netAmount + vatAmount;
+  } else {
+    total = afterDiscount;
+    vatAmount = vatSum;
+    netAmount = vatSum === 0 ? total : total - vatAmount;
+  }
+  const taxLines = [...taxMap.values()];
 
   return {
     items: lines,
@@ -157,7 +186,12 @@ function priceCart(db, cart) {
     manual_discount: manualDiscount,
     order_discount: orderDiscount,
     discount: itemDiscount + orderDiscount,
+    net_amount: netAmount,
+    vat_amount: vatAmount,
+    gross_amount: total,
     total,
+    vat_mode: vatMode,
+    tax_lines: taxLines,
     price_list_id: priceListId,
     item_count: lines.reduce((s, l) => s + l.qty, 0),
   };

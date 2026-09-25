@@ -272,6 +272,14 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   CREATE INDEX IF NOT EXISTS idx_vqr_txn ON vietqr_transactions(transactionid);
   CREATE INDEX IF NOT EXISTS idx_vqr_order ON vietqr_transactions(order_id);
 
+  CREATE TABLE IF NOT EXISTS invoice_tax_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    rate REAL NOT NULL DEFAULT 0,
+    taxable_amount INTEGER NOT NULL DEFAULT 0,
+    tax_amount INTEGER NOT NULL DEFAULT 0
+  );
+
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -297,6 +305,10 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   ensureColumn('products', 'weight', 'REAL DEFAULT 0');
   ensureColumn('products', 'description', 'TEXT');
   ensureColumn('products', 'image', 'TEXT');
+  ensureColumn('products', 'vat_rate', 'REAL DEFAULT 0');
+  ensureColumn('invoices', 'net_amount', 'INTEGER DEFAULT 0');
+  ensureColumn('invoices', 'vat_amount', 'INTEGER DEFAULT 0');
+  ensureColumn('purchase_items', 'vat_rate', 'REAL DEFAULT 0');
   ensureColumn('invoices', 'type', "TEXT DEFAULT 'sale'");
   ensureColumn('invoices', 'parent_id', 'INTEGER');
   ensureColumn('invoices', 'item_discount', 'INTEGER DEFAULT 0');
@@ -331,6 +343,7 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     receipt_width: '80', label_width: '40', label_height: '30', label_show_name: '1', label_show_price: '1',
     label_show_barcode: '1', label_show_shop: '1', round_total: '0', print_after_pay: '0',
     internal_barcode_seq: '0', online_lookup: '1', lookup_url: '', backup_enabled: '1', backup_keep: '30',
+    vat_mode: 'inclusive', vat_default_rate: '0',
     payment_ref_seq: '0',
     vqr_enabled: '0', vqr_env: 'mock', vqr_bank_code: '', vqr_username: '', vqr_password: '',
     vqr_terminal_code: '', vqr_exposed_username: '', vqr_exposed_password: '', vqr_secret_key: '',

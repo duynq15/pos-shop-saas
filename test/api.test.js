@@ -224,6 +224,20 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('per-shop token resolves tenant', syncA.error === false && (await api(`/invoices/${t4.data.id}/payment-status`)).data.paid === true);
   await api('/settings', { method: 'PUT', body: { vqr_enabled: '0' } });
 
+  // ---------- VAT ----------
+  await api('/settings', { method: 'PUT', body: { vat_mode: 'inclusive' } });
+  const vp = await api('/products', { method: 'POST', body: { name: 'SP VAT 10', sell_price: 11000, cost_price: 9000, vat_rate: 10, stock: 10 } });
+  ok('product has vat_rate', vp.ok && Number(vp.data.vat_rate) === 10);
+  const vinv = await api('/invoices', { method: 'POST', body: { items: [{ product_id: vp.data.id, qty: 1 }], payment_method: 'cash', paid_amount: 20000 } });
+  ok('inclusive VAT computed', vinv.data.total === 11000 && vinv.data.net_amount === 10000 && vinv.data.vat_amount === 1000);
+  ok('tax lines by rate', vinv.data.tax_lines.length === 1 && vinv.data.tax_lines[0].rate === 10 && vinv.data.tax_lines[0].tax_amount === 1000);
+  await api('/settings', { method: 'PUT', body: { vat_mode: 'exclusive' } });
+  const vinv2 = await api('/invoices', { method: 'POST', body: { items: [{ product_id: vp.data.id, qty: 1 }], payment_method: 'cash', paid_amount: 20000 } });
+  ok('exclusive VAT added', vinv2.data.net_amount === 11000 && vinv2.data.vat_amount === 1100 && vinv2.data.total === 12100);
+  const vrep = await api('/reports/vat');
+  ok('vat report output', vrep.ok && vrep.data.output_tax >= 2100);
+  await api('/settings', { method: 'PUT', body: { vat_mode: 'inclusive' } });
+
   // ---------- Phân quyền ----------
   ok('create cashier', (await api('/users', { method: 'POST', body: { username: 'thungan', password: '123456', role: 'cashier' } })).ok);
   let cl = await req('cash', '/auth/login', { method: 'POST', body: { username: 'thungan', password: '123456' } });
