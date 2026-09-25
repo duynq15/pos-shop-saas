@@ -1,5 +1,10 @@
 # Hướng dẫn test VietQR bằng Postman
 
+> **Import nhanh:** mở Postman → **Import** → chọn file
+> [`postman/POS-Shop-VietQR.postman_collection.json`](../postman/POS-Shop-VietQR.postman_collection.json).
+> Collection đã có sẵn biến và script tự lưu `invoice_id`, `payment_ref`, `amount`, `token`.
+> Chạy lần lượt theo thứ tự A1 → A7, B0 → B4, C.
+
 Áp dụng cho bản **`pos-shop-saas`** (đa cửa hàng). Gồm 2 phần:
 - **A. Test luồng trong app** (mock, không cần tài khoản VietQR) — làm được ngay.
 - **B. Test webhook** (VietQR gọi vào hệ thống) — mô phỏng đúng hợp đồng API của VietQR.
