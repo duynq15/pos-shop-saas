@@ -3,7 +3,7 @@
 #
 # Cách dùng trên VPS:
 #   REPO_URL=https://github.com/<user>/pos-shop-saas.git \
-#   DOMAIN=thanhtoansso.sangkienhunggia.app \
+#   DOMAIN=thanhtoanso.sangkienhunggia.app \
 #   bash <(curl -fsSL https://raw.githubusercontent.com/<user>/pos-shop-saas/main/deploy/oneclick.sh)
 #
 # Hoặc chạy tại thư mục đã clone:
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-}"
-DOMAIN="${DOMAIN:-thanhtoansso.sangkienhunggia.app}"
+DOMAIN="${DOMAIN:-thanhtoanso.sangkienhunggia.app}"
 DIR="${DIR:-/opt/pos-shop-saas}"
 BRANCH="${BRANCH:-main}"
 

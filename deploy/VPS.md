@@ -1,10 +1,10 @@
-# Deploy lên VPS – thanhtoansso.sangkienhunggia.app
+# Deploy lên VPS – thanhtoanso.sangkienhunggia.app
 
 Bộ file đã sẵn sàng: `Dockerfile`, `docker-compose.prod.yml` (app + Caddy tự SSL), `deploy/Caddyfile`, `.env.example`.
 
 ## 1. Trỏ DNS
-Tạo bản ghi **A**: `thanhtoansso` → **IP VPS** (trong trang quản lý tên miền `sangkienhunggia.app`).
-Kiểm tra: `dig +short thanhtoansso.sangkienhunggia.app` phải ra IP VPS. (Caddy cần DNS trỏ đúng mới cấp được SSL.)
+Tạo bản ghi **A**: `thanhtoanso` → **IP VPS** (trong trang quản lý tên miền `sangkienhunggia.app`).
+Kiểm tra: `dig +short thanhtoanso.sangkienhunggia.app` phải ra IP VPS. (Caddy cần DNS trỏ đúng mới cấp được SSL.)
 
 ## 2. Cài Docker trên VPS (Ubuntu)
 ```bash
@@ -48,20 +48,20 @@ sudo ufw allow 22,80,443/tcp
 cd /opt/pos-shop-saas
 docker compose -f docker-compose.prod.yml up -d --build
 ```
-Caddy tự xin chứng chỉ SSL cho `thanhtoansso.sangkienhunggia.app`.
+Caddy tự xin chứng chỉ SSL cho `thanhtoanso.sangkienhunggia.app`.
 
 ## 7. Kiểm tra
 ```bash
-curl -s https://thanhtoansso.sangkienhunggia.app/api/health
+curl -s https://thanhtoanso.sangkienhunggia.app/api/health
 # {"ok":true,...}
 ```
-Mở `https://thanhtoansso.sangkienhunggia.app` → đăng nhập `admin / <ADMIN_PASS>`.
+Mở `https://thanhtoanso.sangkienhunggia.app` → đăng nhập `admin / <ADMIN_PASS>`.
 
 ## 8. Cập nhật webhook VietQR (quan trọng)
 Khai báo lại với VietQR URL mới (thay URL tunnel):
 ```
-https://thanhtoansso.sangkienhunggia.app/vqr/api/token_generate
-https://thanhtoansso.sangkienhunggia.app/vqr/bank/api/transaction-sync
+https://thanhtoanso.sangkienhunggia.app/vqr/api/token_generate
+https://thanhtoanso.sangkienhunggia.app/vqr/bank/api/transaction-sync
 ```
 Basic Auth: `posshop / <VQR_EXPOSED_PASS>`, URL Path: `/vqr`.
 

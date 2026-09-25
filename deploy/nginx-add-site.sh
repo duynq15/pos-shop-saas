@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Thêm site nginx cho POS Shop (proxy về app nội bộ) + cấp SSL.
 # Chạy bằng root/sudo:
-#   DOMAIN=thanhtoansso.sangkienhunggia.app PORT=3005 sudo -E bash deploy/nginx-add-site.sh
+#   DOMAIN=thanhtoanso.sangkienhunggia.app PORT=3005 sudo -E bash deploy/nginx-add-site.sh
 
 set -euo pipefail
 
-DOMAIN="${DOMAIN:-thanhtoansso.sangkienhunggia.app}"
+DOMAIN="${DOMAIN:-thanhtoanso.sangkienhunggia.app}"
 PORT="${PORT:-3005}"
 NAME="${NAME:-$DOMAIN}"
 CONF="/etc/nginx/sites-available/$NAME.conf"
