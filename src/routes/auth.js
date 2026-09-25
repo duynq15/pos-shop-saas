@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { control, audit, newToken, tokenHash } = require('../control');
+const { control, audit, newToken, tokenHash, tenantExpired } = require('../control');
 const { ok, fail, wrap, str } = require('../lib/util');
 const { hashPassword, verifyPassword, sessionCookie, clearCookie, parseCookies, COOKIE } = require('../lib/auth');
 const rbac = require('../lib/rbac');
@@ -39,6 +39,7 @@ router.post('/login', wrap((req, res) => {
   if (user.tenant_id) {
     tenant = control.prepare('SELECT * FROM tenants WHERE id=?').get(user.tenant_id);
     if (tenant && tenant.status === 'suspended') return fail(res, 'Cửa hàng đang tạm ngưng', 403);
+    if (tenant && tenantExpired(tenant)) return fail(res, 'Cửa hàng đã hết hạn sử dụng', 403);
   }
   const token = createSession(user, req);
   control.prepare("UPDATE users SET last_login=datetime('now','localtime') WHERE id=?").run(user.id);

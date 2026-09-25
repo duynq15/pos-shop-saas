@@ -5,6 +5,7 @@ const db = require('../db');
 const { ok, fail, wrap, bad, round, num, str, bool } = require('../lib/util');
 const { nextInternalBarcode } = require('../lib/barcode');
 const { getSettings } = require('./admin');
+const { control, planOf } = require('../control');
 const { requirePerm, can } = require('../middleware');
 
 const router = express.Router();
@@ -150,6 +151,10 @@ function saveUnits(productId, body) {
 router.post('/products', requirePerm('product.create'), wrap((req, res) => {
   const b = req.body || {};
   validateProduct(b);
+  const tenant = control.prepare('SELECT * FROM tenants WHERE id=?').get(req.user.tenant_id);
+  const plan = planOf(tenant);
+  const pcnt = db.prepare('SELECT COUNT(*) c FROM products WHERE active=1').get().c;
+  if (plan && plan.max_products && pcnt >= plan.max_products) bad(`Gói "${plan.name}" chỉ cho tối đa ${plan.max_products} sản phẩm`);
   try {
     const r = db.prepare(`INSERT INTO products(barcode,sku,name,category_id,unit,cost_price,sell_price,stock,min_stock,max_stock,location,
         product_type,is_weighted,allow_negative,warranty_months,weight,description,image,vat_rate)

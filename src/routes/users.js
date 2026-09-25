@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { control, audit } = require('../control');
+const { control, audit, planOf } = require('../control');
 const { ok, fail, wrap, str, bool } = require('../lib/util');
 const { hashPassword } = require('../lib/auth');
 const rbac = require('../lib/rbac');
@@ -26,6 +26,10 @@ router.post('/users', requirePerm('user.manage'), wrap((req, res) => {
   if (password.length < 6) return fail(res, 'Mật khẩu tối thiểu 6 ký tự');
   if (!rbac.ROLES[role]) return fail(res, 'Vai trò không hợp lệ');
   if (control.prepare('SELECT id FROM users WHERE lower(username)=?').get(username)) return fail(res, 'Tên đăng nhập đã tồn tại');
+  const tenant = control.prepare('SELECT * FROM tenants WHERE id=?').get(req.user.tenant_id);
+  const plan = planOf(tenant);
+  const ucnt = control.prepare('SELECT COUNT(*) c FROM users WHERE tenant_id=? AND active=1').get(req.user.tenant_id).c;
+  if (plan && plan.max_users && ucnt >= plan.max_users) return fail(res, `Gói "${plan.name}" chỉ cho tối đa ${plan.max_users} người dùng`);
   const r = control.prepare('INSERT INTO users(tenant_id,username,password_hash,full_name,phone,email,role,pin_hash) VALUES (?,?,?,?,?,?,?,?)')
     .run(req.user.tenant_id, username, hashPassword(password), str(req.body.full_name, 120) || null, str(req.body.phone, 40) || null,
       str(req.body.email, 120) || null, role, req.body.pin ? hashPassword(String(req.body.pin)) : null);

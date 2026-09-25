@@ -277,6 +277,11 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('tenant isolation (new shop has no data)', isoProducts.ok && isoProducts.data.length === 0);
   const defProducts = await api('/products');
   ok('default tenant still has data', defProducts.data.length > 0);
+  const plansRes = await (await req('root', '/platform/plans')).json();
+  ok('platform plans list', plansRes.ok && plansRes.data.length >= 3);
+  await req('root', '/platform/tenants', { method: 'POST', body: { code: 'exp-shop', name: 'Shop Het Han', owner_username: 'expadmin', owner_password: '123456', expires_at: '2000-01-01 00:00:00' } });
+  const expLogin = await (await req('exp', '/auth/login', { method: 'POST', body: { username: 'expadmin', password: '123456' } })).json();
+  ok('expired tenant blocked', !expLogin.ok);
 
   for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);
   console.log(R.join('\n'));
