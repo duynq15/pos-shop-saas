@@ -67,11 +67,13 @@ export async function showReceipt(inv) {
 export async function showTransferQR(inv) {
   let qr = null;
   let dynamic = false;
+  let isMock = false;
   // Ưu tiên QR động (VietQR API) nếu đã bật
   try {
     const d = await api(`/api/invoices/${inv.id}/vietqr`, { method: 'POST' });
     qr = { dataUrl: d.qrDataUrl, bank_name: d.bankName || state.settings.bank_name, bank_account: d.bankAccount || state.settings.bank_account, account_holder: state.settings.account_holder, content: d.content || d.payment_ref };
     dynamic = true;
+    isMock = !!d.mock;
   } catch { /* bỏ qua, dùng QR tĩnh */ }
   if (!qr) {
     try { qr = await api(`/api/qr?amount=${inv.total}&message=${encodeURIComponent(inv.code)}`); } catch (e) { toast(e.message, true); }
@@ -85,6 +87,7 @@ export async function showTransferQR(inv) {
       ${inv.status === 'pending' ? `<div class="hint" id="q-wait">${dynamic ? 'Đang chờ khách chuyển khoản… (tự cập nhật khi nhận tiền)' : 'Sau khi nhận tiền, bấm "Đã nhận tiền"'}</div>` : ''}
     </div>
     <div class="modal-actions" style="justify-content:center">
+      ${inv.status === 'pending' && isMock ? `<button class="btn" id="q-simulate">🧪 Mô phỏng đã chuyển tiền</button>` : ''}
       ${inv.status === 'pending' ? `<button class="btn primary" id="q-confirm">✔ Đã nhận tiền</button>` : ''}
       <button class="btn" id="q-print">🖨 In hóa đơn</button>
       <button class="btn" id="q-close">Đóng</button>
@@ -97,6 +100,14 @@ export async function showTransferQR(inv) {
   let timer = null;
   const stopPoll = () => { if (timer) { clearInterval(timer); timer = null; } window.__onModalClose = null; };
   window.__onModalClose = stopPoll;
+  if ($('#q-simulate')) $('#q-simulate').onclick = async () => {
+    try {
+      await api('/api/vietqr/simulate', { method: 'POST', body: { invoice_id: inv.id } });
+      stopPoll();
+      toast('Đã nhận thanh toán');
+      showReceipt(await api('/api/invoices/' + inv.id));
+    } catch (e) { toast(e.message, true); }
+  };
   if (inv.status === 'pending') {
     timer = setInterval(async () => {
       try {
