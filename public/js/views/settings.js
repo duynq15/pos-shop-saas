@@ -61,6 +61,8 @@ export default {
       <label class="fld">Basic pass (cấp cho VietQR)<input class="field" data-s="vqr_exposed_password" type="password"></label>
     </div>
     <p class="muted">Webhook cho VietQR: <code>/vqr/api/token_generate</code> · <code>/vqr/bank/api/transaction-sync</code></p>
+    <div class="toolbar" style="margin-top:8px"><button class="btn" id="btn-vqr-test" type="button">Kiểm tra kết nối</button></div>
+    <div id="vqr-test-result"></div>
   </div>
 
   <div class="card">
@@ -116,6 +118,14 @@ export default {
     $('#btn-backup-now').onclick = async () => {
       try { const b = await api('/api/backup/now', { method: 'POST' }); toast('Đã sao lưu ' + b.name); renderBackups(); }
       catch (e) { toast(e.message, true); }
+    };
+    $('#btn-vqr-test').onclick = async () => {
+      const el = $('#vqr-test-result');
+      el.innerHTML = '<div class="hint">Đang kiểm tra…</div>';
+      try {
+        const r = await api('/api/vietqr/test', { method: 'POST' });
+        el.innerHTML = `<div class="hint">Môi trường: <b>${esc(r.env)}</b> · Token: <b>${r.token_ok ? 'OK' : 'lỗi'}</b> · QR: <b>${r.qr_ok ? 'OK' : 'lỗi'}</b><br>${esc(r.message || '')}</div>`;
+      } catch (e) { el.innerHTML = `<div class="low">${esc(e.message)}</div>`; }
     };
     $('#backup-list').addEventListener('click', onBackupClick);
     el.addEventListener('click', (e) => {

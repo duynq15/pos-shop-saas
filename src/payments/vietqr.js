@@ -63,4 +63,4 @@ async function generateQR(settings, tenantCode, { amount, orderId, content }) {
   };
 }
 
-module.exports = { getToken, generateQR };
+module.exports = { getToken, generateQR, bases };

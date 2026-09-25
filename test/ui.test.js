@@ -50,6 +50,8 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('Settings test QR image', (await page.locator('#qr-test img').count()) === 1);
     await page.locator('#btn-backup-now').click(); await wait(800);
     ok('Backup created in settings', (await page.locator('#backup-list tr').count()) >= 1);
+    await page.locator('#btn-vqr-test').click(); await wait(600);
+    ok('VietQR test button', (await page.locator('#vqr-test-result').innerText()).toLowerCase().includes('mock'));
 
     // ================= PRODUCTS =================
     await view('products');

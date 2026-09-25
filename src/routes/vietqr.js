@@ -6,7 +6,7 @@ const db = require('../db');
 const { control } = require('../control');
 const { ok, fail, wrap, str, round } = require('../lib/util');
 const { requirePerm } = require('../middleware');
-const { generateQR } = require('../payments/vietqr');
+const { generateQR, getToken, bases } = require('../payments/vietqr');
 
 const router = express.Router();   // API phía app (đã đăng nhập), mount /api
 const webhook = express.Router();  // API mở cho VietQR gọi vào, mount /vqr
@@ -169,6 +169,30 @@ router.get('/invoices/:id/payment-status', requirePerm('invoice.view'), wrap((re
   const inv = db.prepare('SELECT id,status,total,paid_amount,payment_ref FROM invoices WHERE id=?').get(Number(req.params.id));
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
   ok(res, { id: inv.id, status: inv.status, paid: inv.status === 'paid', total: inv.total, payment_ref: inv.payment_ref });
+}));
+
+// Kiểm tra kết nối thật tới VietQR (lấy token + tạo thử 1 QR)
+router.post('/vietqr/test', requirePerm('settings.edit'), wrap(async (req, res) => {
+  const s = readSettings();
+  const env = s.vqr_env || 'mock';
+  const out = { env, bases: bases(env), token_ok: false, qr_ok: false, message: '' };
+  if (env === 'mock') {
+    out.message = 'Đang ở chế độ mock — không gọi VietQR thật.';
+    out.qr_ok = true;
+    return ok(res, out);
+  }
+  if (!s.vqr_username || !s.vqr_password) { out.message = 'Thiếu Username/Password VietQR trong Cài đặt.'; return ok(res, out); }
+  if (!s.bank_account || !s.vqr_bank_code) { out.message = 'Thiếu Số tài khoản nhận tiền hoặc Mã ngân hàng (MB/BIDV).'; return ok(res, out); }
+  try { await getToken(s, req.tenant.code); out.token_ok = true; }
+  catch (e) { out.message = 'Lỗi lấy token: ' + e.message; return ok(res, out); }
+  try {
+    const orderId = 'TEST' + String(Date.now()).slice(-8);
+    const q = await generateQR(s, req.tenant.code, { amount: 1000, orderId, content: orderId });
+    out.qr_ok = true;
+    out.message = 'Kết nối OK — tạo được QR thử.';
+    out.sample = { orderId, content: q.content, bankName: q.bankName, bankAccount: q.bankAccount };
+  } catch (e) { out.message = 'Lỗi tạo QR: ' + e.message; }
+  ok(res, out);
 }));
 
 // Mô phỏng thanh toán để test (không cần VietQR thật)
