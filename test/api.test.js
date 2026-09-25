@@ -183,6 +183,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('enable vietqr', vset.ok && vset.data.vqr_enabled === '1');
   ok('vietqr config enabled', (await api('/vietqr/config')).data.enabled === true);
   ok('vietqr test endpoint (mock)', (await api('/vietqr/test', { method: 'POST' })).data.qr_ok === true);
+  ok('simulate-dev rejected in mock', !(await api('/vietqr/simulate-dev', { method: 'POST', body: { invoice_id: 1 } })).ok);
   const t1 = await api('/invoices', { method: 'POST', body: { items: [{ product_id: 2, qty: 2 }], payment_method: 'transfer' } });
   ok('transfer invoice has payment_ref', t1.ok && t1.data.status === 'pending' && /^P\d{10}$/.test(t1.data.payment_ref));
   const dyn = await api(`/invoices/${t1.data.id}/vietqr`, { method: 'POST' });

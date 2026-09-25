@@ -304,6 +304,7 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   ensureColumn('invoices', 'price_list_id', 'INTEGER');
   ensureColumn('invoices', 'promo_order_id', 'INTEGER');
   ensureColumn('invoices', 'payment_ref', 'TEXT');
+  ensureColumn('invoices', 'payment_content', 'TEXT');
   conn.exec('CREATE INDEX IF NOT EXISTS idx_invoices_payref ON invoices(payment_ref)');
   ensureColumn('invoice_items', 'unit_id', 'INTEGER');
   ensureColumn('invoice_items', 'unit_name', 'TEXT');

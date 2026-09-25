@@ -68,12 +68,14 @@ export async function showTransferQR(inv) {
   let qr = null;
   let dynamic = false;
   let isMock = false;
+  let env = 'mock';
   // Ưu tiên QR động (VietQR API) nếu đã bật
   try {
     const d = await api(`/api/invoices/${inv.id}/vietqr`, { method: 'POST' });
     qr = { dataUrl: d.qrDataUrl, bank_name: d.bankName || state.settings.bank_name, bank_account: d.bankAccount || state.settings.bank_account, account_holder: state.settings.account_holder, content: d.content || d.payment_ref };
     dynamic = true;
     isMock = !!d.mock;
+    env = d.env || 'mock';
   } catch { /* bỏ qua, dùng QR tĩnh */ }
   if (!qr) {
     try { qr = await api(`/api/qr?amount=${inv.total}&message=${encodeURIComponent(inv.code)}`); } catch (e) { toast(e.message, true); }
@@ -89,6 +91,7 @@ export async function showTransferQR(inv) {
     </div>
     <div class="modal-actions" style="justify-content:center">
       ${inv.status === 'pending' && isMock ? `<button class="btn" id="q-simulate">🧪 Mô phỏng đã chuyển tiền</button>` : ''}
+      ${inv.status === 'pending' && env === 'dev' && !isMock ? `<button class="btn" id="q-simulate-dev">🧪 Mô phỏng thanh toán (dev)</button>` : ''}
       ${inv.status === 'pending' ? `<button class="btn primary" id="q-confirm">✔ Đã nhận tiền</button>` : ''}
       <button class="btn" id="q-print">🖨 In hóa đơn</button>
       <button class="btn" id="q-close">Đóng</button>
@@ -108,6 +111,13 @@ export async function showTransferQR(inv) {
       toast('Đã nhận thanh toán');
       showReceipt(await api('/api/invoices/' + inv.id));
     } catch (e) { toast(e.message, true); }
+  };
+  if ($('#q-simulate-dev')) $('#q-simulate-dev').onclick = async () => {
+    const btn = $('#q-simulate-dev'); btn.disabled = true; btn.textContent = 'Đang mô phỏng…';
+    try {
+      await api('/api/vietqr/simulate-dev', { method: 'POST', body: { invoice_id: inv.id } });
+      toast('Đã gửi mô phỏng — chờ VietQR báo về…');
+    } catch (e) { toast(e.message, true); btn.disabled = false; btn.textContent = '🧪 Mô phỏng thanh toán (dev)'; }
   };
   if (inv.status === 'pending') {
     timer = setInterval(async () => {

@@ -6,7 +6,7 @@ const db = require('../db');
 const { control } = require('../control');
 const { ok, fail, wrap, str, round } = require('../lib/util');
 const { requirePerm } = require('../middleware');
-const { generateQR, getToken, bases } = require('../payments/vietqr');
+const { generateQR, getToken, bases, testCallbackUrl } = require('../payments/vietqr');
 
 const router = express.Router();   // API phía app (đã đăng nhập), mount /api
 const webhook = express.Router();  // API mở cho VietQR gọi vào, mount /vqr
@@ -161,7 +161,8 @@ router.post('/invoices/:id/vietqr', requirePerm('invoice.view'), wrap(async (req
   }
   try {
     const q = await generateQR(s, req.tenant.code, { amount: inv.total, orderId: inv.payment_ref, content: inv.payment_ref });
-    ok(res, { ...q, invoice_id: id, total: inv.total, payment_ref: inv.payment_ref, status: inv.status });
+    db.prepare('UPDATE invoices SET payment_content=? WHERE id=?').run(q.content || '', id);
+    ok(res, { ...q, env: s.vqr_env || 'mock', invoice_id: id, total: inv.total, payment_ref: inv.payment_ref, status: inv.status });
   } catch (e) { fail(res, e.message, 502); }
 }));
 
@@ -193,6 +194,23 @@ router.post('/vietqr/test', requirePerm('settings.edit'), wrap(async (req, res) 
     out.sample = { orderId, content: q.content, bankName: q.bankName, bankAccount: q.bankAccount };
   } catch (e) { out.message = 'Lỗi tạo QR: ' + e.message; }
   ok(res, out);
+}));
+
+// Giả lập thanh toán qua Test Callback của VietQR (chỉ môi trường dev)
+router.post('/vietqr/simulate-dev', requirePerm('pos.sell'), wrap(async (req, res) => {
+  const s = readSettings();
+  if ((s.vqr_env || 'mock') !== 'dev') fail(res, 'Chỉ dùng được ở môi trường dev');
+  const inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(Number(req.body.invoice_id));
+  if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
+  if (!inv.payment_content) fail(res, 'Chưa có mã QR — hãy tạo QR (chuyển khoản) trước');
+  let token;
+  try { token = await getToken(s, req.tenant.code); } catch (e) { return fail(res, e.message, 502); }
+  const body = { bankAccount: s.bank_account, content: inv.payment_content, amount: String(inv.total), bankCode: s.vqr_bank_code, transType: 'C' };
+  try {
+    const r = await fetch(testCallbackUrl('dev'), { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    ok(res, { vietqr: j, invoice_id: inv.id, content: inv.payment_content });
+  } catch (e) { fail(res, e.message, 502); }
 }));
 
 // Mô phỏng thanh toán để test (không cần VietQR thật)

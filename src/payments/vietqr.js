@@ -63,4 +63,9 @@ async function generateQR(settings, tenantCode, { amount, orderId, content }) {
   };
 }
 
-module.exports = { getToken, generateQR, bases };
+module.exports = { getToken, generateQR, bases, testCallbackUrl };
+
+// URL giả lập callback (chỉ có ở môi trường dev)
+function testCallbackUrl(env) {
+  return env === 'prod' ? null : 'https://dev.vietqr.org/vqr/bank/api/test/transaction-callback';
+}
