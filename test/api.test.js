@@ -224,6 +224,18 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('per-shop token resolves tenant', syncA.error === false && (await api(`/invoices/${t4.data.id}/payment-status`)).data.paid === true);
   await api('/settings', { method: 'PUT', body: { vqr_enabled: '0' } });
 
+  // ---------- Nhà cung cấp & công nợ ----------
+  const sup = await api('/suppliers', { method: 'POST', body: { name: 'NCC Test', tax_code: '0311112222', payment_terms_days: 10 } });
+  ok('supplier with fields', sup.ok && sup.data.tax_code === '0311112222' && sup.data.payment_terms_days === 10);
+  const pu2 = await api('/purchases', { method: 'POST', body: { supplier_id: sup.data.id, items: [{ product_id: 2, qty: 10, cost_price: 5000 }] } });
+  await api('/purchases/' + pu2.data.id + '/receive', { method: 'POST' });
+  let pay = (await api('/suppliers/payables')).data.find((x) => x.id === sup.data.id);
+  ok('payable after receive', pay && pay.purchased === 50000 && pay.paid === 0 && pay.balance === 50000);
+  await api('/suppliers/' + sup.data.id + '/payments', { method: 'POST', body: { amount: 20000, method: 'cash' } });
+  pay = (await api('/suppliers/payables')).data.find((x) => x.id === sup.data.id);
+  ok('payable after payment', pay && pay.paid === 20000 && pay.balance === 30000);
+  ok('supplier payments list', (await api('/suppliers/' + sup.data.id + '/payments')).data.length === 1);
+
   // ---------- VAT ----------
   await api('/settings', { method: 'PUT', body: { vat_mode: 'inclusive' } });
   const vp = await api('/products', { method: 'POST', body: { name: 'SP VAT 10', sell_price: 11000, cost_price: 9000, vat_rate: 10, stock: 10 } });

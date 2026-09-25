@@ -213,6 +213,16 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     line_total INTEGER NOT NULL DEFAULT 0
   );
 
+  CREATE TABLE IF NOT EXISTS supplier_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+    amount INTEGER NOT NULL DEFAULT 0,
+    method TEXT DEFAULT 'cash',
+    note TEXT,
+    paid_at TEXT DEFAULT (datetime('now','localtime')),
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+
   CREATE TABLE IF NOT EXISTS stock_checks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT UNIQUE NOT NULL,
@@ -309,6 +319,9 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   ensureColumn('invoices', 'net_amount', 'INTEGER DEFAULT 0');
   ensureColumn('invoices', 'vat_amount', 'INTEGER DEFAULT 0');
   ensureColumn('purchase_items', 'vat_rate', 'REAL DEFAULT 0');
+  ensureColumn('suppliers', 'tax_code', 'TEXT');
+  ensureColumn('suppliers', 'contact_name', 'TEXT');
+  ensureColumn('suppliers', 'payment_terms_days', 'INTEGER DEFAULT 0');
   ensureColumn('invoices', 'type', "TEXT DEFAULT 'sale'");
   ensureColumn('invoices', 'parent_id', 'INTEGER');
   ensureColumn('invoices', 'item_discount', 'INTEGER DEFAULT 0');

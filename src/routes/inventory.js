@@ -12,21 +12,52 @@ const router = express.Router();
 router.get('/suppliers', wrap((req, res) => {
   ok(res, db.prepare('SELECT * FROM suppliers ORDER BY name').all());
 }));
+
+// Công nợ nhà cung cấp: đã mua (phiếu đã nhập) - đã trả = còn nợ
+router.get('/suppliers/payables', wrap((req, res) => {
+  const rows = db.prepare(`SELECT s.id, s.name, s.phone, s.payment_terms_days,
+      COALESCE((SELECT SUM(total) FROM purchases p WHERE p.supplier_id=s.id AND p.status='received'),0) AS purchased,
+      COALESCE((SELECT SUM(amount) FROM supplier_payments sp WHERE sp.supplier_id=s.id),0) AS paid
+    FROM suppliers s ORDER BY s.name`).all();
+  ok(res, rows.map((r) => ({ ...r, balance: r.purchased - r.paid })));
+}));
+
 router.post('/suppliers', wrap((req, res) => {
   const name = str(req.body.name, 160);
   if (!name) bad('Tên nhà cung cấp trống');
-  const r = db.prepare('INSERT INTO suppliers(name,phone,address,email,note) VALUES (?,?,?,?,?)')
-    .run(name, str(req.body.phone, 40) || null, str(req.body.address, 300) || null, str(req.body.email, 120) || null, str(req.body.note, 300) || null);
+  const r = db.prepare('INSERT INTO suppliers(name,phone,address,email,note,tax_code,contact_name,payment_terms_days) VALUES (?,?,?,?,?,?,?,?)')
+    .run(name, str(req.body.phone, 40) || null, str(req.body.address, 300) || null, str(req.body.email, 120) || null, str(req.body.note, 300) || null,
+      str(req.body.tax_code, 40) || null, str(req.body.contact_name, 120) || null, round(req.body.payment_terms_days));
   ok(res, db.prepare('SELECT * FROM suppliers WHERE id=?').get(Number(r.lastInsertRowid)));
 }));
 router.put('/suppliers/:id', wrap((req, res) => {
   const id = Number(req.params.id);
-  db.prepare('UPDATE suppliers SET name=?,phone=?,address=?,email=?,note=?,active=? WHERE id=?')
-    .run(str(req.body.name, 160), str(req.body.phone, 40) || null, str(req.body.address, 300) || null, str(req.body.email, 120) || null, str(req.body.note, 300) || null, req.body.active === 0 ? 0 : 1, id);
+  db.prepare('UPDATE suppliers SET name=?,phone=?,address=?,email=?,note=?,tax_code=?,contact_name=?,payment_terms_days=?,active=? WHERE id=?')
+    .run(str(req.body.name, 160), str(req.body.phone, 40) || null, str(req.body.address, 300) || null, str(req.body.email, 120) || null, str(req.body.note, 300) || null,
+      str(req.body.tax_code, 40) || null, str(req.body.contact_name, 120) || null, round(req.body.payment_terms_days), req.body.active === 0 ? 0 : 1, id);
   ok(res, db.prepare('SELECT * FROM suppliers WHERE id=?').get(id));
 }));
 router.delete('/suppliers/:id', wrap((req, res) => {
   db.prepare('DELETE FROM suppliers WHERE id=?').run(Number(req.params.id));
+  ok(res, true);
+}));
+
+// Phiếu chi trả nhà cung cấp
+router.get('/suppliers/:id/payments', wrap((req, res) => {
+  ok(res, db.prepare('SELECT * FROM supplier_payments WHERE supplier_id=? ORDER BY id DESC').all(Number(req.params.id)));
+}));
+router.post('/suppliers/:id/payments', wrap((req, res) => {
+  const id = Number(req.params.id);
+  const sup = db.prepare('SELECT * FROM suppliers WHERE id=?').get(id);
+  if (!sup) bad('Không tìm thấy nhà cung cấp');
+  const amount = round(req.body.amount);
+  if (!amount) bad('Số tiền không hợp lệ');
+  const r = db.prepare('INSERT INTO supplier_payments(supplier_id,amount,method,note,paid_at) VALUES (?,?,?,?,?)')
+    .run(id, amount, str(req.body.method, 20) || 'cash', str(req.body.note, 300) || null, str(req.body.paid_at, 30) || null);
+  ok(res, db.prepare('SELECT * FROM supplier_payments WHERE id=?').get(Number(r.lastInsertRowid)));
+}));
+router.delete('/supplier-payments/:id', wrap((req, res) => {
+  db.prepare('DELETE FROM supplier_payments WHERE id=?').run(Number(req.params.id));
   ok(res, true);
 }));
 
