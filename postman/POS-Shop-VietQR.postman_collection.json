@@ -1,0 +1,781 @@
+{
+  "info": {
+    "_postman_id": "8f3c2a10-6b1e-4d2a-9c3f-posshopvqr001",
+    "name": "POS Shop – VietQR (P6)",
+    "description": "Bộ test VietQR động + callback cho POS Shop (bản SaaS). Chạy A1→A7 cho luồng trong app (mock), B0→B4 cho webhook, C cho ca lỗi. Biến tự lưu: invoice_id, payment_ref, amount, token, txn_id.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "invoice_id",
+      "value": "1"
+    },
+    {
+      "key": "payment_ref",
+      "value": ""
+    },
+    {
+      "key": "amount",
+      "value": "0"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "txn_id",
+      "value": "TXN-001"
+    },
+    {
+      "key": "mismatch_txn",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "A. Trong app (mock)",
+      "item": [
+        {
+          "name": "A1. Đăng nhập (admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base}}/api/auth/login",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"admin123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Đăng nhập thành công\", () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.test(\"Là chủ cửa hàng\", () => pm.expect(j.data.user.role).to.eql(\"owner\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A2. Bật VietQR động (mock)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base}}/api/settings",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "settings"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vqr_enabled\": \"1\",\n  \"vqr_env\": \"mock\",\n  \"bank_account\": \"99990001\",\n  \"bank_name\": \"MB Bank\",\n  \"bank_bin\": \"970422\",\n  \"account_holder\": \"NGUYEN VAN A\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Bật VietQR ok\", () => { const j = pm.response.json(); pm.expect(j.data.vqr_enabled).to.eql(\"1\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A3. Tạo hóa đơn chuyển khoản",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base}}/api/invoices",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [{ \"product_id\": 2, \"qty\": 2 }],\n  \"payment_method\": \"transfer\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Hóa đơn chờ chuyển khoản\", () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.test(\"Có mã đối soát payment_ref\", () => pm.expect(j.data.payment_ref).to.match(/^P\\d{10}$/));",
+                  "pm.collectionVariables.set(\"invoice_id\", j.data.id);",
+                  "pm.collectionVariables.set(\"payment_ref\", j.data.payment_ref);",
+                  "pm.collectionVariables.set(\"amount\", j.data.total);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A4. Tạo QR động",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base}}/api/invoices/{{invoice_id}}/vietqr",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices",
+                "{{invoice_id}}",
+                "vietqr"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Tạo QR động ok\", () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.test(\"Trả về ảnh QR\", () => pm.expect(j.data.qrDataUrl).to.include(\"data:image/png\"));",
+                  "pm.test(\"Chế độ mock\", () => pm.expect(j.data.mock).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A5. Trạng thái thanh toán",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base}}/api/invoices/{{invoice_id}}/payment-status",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices",
+                "{{invoice_id}}",
+                "payment-status"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Đang chờ thanh toán\", () => { const j = pm.response.json(); pm.expect(j.data.paid).to.eql(false); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A6. Mô phỏng khách chuyển tiền",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base}}/api/vietqr/simulate",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "vietqr",
+                "simulate"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"invoice_id\": {{invoice_id}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Ghi nhận thanh toán\", () => { const j = pm.response.json(); pm.expect(j.data.paid).to.eql(true); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A7. Trạng thái sau thanh toán",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base}}/api/invoices/{{invoice_id}}/payment-status",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices",
+                "{{invoice_id}}",
+                "payment-status"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Đã thanh toán\", () => { const j = pm.response.json(); pm.expect(j.data.paid).to.eql(true); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "B. Webhook (VietQR gọi vào)",
+      "item": [
+        {
+          "name": "B0. Tạo hóa đơn mới cho webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base}}/api/invoices",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [{ \"product_id\": 3, \"qty\": 4 }],\n  \"payment_method\": \"transfer\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Tạo hóa đơn ok\", () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.collectionVariables.set(\"invoice_id\", j.data.id);",
+                  "pm.collectionVariables.set(\"payment_ref\", j.data.payment_ref);",
+                  "pm.collectionVariables.set(\"amount\", j.data.total);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "B1. Lấy token (Basic Auth)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base}}/vqr/api/token_generate",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "vqr",
+                "api",
+                "token_generate"
+              ]
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "posshop"
+                },
+                {
+                  "key": "password",
+                  "value": "posshop-secret"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Lấy token ok\", () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.test(\"Token hợp lệ\", () => { pm.expect(j.token_type).to.eql(\"Bearer\"); pm.expect(j.expires_in).to.eql(300); });",
+                  "pm.collectionVariables.set(\"token\", j.access_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "B2. Đồng bộ biến động số dư",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base}}/vqr/bank/api/transaction-sync",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "vqr",
+                "bank",
+                "api",
+                "transaction-sync"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bankaccount\": \"99990001\",\n  \"amount\": {{amount}},\n  \"content\": \"{{payment_ref}}\",\n  \"orderId\": \"{{payment_ref}}\",\n  \"transactionid\": \"{{txn_id}}\",\n  \"transType\": \"C\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"txn_id\", \"TXN-\" + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Webhook xử lý ok\", () => pm.response.to.have.status(200));",
+                  "const j = pm.response.json();",
+                  "pm.test(\"Không lỗi & có reftransactionid\", () => { pm.expect(j.error).to.eql(false); pm.expect(j.object.reftransactionid).to.eql(pm.collectionVariables.get(\"payment_ref\")); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "B3. Trạng thái hóa đơn (webhook)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base}}/api/invoices/{{invoice_id}}/payment-status",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices",
+                "{{invoice_id}}",
+                "payment-status"
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Đã thanh toán qua webhook\", () => { const j = pm.response.json(); pm.expect(j.data.paid).to.eql(true); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "B4. Gọi lại (kiểm tra idempotent)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base}}/vqr/bank/api/transaction-sync",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "vqr",
+                "bank",
+                "api",
+                "transaction-sync"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bankaccount\": \"99990001\",\n  \"amount\": {{amount}},\n  \"content\": \"{{payment_ref}}\",\n  \"orderId\": \"{{payment_ref}}\",\n  \"transactionid\": \"{{txn_id}}\",\n  \"transType\": \"C\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Không xử lý trùng\", () => { const j = pm.response.json(); pm.expect(j.toastMessage).to.include(\"đã xử lý\"); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "C. Ca kiểm tra khác",
+      "item": [
+        {
+          "name": "C1. Sai token (mong đợi 401)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base}}/vqr/bank/api/transaction-sync",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "vqr",
+                "bank",
+                "api",
+                "transaction-sync"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bankaccount\": \"99990001\",\n  \"amount\": 1000,\n  \"content\": \"X\",\n  \"orderId\": \"X\",\n  \"transactionid\": \"BAD-1\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "bad-token"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Trả 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "C2. Sai Basic Auth (mong đợi 401)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base}}/vqr/api/token_generate",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "vqr",
+                "api",
+                "token_generate"
+              ]
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "x"
+                },
+                {
+                  "key": "password",
+                  "value": "y"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Trả 401\", () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "C3a. Tạo hóa đơn (test lệch tiền)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base}}/api/invoices",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "api",
+                "invoices"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [{ \"product_id\": 2, \"qty\": 1 }],\n  \"payment_method\": \"transfer\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const j = pm.response.json();",
+                  "pm.collectionVariables.set(\"invoice_id\", j.data.id);",
+                  "pm.collectionVariables.set(\"payment_ref\", j.data.payment_ref);",
+                  "pm.collectionVariables.set(\"amount\", j.data.total);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "C3b. Đồng bộ sai số tiền (không tự xác nhận)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base}}/vqr/bank/api/transaction-sync",
+              "host": [
+                "{{base}}"
+              ],
+              "path": [
+                "vqr",
+                "bank",
+                "api",
+                "transaction-sync"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bankaccount\": \"99990001\",\n  \"amount\": 1000,\n  \"content\": \"{{payment_ref}}\",\n  \"orderId\": \"{{payment_ref}}\",\n  \"transactionid\": \"{{mismatch_txn}}\",\n  \"transType\": \"C\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}"
+                }
+              ]
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"mismatch_txn\", \"MIS-\" + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Báo lệch tiền\", () => { const j = pm.response.json(); pm.expect(j.toastMessage).to.include(\"không khớp\"); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

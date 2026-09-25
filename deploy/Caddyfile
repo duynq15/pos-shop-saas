@@ -1,0 +1,4 @@
+thanhtoansso.sangkienhunggia.app {
+	encode gzip
+	reverse_proxy app:3000
+}

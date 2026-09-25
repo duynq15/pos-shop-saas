@@ -178,6 +178,82 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const csvRes = await req('admin', '/reports/export?type=sales');
   ok('csv export', csvRes.status === 200 && /text\/csv/.test(csvRes.headers.get('content-type') || ''));
 
+  // ---------- VietQR động & callback ----------
+  const vset = await api('/settings', { method: 'PUT', body: { vqr_enabled: '1', vqr_env: 'mock', bank_account: '99990001', bank_name: 'MB Bank', bank_bin: '970422', account_holder: 'NGUYEN VAN A' } });
+  ok('enable vietqr', vset.ok && vset.data.vqr_enabled === '1');
+  ok('vietqr config enabled', (await api('/vietqr/config')).data.enabled === true);
+  ok('vietqr test endpoint (mock)', (await api('/vietqr/test', { method: 'POST' })).data.qr_ok === true);
+  ok('simulate-dev rejected in mock', !(await api('/vietqr/simulate-dev', { method: 'POST', body: { invoice_id: 1 } })).ok);
+  const t1 = await api('/invoices', { method: 'POST', body: { items: [{ product_id: 2, qty: 2 }], payment_method: 'transfer' } });
+  ok('transfer invoice has payment_ref', t1.ok && t1.data.status === 'pending' && /^P\d{10}$/.test(t1.data.payment_ref));
+  const dyn = await api(`/invoices/${t1.data.id}/vietqr`, { method: 'POST' });
+  ok('dynamic QR generated (mock)', dyn.ok && String(dyn.data.qrDataUrl).startsWith('data:image/png') && dyn.data.mock === true);
+  ok('payment status pending', (await api(`/invoices/${t1.data.id}/payment-status`)).data.status === 'pending');
+  const sim = await api('/vietqr/simulate', { method: 'POST', body: { invoice_id: t1.data.id } });
+  ok('simulate marks paid', sim.ok && sim.data.paid === true);
+  ok('invoice paid after simulate', (await api(`/invoices/${t1.data.id}/payment-status`)).data.paid === true);
+  ok('simulate records one payment', (await api(`/invoices/${t1.data.id}`)).data.payments.length === 1);
+
+  // Webhook VietQR gọi vào
+  const t2 = await api('/invoices', { method: 'POST', body: { items: [{ product_id: 3, qty: 4 }], payment_method: 'transfer' } });
+  const tokenRes = await fetch(ROOT + '/vqr/api/token_generate', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('posshop:posshop-secret').toString('base64') } });
+  const tok = await tokenRes.json();
+  ok('webhook get token', tokenRes.status === 200 && !!tok.access_token && tok.token_type === 'Bearer' && tok.expires_in === 300);
+  const syncBody = { bankaccount: '99990001', amount: t2.data.total, content: t2.data.payment_ref, orderId: t2.data.payment_ref, transactionid: 'TEST-TXN-1', transType: 'C' };
+  const syncHeaders = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token };
+  const sync1 = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: syncHeaders, body: JSON.stringify(syncBody) })).json();
+  ok('webhook sync ok', sync1.error === false && sync1.object.reftransactionid === t2.data.payment_ref);
+  ok('invoice paid via webhook', (await api(`/invoices/${t2.data.id}/payment-status`)).data.paid === true);
+  const sync2 = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: syncHeaders, body: JSON.stringify(syncBody) })).json();
+  ok('webhook idempotent', sync2.error === false && /đã xử lý/.test(sync2.toastMessage));
+  ok('no duplicate payment', (await api(`/invoices/${t2.data.id}`)).data.payments.length === 1);
+
+  // Số tiền không khớp -> không tự xác nhận
+  const t3 = await api('/invoices', { method: 'POST', body: { items: [{ product_id: 2, qty: 1 }], payment_method: 'transfer' } });
+  const syncBad = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: syncHeaders, body: JSON.stringify({ ...syncBody, orderId: t3.data.payment_ref, content: t3.data.payment_ref, transactionid: 'TEST-TXN-2', amount: 1000 }) })).json();
+  ok('webhook mismatch not auto-paid', /không khớp/.test(syncBad.toastMessage) && (await api(`/invoices/${t3.data.id}/payment-status`)).data.paid === false);
+  ok('webhook bad token 401', (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer bad' }, body: '{}' })).status === 401);
+  ok('webhook bad basic auth', (await fetch(ROOT + '/vqr/api/token_generate', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('x:y').toString('base64') } })).status === 401);
+  // Mỗi shop một Basic Auth riêng (mô hình tiền về tài khoản từng shop)
+  const exposed = await api('/settings', { method: 'PUT', body: { vqr_enabled: '1', vqr_env: 'mock', vqr_exposed_username: 'shopA', vqr_exposed_password: 'secretA' } });
+  ok('set per-shop exposed creds', exposed.ok && exposed.data.vqr_exposed_username === 'shopA');
+  const t4 = await api('/invoices', { method: 'POST', body: { items: [{ product_id: 2, qty: 1 }], payment_method: 'transfer' } });
+  const tokA = await (await fetch(ROOT + '/vqr/api/token_generate', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('shopA:secretA').toString('base64') } })).json();
+  ok('per-shop token issued', !!tokA.access_token);
+  const syncA = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokA.access_token }, body: JSON.stringify({ bankaccount: 'ACCOUNT-KHAC', amount: t4.data.total, content: t4.data.payment_ref, orderId: t4.data.payment_ref, transactionid: 'TENANT-TXN-1', transType: 'C' }) })).json();
+  ok('per-shop token resolves tenant', syncA.error === false && (await api(`/invoices/${t4.data.id}/payment-status`)).data.paid === true);
+  await api('/settings', { method: 'PUT', body: { vqr_enabled: '0' } });
+
+  // ---------- Nhà cung cấp & công nợ ----------
+  const sup = await api('/suppliers', { method: 'POST', body: { name: 'NCC Test', tax_code: '0311112222', payment_terms_days: 10 } });
+  ok('supplier with fields', sup.ok && sup.data.tax_code === '0311112222' && sup.data.payment_terms_days === 10);
+  const pu2 = await api('/purchases', { method: 'POST', body: { supplier_id: sup.data.id, items: [{ product_id: 2, qty: 10, cost_price: 5000 }] } });
+  await api('/purchases/' + pu2.data.id + '/receive', { method: 'POST' });
+  let pay = (await api('/suppliers/payables')).data.find((x) => x.id === sup.data.id);
+  ok('payable after receive', pay && pay.purchased === 50000 && pay.paid === 0 && pay.balance === 50000);
+  await api('/suppliers/' + sup.data.id + '/payments', { method: 'POST', body: { amount: 20000, method: 'cash' } });
+  pay = (await api('/suppliers/payables')).data.find((x) => x.id === sup.data.id);
+  ok('payable after payment', pay && pay.paid === 20000 && pay.balance === 30000);
+  ok('supplier payments list', (await api('/suppliers/' + sup.data.id + '/payments')).data.length === 1);
+
+  // ---------- Phân tích thông minh ----------
+  const ana = await api('/reports/analytics');
+  ok('analytics endpoint', ana.ok && Array.isArray(ana.data.abc) && Array.isArray(ana.data.reorder) && Array.isArray(ana.data.basket) && typeof ana.data.cancelled === 'number');
+
+  // ---------- VAT ----------
+  await api('/settings', { method: 'PUT', body: { vat_mode: 'inclusive' } });
+  const vp = await api('/products', { method: 'POST', body: { name: 'SP VAT 10', sell_price: 11000, cost_price: 9000, vat_rate: 10, stock: 10 } });
+  ok('product has vat_rate', vp.ok && Number(vp.data.vat_rate) === 10);
+  const vinv = await api('/invoices', { method: 'POST', body: { items: [{ product_id: vp.data.id, qty: 1 }], payment_method: 'cash', paid_amount: 20000 } });
+  ok('inclusive VAT computed', vinv.data.total === 11000 && vinv.data.net_amount === 10000 && vinv.data.vat_amount === 1000);
+  ok('tax lines by rate', vinv.data.tax_lines.length === 1 && vinv.data.tax_lines[0].rate === 10 && vinv.data.tax_lines[0].tax_amount === 1000);
+  await api('/settings', { method: 'PUT', body: { vat_mode: 'exclusive' } });
+  const vinv2 = await api('/invoices', { method: 'POST', body: { items: [{ product_id: vp.data.id, qty: 1 }], payment_method: 'cash', paid_amount: 20000 } });
+  ok('exclusive VAT added', vinv2.data.net_amount === 11000 && vinv2.data.vat_amount === 1100 && vinv2.data.total === 12100);
+  const vrep = await api('/reports/vat');
+  ok('vat report output', vrep.ok && vrep.data.output_tax >= 2100);
+  await api('/settings', { method: 'PUT', body: { vat_mode: 'inclusive' } });
+
   // ---------- Phân quyền ----------
   ok('create cashier', (await api('/users', { method: 'POST', body: { username: 'thungan', password: '123456', role: 'cashier' } })).ok);
   let cl = await req('cash', '/auth/login', { method: 'POST', body: { username: 'thungan', password: '123456' } });
@@ -201,6 +277,11 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('tenant isolation (new shop has no data)', isoProducts.ok && isoProducts.data.length === 0);
   const defProducts = await api('/products');
   ok('default tenant still has data', defProducts.data.length > 0);
+  const plansRes = await (await req('root', '/platform/plans')).json();
+  ok('platform plans list', plansRes.ok && plansRes.data.length >= 3);
+  await req('root', '/platform/tenants', { method: 'POST', body: { code: 'exp-shop', name: 'Shop Het Han', owner_username: 'expadmin', owner_password: '123456', expires_at: '2000-01-01 00:00:00' } });
+  const expLogin = await (await req('exp', '/auth/login', { method: 'POST', body: { username: 'expadmin', password: '123456' } })).json();
+  ok('expired tenant blocked', !expLogin.ok);
 
   for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);
   console.log(R.join('\n'));

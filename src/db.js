@@ -213,6 +213,16 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     line_total INTEGER NOT NULL DEFAULT 0
   );
 
+  CREATE TABLE IF NOT EXISTS supplier_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+    amount INTEGER NOT NULL DEFAULT 0,
+    method TEXT DEFAULT 'cash',
+    note TEXT,
+    paid_at TEXT DEFAULT (datetime('now','localtime')),
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+
   CREATE TABLE IF NOT EXISTS stock_checks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT UNIQUE NOT NULL,
@@ -255,6 +265,31 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   CREATE INDEX IF NOT EXISTS idx_moves_product ON stock_moves(product_id);
   CREATE INDEX IF NOT EXISTS idx_moves_created ON stock_moves(created_at);
 
+  CREATE TABLE IF NOT EXISTS vietqr_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transactionid TEXT,
+    invoice_id INTEGER,
+    bank_account TEXT,
+    amount INTEGER DEFAULT 0,
+    content TEXT,
+    order_id TEXT,
+    trans_type TEXT,
+    matched INTEGER DEFAULT 0,
+    note TEXT,
+    raw_json TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_vqr_txn ON vietqr_transactions(transactionid);
+  CREATE INDEX IF NOT EXISTS idx_vqr_order ON vietqr_transactions(order_id);
+
+  CREATE TABLE IF NOT EXISTS invoice_tax_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    rate REAL NOT NULL DEFAULT 0,
+    taxable_amount INTEGER NOT NULL DEFAULT 0,
+    tax_amount INTEGER NOT NULL DEFAULT 0
+  );
+
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -280,12 +315,22 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   ensureColumn('products', 'weight', 'REAL DEFAULT 0');
   ensureColumn('products', 'description', 'TEXT');
   ensureColumn('products', 'image', 'TEXT');
+  ensureColumn('products', 'vat_rate', 'REAL DEFAULT 0');
+  ensureColumn('invoices', 'net_amount', 'INTEGER DEFAULT 0');
+  ensureColumn('invoices', 'vat_amount', 'INTEGER DEFAULT 0');
+  ensureColumn('purchase_items', 'vat_rate', 'REAL DEFAULT 0');
+  ensureColumn('suppliers', 'tax_code', 'TEXT');
+  ensureColumn('suppliers', 'contact_name', 'TEXT');
+  ensureColumn('suppliers', 'payment_terms_days', 'INTEGER DEFAULT 0');
   ensureColumn('invoices', 'type', "TEXT DEFAULT 'sale'");
   ensureColumn('invoices', 'parent_id', 'INTEGER');
   ensureColumn('invoices', 'item_discount', 'INTEGER DEFAULT 0');
   ensureColumn('invoices', 'order_discount', 'INTEGER DEFAULT 0');
   ensureColumn('invoices', 'price_list_id', 'INTEGER');
   ensureColumn('invoices', 'promo_order_id', 'INTEGER');
+  ensureColumn('invoices', 'payment_ref', 'TEXT');
+  ensureColumn('invoices', 'payment_content', 'TEXT');
+  conn.exec('CREATE INDEX IF NOT EXISTS idx_invoices_payref ON invoices(payment_ref)');
   ensureColumn('invoice_items', 'unit_id', 'INTEGER');
   ensureColumn('invoice_items', 'unit_name', 'TEXT');
   ensureColumnWithDefault('invoice_items', 'conversion', 'REAL DEFAULT 1', '1');
@@ -311,6 +356,11 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     receipt_width: '80', label_width: '40', label_height: '30', label_show_name: '1', label_show_price: '1',
     label_show_barcode: '1', label_show_shop: '1', round_total: '0', print_after_pay: '0',
     internal_barcode_seq: '0', online_lookup: '1', lookup_url: '', backup_enabled: '1', backup_keep: '30',
+    vat_mode: 'inclusive', vat_default_rate: '0',
+    payment_ref_seq: '0',
+    vqr_enabled: '0', vqr_env: 'mock', vqr_bank_code: '', vqr_username: '', vqr_password: '',
+    vqr_terminal_code: '', vqr_exposed_username: '', vqr_exposed_password: '', vqr_secret_key: '',
+    vqr_mock_autopay: '0',
   };
   const insSetting = conn.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
   for (const [k, v] of Object.entries(defaults)) insSetting.run(k, v);

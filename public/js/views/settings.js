@@ -48,10 +48,30 @@ export default {
   </div>
 
   <div class="card">
+    <h3>VietQR động (thanh toán tự động)</h3>
+    <p class="muted">Bật để tạo QR động và tự xác nhận khi khách chuyển khoản. Môi trường <b>mock</b> để thử không cần tài khoản VietQR.</p>
+    <label class="chk"><input type="checkbox" data-s="vqr_enabled"> Bật VietQR động</label>
+    <div class="form-grid" style="margin-top:10px">
+      <label class="fld">Môi trường<select class="field" data-s="vqr_env"><option value="mock">mock (thử)</option><option value="dev">dev (sandbox)</option><option value="prod">prod (thật)</option></select></label>
+      <label class="fld">Mã ngân hàng (VietQR)<input class="field" data-s="vqr_bank_code" placeholder="MB / BIDV"></label>
+      <label class="fld">Terminal code<input class="field" data-s="vqr_terminal_code"></label>
+      <label class="fld">Username VietQR<input class="field" data-s="vqr_username" autocapitalize="none"></label>
+      <label class="fld">Password VietQR<input class="field" data-s="vqr_password" type="password"></label>
+      <label class="fld">Basic user (cấp cho VietQR)<input class="field" data-s="vqr_exposed_username" autocapitalize="none"></label>
+      <label class="fld">Basic pass (cấp cho VietQR)<input class="field" data-s="vqr_exposed_password" type="password"></label>
+    </div>
+    <p class="muted">Webhook cho VietQR: <code>/vqr/api/token_generate</code> · <code>/vqr/bank/api/transaction-sync</code></p>
+    <div class="toolbar" style="margin-top:8px"><button class="btn" id="btn-vqr-test" type="button">Kiểm tra kết nối</button></div>
+    <div id="vqr-test-result"></div>
+  </div>
+
+  <div class="card">
     <h3>Bán hàng &amp; kho</h3>
     <div class="form-grid">
       <label class="fld">Bảng giá mặc định<select class="field" data-s="default_price_list_id" id="pl-select"></select></label>
       <label class="fld">Đơn vị tiền tệ<input class="field" data-s="currency"></label>
+      <label class="fld">Cách tính giá &amp; VAT<select class="field" data-s="vat_mode"><option value="inclusive">Giá đã gồm VAT</option><option value="exclusive">Giá chưa gồm VAT</option></select></label>
+      <label class="fld">Thuế VAT mặc định (%)<input class="field" type="number" min="0" max="100" data-s="vat_default_rate"></label>
     </div>
     <label class="chk" style="margin-bottom:10px"><input type="checkbox" data-s="allow_negative_stock"> Cho phép bán âm kho</label>
     <label class="chk" style="margin-bottom:10px"><input type="checkbox" data-s="low_stock_alert"> Cảnh báo sắp hết hàng</label>
@@ -100,6 +120,14 @@ export default {
     $('#btn-backup-now').onclick = async () => {
       try { const b = await api('/api/backup/now', { method: 'POST' }); toast('Đã sao lưu ' + b.name); renderBackups(); }
       catch (e) { toast(e.message, true); }
+    };
+    $('#btn-vqr-test').onclick = async () => {
+      const el = $('#vqr-test-result');
+      el.innerHTML = '<div class="hint">Đang kiểm tra…</div>';
+      try {
+        const r = await api('/api/vietqr/test', { method: 'POST' });
+        el.innerHTML = `<div class="hint">Môi trường: <b>${esc(r.env)}</b> · Token: <b>${r.token_ok ? 'OK' : 'lỗi'}</b> · QR: <b>${r.qr_ok ? 'OK' : 'lỗi'}</b><br>${esc(r.message || '')}</div>`;
+      } catch (e) { el.innerHTML = `<div class="low">${esc(e.message)}</div>`; }
     };
     $('#backup-list').addEventListener('click', onBackupClick);
     el.addEventListener('click', (e) => {

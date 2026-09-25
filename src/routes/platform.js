@@ -16,6 +16,10 @@ router.use((req, res, next) => {
 
 const codeOk = (c) => /^[a-z0-9_-]{2,30}$/.test(c);
 
+router.get('/plans', wrap((req, res) => {
+  ok(res, control.prepare('SELECT * FROM plans WHERE active=1 ORDER BY price').all());
+}));
+
 router.get('/tenants', wrap((req, res) => {
   const rows = control.prepare(`SELECT t.*, (SELECT COUNT(*) FROM users u WHERE u.tenant_id=t.id) AS user_count
     FROM tenants t ORDER BY t.id`).all();
@@ -33,8 +37,8 @@ router.post('/tenants', wrap((req, res) => {
   if (!ownerUser || ownerPass.length < 6) return fail(res, 'Cần tài khoản chủ (tối thiểu 6 ký tự mật khẩu)');
   if (control.prepare('SELECT id FROM users WHERE lower(username)=?').get(ownerUser)) return fail(res, 'Tên đăng nhập chủ đã tồn tại');
 
-  const r = control.prepare('INSERT INTO tenants(code,name,plan,note) VALUES (?,?,?,?)')
-    .run(code, name, str(req.body.plan, 30) || 'standard', str(req.body.note, 300) || null);
+  const r = control.prepare('INSERT INTO tenants(code,name,plan,note,expires_at) VALUES (?,?,?,?,?)')
+    .run(code, name, str(req.body.plan, 30) || 'standard', str(req.body.note, 300) || null, str(req.body.expires_at, 30) || null);
   const tenantId = Number(r.lastInsertRowid);
   control.prepare('INSERT INTO users(tenant_id,username,password_hash,full_name,role) VALUES (?,?,?,?,?)')
     .run(tenantId, ownerUser, hashPassword(ownerPass), str(req.body.owner_name, 120) || 'Chủ cửa hàng', 'owner');
@@ -49,8 +53,9 @@ router.put('/tenants/:id', wrap((req, res) => {
   const id = Number(req.params.id);
   const t = control.prepare('SELECT * FROM tenants WHERE id=?').get(id);
   if (!t) return fail(res, 'Không tìm thấy cửa hàng', 404);
-  control.prepare('UPDATE tenants SET name=?, status=?, plan=?, note=? WHERE id=?')
-    .run(str(req.body.name, 160) || t.name, str(req.body.status, 20) || t.status, str(req.body.plan, 30) || t.plan, str(req.body.note, 300) || null, id);
+  control.prepare('UPDATE tenants SET name=?, status=?, plan=?, note=?, expires_at=? WHERE id=?')
+    .run(str(req.body.name, 160) || t.name, str(req.body.status, 20) || t.status, str(req.body.plan, 30) || t.plan, str(req.body.note, 300) || null,
+      req.body.expires_at === undefined ? t.expires_at : (str(req.body.expires_at, 30) || null), id);
   audit({ userId: req.user.id, username: req.user.username, action: 'tenant.update', entity: 'tenant', entityId: id, ip: req.ip });
   ok(res, control.prepare('SELECT * FROM tenants WHERE id=?').get(id));
 }));

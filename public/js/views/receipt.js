@@ -21,6 +21,7 @@ export function receiptHTML(inv, qr) {
       <tr><td>Tạm tính</td><td style="text-align:right">${num(inv.subtotal)}</td></tr>
       ${inv.item_discount ? `<tr><td>Giảm giá hàng</td><td style="text-align:right">-${num(inv.item_discount)}</td></tr>` : ''}
       ${inv.order_discount ? `<tr><td>Giảm giá đơn</td><td style="text-align:right">-${num(inv.order_discount)}</td></tr>` : ''}
+      ${inv.vat_amount ? `<tr><td>Tiền hàng (chưa VAT)</td><td style="text-align:right">${num(inv.net_amount)}</td></tr>${(inv.tax_lines || []).map((t) => `<tr><td>VAT ${t.rate}%</td><td style="text-align:right">${num(t.tax_amount)}</td></tr>`).join('')}` : ''}
       <tr class="tot"><td>${isReturn ? 'TIỀN TRẢ' : 'TỔNG CỘNG'}</td><td style="text-align:right">${num(inv.total)} ${esc(s.currency)}</td></tr>
       <tr><td>Thanh toán</td><td style="text-align:right">${pay}</td></tr>
       ${inv.payment_method === 'cash' ? `<tr><td>Khách đưa</td><td style="text-align:right">${num(inv.paid_amount)}</td></tr><tr><td>Tiền thừa</td><td style="text-align:right">${num(inv.change_amount)}</td></tr>` : ''}
@@ -66,21 +67,72 @@ export async function showReceipt(inv) {
 
 export async function showTransferQR(inv) {
   let qr = null;
-  try { qr = await api(`/api/qr?amount=${inv.total}&message=${encodeURIComponent(inv.code)}`); } catch (e) { toast(e.message, true); }
+  let dynamic = false;
+  let isMock = false;
+  let env = 'mock';
+  // Ưu tiên QR động (VietQR API) nếu đã bật
+  try {
+    const d = await api(`/api/invoices/${inv.id}/vietqr`, { method: 'POST' });
+    qr = { dataUrl: d.qrDataUrl, bank_name: d.bankName || state.settings.bank_name, bank_account: d.bankAccount || state.settings.bank_account, account_holder: state.settings.account_holder, content: d.content || d.payment_ref };
+    dynamic = true;
+    isMock = !!d.mock;
+    env = d.env || 'mock';
+  } catch { /* bỏ qua, dùng QR tĩnh */ }
+  if (!qr) {
+    try { qr = await api(`/api/qr?amount=${inv.total}&message=${encodeURIComponent(inv.code)}`); } catch (e) { toast(e.message, true); }
+    if (qr) qr.content = inv.code;
+  }
   modal(`<h2>Chuyển khoản – ${esc(inv.code)}</h2>
     <div class="qr-wrap">
       ${qr ? `<img src="${qr.dataUrl}" alt="VietQR">` : '<p class="low">Chưa cấu hình tài khoản ngân hàng (Cài đặt).</p>'}
       <div class="amt">${money(inv.total)}</div>
-      ${qr ? `<div class="info">${esc(qr.bank_name)} · <b>${esc(qr.bank_account)}</b><br>${esc(qr.account_holder)}<br>Nội dung: <b>${esc(inv.code)}</b></div>` : ''}
+      ${qr ? `<div class="info">${esc(qr.bank_name)} · <b>${esc(qr.bank_account)}</b><br>${esc(qr.account_holder)}<br>Nội dung: <b>${esc(qr.content || inv.code)}</b></div>` : ''}
+      <div class="hint">Mã HĐ: <b>${esc(inv.code)}</b> · ID: <b>${esc(inv.id)}</b></div>
+      ${inv.status === 'pending' ? `<div class="hint" id="q-wait">${dynamic ? 'Đang chờ khách chuyển khoản… (tự cập nhật khi nhận tiền)' : 'Sau khi nhận tiền, bấm "Đã nhận tiền"'}</div>` : ''}
     </div>
     <div class="modal-actions" style="justify-content:center">
+      ${inv.status === 'pending' && isMock ? `<button class="btn" id="q-simulate">🧪 Mô phỏng đã chuyển tiền</button>` : ''}
+      ${inv.status === 'pending' && env === 'dev' && !isMock ? `<button class="btn" id="q-simulate-dev">🧪 Mô phỏng thanh toán (dev)</button>` : ''}
       ${inv.status === 'pending' ? `<button class="btn primary" id="q-confirm">✔ Đã nhận tiền</button>` : ''}
       <button class="btn" id="q-print">🖨 In hóa đơn</button>
       <button class="btn" id="q-close">Đóng</button>
     </div>`);
-  if ($('#q-confirm')) $('#q-confirm').onclick = async () => { const i = await api(`/api/invoices/${inv.id}/confirm`, { method: 'POST' }); toast('Đã xác nhận thanh toán'); showReceipt(i); };
+  if ($('#q-confirm')) $('#q-confirm').onclick = async () => { stopPoll(); const i = await api(`/api/invoices/${inv.id}/confirm`, { method: 'POST' }); toast('Đã xác nhận thanh toán'); showReceipt(i); };
   $('#q-print').onclick = () => printReceipt(inv, qr);
   $('#q-close').onclick = closeModal;
+
+  // Tự động cập nhật khi VietQR báo đã thanh toán
+  let timer = null;
+  const stopPoll = () => { if (timer) { clearInterval(timer); timer = null; } window.__onModalClose = null; };
+  window.__onModalClose = stopPoll;
+  if ($('#q-simulate')) $('#q-simulate').onclick = async () => {
+    try {
+      await api('/api/vietqr/simulate', { method: 'POST', body: { invoice_id: inv.id } });
+      stopPoll();
+      toast('Đã nhận thanh toán');
+      showReceipt(await api('/api/invoices/' + inv.id));
+    } catch (e) { toast(e.message, true); }
+  };
+  if ($('#q-simulate-dev')) $('#q-simulate-dev').onclick = async () => {
+    const btn = $('#q-simulate-dev'); btn.disabled = true; btn.textContent = 'Đang mô phỏng…';
+    try {
+      await api('/api/vietqr/simulate-dev', { method: 'POST', body: { invoice_id: inv.id } });
+      toast('Đã gửi mô phỏng — chờ VietQR báo về…');
+    } catch (e) { toast(e.message, true); btn.disabled = false; btn.textContent = '🧪 Mô phỏng thanh toán (dev)'; }
+  };
+  if (inv.status === 'pending') {
+    timer = setInterval(async () => {
+      try {
+        const s = await api(`/api/invoices/${inv.id}/payment-status`);
+        if (s.paid) {
+          stopPoll();
+          const full = await api('/api/invoices/' + inv.id);
+          toast('Đã nhận thanh toán');
+          showReceipt(full);
+        }
+      } catch { /* bỏ qua */ }
+    }, 3000);
+  }
 }
 
 export async function openReturn(inv) {

@@ -25,7 +25,20 @@ CREATE TABLE IF NOT EXISTS tenants (
   status TEXT NOT NULL DEFAULT 'active',
   plan TEXT NOT NULL DEFAULT 'standard',
   note TEXT,
+  expires_at TEXT,
   created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS plans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  price INTEGER DEFAULT 0,
+  cycle TEXT DEFAULT 'month',
+  max_users INTEGER DEFAULT 3,
+  max_products INTEGER DEFAULT 500,
+  features TEXT,
+  active INTEGER DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -68,6 +81,28 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_logs(tenant_id, id);
 `);
 
+// Thêm cột còn thiếu (DB cũ)
+function controlColumns(table) {
+  return control.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+}
+if (!controlColumns('tenants').includes('expires_at')) control.exec('ALTER TABLE tenants ADD COLUMN expires_at TEXT');
+
+// ---------- Gói dịch vụ mặc định ----------
+if (control.prepare('SELECT COUNT(*) c FROM plans').get().c === 0) {
+  const ins = control.prepare('INSERT INTO plans(code,name,price,cycle,max_users,max_products,features) VALUES (?,?,?,?,?,?,?)');
+  ins.run('trial', 'Dùng thử', 0, 'day', 2, 100, 'basic');
+  ins.run('standard', 'Cơ bản', 200000, 'month', 5, 2000, 'basic,einvoice,vietqr');
+  ins.run('pro', 'Chuyên nghiệp', 500000, 'month', 30, 20000, 'basic,einvoice,vietqr,analytics,multishop');
+}
+
+function planOf(tenant) {
+  return control.prepare('SELECT * FROM plans WHERE code=?').get(tenant && tenant.plan) || control.prepare('SELECT * FROM plans WHERE code=?').get('standard');
+}
+function tenantExpired(tenant) {
+  if (!tenant || !tenant.expires_at) return false;
+  return tenant.expires_at < new Date().toISOString().slice(0, 19).replace('T', ' ');
+}
+
 // ---------- Seed: tenant mặc định + tài khoản chủ + quản trị nền tảng ----------
 function seed() {
   const insTenant = control.prepare('INSERT INTO tenants(code,name,plan) VALUES (?,?,?)');
@@ -106,4 +141,4 @@ function newToken() {
 }
 const tokenHash = (token) => crypto.createHash('sha256').update(String(token || '')).digest('hex');
 
-module.exports = { control, DATA_DIR, audit, newToken, tokenHash };
+module.exports = { control, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired };

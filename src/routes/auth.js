@@ -1,13 +1,25 @@
 'use strict';
 
 const express = require('express');
-const { control, audit, newToken, tokenHash } = require('../control');
+const { control, audit, newToken, tokenHash, tenantExpired } = require('../control');
 const { ok, fail, wrap, str } = require('../lib/util');
 const { hashPassword, verifyPassword, sessionCookie, clearCookie, parseCookies, COOKIE } = require('../lib/auth');
 const rbac = require('../lib/rbac');
 const { SESSION_TTL_MS } = require('../middleware');
 
 const router = express.Router();
+
+// Giới hạn đăng nhập sai theo IP (chống dò mật khẩu)
+const attempts = new Map();
+const WINDOW_MS = 15 * 60 * 1000;
+const MAX_TRIES = 10;
+function tooMany(ip) {
+  const now = Date.now();
+  const a = attempts.get(ip);
+  if (!a || now - a.ts > WINDOW_MS) { attempts.set(ip, { count: 1, ts: now }); return false; }
+  a.count++;
+  return a.count > MAX_TRIES;
+}
 
 const fmtUtc = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
 
@@ -26,6 +38,7 @@ const payload = (user, tenant) => ({
 });
 
 router.post('/login', wrap((req, res) => {
+  if (tooMany(req.ip)) return fail(res, 'Quá nhiều lần đăng nhập sai, vui lòng thử lại sau', 429);
   const username = str(req.body.username, 80).toLowerCase();
   const password = String(req.body.password || '');
   if (!username || !password) return fail(res, 'Nhập tài khoản và mật khẩu');
@@ -39,11 +52,13 @@ router.post('/login', wrap((req, res) => {
   if (user.tenant_id) {
     tenant = control.prepare('SELECT * FROM tenants WHERE id=?').get(user.tenant_id);
     if (tenant && tenant.status === 'suspended') return fail(res, 'Cửa hàng đang tạm ngưng', 403);
+    if (tenant && tenantExpired(tenant)) return fail(res, 'Cửa hàng đã hết hạn sử dụng', 403);
   }
   const token = createSession(user, req);
   control.prepare("UPDATE users SET last_login=datetime('now','localtime') WHERE id=?").run(user.id);
   audit({ tenantId: user.tenant_id, userId: user.id, username: user.username, action: 'login', ip: req.ip });
-  res.setHeader('Set-Cookie', sessionCookie(token, Math.floor(SESSION_TTL_MS / 1000)));
+  attempts.delete(req.ip);
+  res.setHeader('Set-Cookie', sessionCookie(token, Math.floor(SESSION_TTL_MS / 1000), !!req.secure));
   ok(res, payload(user, tenant));
 }));
 

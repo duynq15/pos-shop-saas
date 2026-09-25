@@ -31,7 +31,18 @@ export default {
   <div class="card"><h3>Doanh thu theo giờ</h3><div id="rp-hours"></div></div>
 </div>
 <div class="card" style="margin-bottom:14px"><h3>⚠️ Sản phẩm sắp hết hàng</h3><div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">Tối thiểu</th></tr></thead><tbody id="rp-low"></tbody></table></div></div>
-<div class="card"><h3>🐢 Hàng bán chậm / tồn lâu</h3><div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">Giá trị tồn</th><th class="r">Đã bán</th></tr></thead><tbody id="rp-slow"></tbody></table></div></div>`;
+<div class="card"><h3>🐢 Hàng bán chậm / tồn lâu</h3><div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">Giá trị tồn</th><th class="r">Đã bán</th></tr></thead><tbody id="rp-slow"></tbody></table></div></div>
+<div class="card" style="margin-top:14px"><h3>Thuế GTGT (VAT)</h3><div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr><th>Loại</th><th class="r">Giá trị</th><th class="r">Tiền thuế</th></tr></thead><tbody id="rp-vat"></tbody></table></div><div class="rowline total"><span>VAT phải nộp (đầu ra − đầu vào)</span><b id="rp-vat-pay">0</b></div></div>
+<div class="card" style="margin-top:14px"><h3>🧠 Phân tích thông minh</h3>
+  <div class="grid2">
+    <div><h4 style="margin:6px 0">Nhóm ABC (doanh thu)</h4><div class="tbl-wrap" style="box-shadow:none;max-height:260px"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Doanh thu</th><th class="c">% lũy kế</th><th class="c">Nhóm</th></tr></thead><tbody id="an-abc"></tbody></table></div></div>
+    <div><h4 style="margin:6px 0">Gợi ý nhập hàng</h4><div class="tbl-wrap" style="box-shadow:none;max-height:260px"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">/ngày</th><th class="r">Đủ dùng</th><th class="r">Đề xuất</th></tr></thead><tbody id="an-reorder"></tbody></table></div></div>
+  </div>
+  <div class="grid2" style="margin-top:12px">
+    <div><h4 style="margin:6px 0">Thường mua kèm</h4><div class="tbl-wrap" style="box-shadow:none;max-height:220px"><table class="grid"><thead><tr><th>Cặp sản phẩm</th><th class="r">Số lần</th></tr></thead><tbody id="an-basket"></tbody></table></div></div>
+    <div><h4 style="margin:6px 0">Bất thường (giảm giá cao)</h4><div class="tbl-wrap" style="box-shadow:none;max-height:220px"><table class="grid"><thead><tr><th>Hóa đơn</th><th class="r">Giảm %</th><th class="r">Tổng</th></tr></thead><tbody id="an-anom"></tbody></table></div></div>
+  </div>
+</div>`;
     el.addEventListener('click', (e) => {
       const r = e.target.closest('[data-range]');
       if (r) return setRange(r.dataset.range);
@@ -73,10 +84,12 @@ function barList(data, valueKey, labelKey, color) {
 async function load() {
   const from = $('#rp-from').value, to = $('#rp-to').value;
   $('#rp-range').textContent = `Từ ${from} đến ${to}`;
-  const [r, inv, slow] = await Promise.all([
+  const [r, inv, slow, vat, ana] = await Promise.all([
     api(`/api/reports/summary?from=${from}&to=${to}`),
     api('/api/reports/inventory'),
     api(`/api/reports/slow-moving?from=${from}&to=${to}`),
+    api(`/api/reports/vat?from=${from}&to=${to}`),
+    api(`/api/reports/analytics?from=${from}&to=${to}`),
   ]);
   const cards = [
     ['Doanh thu thuần', money(r.revenue), 'primary'],
@@ -99,6 +112,18 @@ async function load() {
   $('#rp-hours').innerHTML = colChart(r.byHour, 'revenue', 'hour');
   $('#rp-low').innerHTML = r.lowStock.map((p) => `<tr><td>${esc(p.name)}</td><td class="r low">${num(p.stock)} ${esc(p.unit)}</td><td class="r">${num(p.min_stock)}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">Không có sản phẩm sắp hết</td></tr>';
   $('#rp-slow').innerHTML = slow.slice(0, 20).map((p) => `<tr><td>${esc(p.name)}</td><td class="r">${num(p.stock)} ${esc(p.unit)}</td><td class="r">${num(p.stock_value)}</td><td class="r">${num(p.sold)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Không có dữ liệu</td></tr>';
+  const vatRows = [
+    ...vat.output.map((t) => `<tr><td>Bán ra · VAT ${t.rate}%</td><td class="r">${num(t.taxable)}</td><td class="r">${num(t.tax)}</td></tr>`),
+    ...vat.input.map((t) => `<tr><td>Mua vào · VAT ${t.rate}%</td><td class="r">${num(t.base)}</td><td class="r">${num(t.tax)}</td></tr>`),
+  ];
+  $('#rp-vat').innerHTML = vatRows.join('') || '<tr><td colspan="3" class="empty">Chưa có dữ liệu thuế</td></tr>';
+  $('#rp-vat-pay').textContent = money(vat.payable);
+
+  // Phân tích thông minh
+  $('#an-abc').innerHTML = (ana.abc || []).slice(0, 20).map((p) => `<tr><td>${esc(p.name)}</td><td class="r">${num(p.revenue)}</td><td class="c">${p.cum_share}%</td><td class="c"><span class="badge ${p.class === 'A' ? 'paid' : p.class === 'B' ? 'pending' : 'cancelled'}">${p.class}</span></td></tr>`).join('') || '<tr><td colspan="4" class="empty">Chưa có dữ liệu</td></tr>';
+  $('#an-reorder').innerHTML = (ana.reorder || []).map((p) => `<tr><td>${esc(p.name)}</td><td class="r ${p.stock <= p.min_stock ? 'low' : ''}">${num(p.stock)}</td><td class="r">${p.per_day}</td><td class="r">${p.days_cover >= 999 ? '—' : p.days_cover}</td><td class="r"><b>${p.suggest}</b></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Chưa có gợi ý</td></tr>';
+  $('#an-basket').innerHTML = (ana.basket || []).map((b) => `<tr><td>${esc(b.a)} + ${esc(b.b)}</td><td class="r">${b.times}</td></tr>`).join('') || '<tr><td colspan="2" class="empty">Chưa có dữ liệu</td></tr>';
+  $('#an-anom').innerHTML = (ana.anomalies || []).map((a) => `<tr><td>${esc(a.code)}</td><td class="r low">${a.pct}%</td><td class="r">${num(a.total)}</td></tr>`).join('') || `<tr><td colspan="3" class="empty">Không có bất thường · HĐ hủy: ${ana.cancelled}</td></tr>`;
 }
 
 function exportCSV(type) {

@@ -230,20 +230,79 @@ async function openPurchaseDetail(p) {
 }
 
 async function openSuppliers() {
-  await loadSuppliers();
-  modal(`<h2>Nhà cung cấp</h2>
-    <div class="scroll-x" style="max-height:50vh;overflow:auto"><table class="line-items"><thead><tr><th>Tên</th><th>Điện thoại</th><th></th></tr></thead>
-    <tbody id="sup-body">${state.suppliers.map((s) => `<tr data-id="${s.id}"><td>${esc(s.name)}</td><td>${esc(s.phone || '')}</td>
-      <td class="r"><button class="btn sm danger" data-act="del">Xóa</button></td></tr>`).join('') || '<tr><td colspan="3" class="empty">Chưa có</td></tr>'}</tbody></table></div>
-    <div class="toolbar" style="margin-top:10px"><input class="field" id="sup-name" placeholder="Tên NCC"><input class="field" id="sup-phone" placeholder="Điện thoại"><button class="btn primary" id="sup-add">Thêm</button><button class="btn" id="sup-close">Đóng</button></div>`);
+  const rows = await api('/api/suppliers/payables');
+  modal(`<h2>Nhà cung cấp &amp; công nợ</h2>
+    <div class="scroll-x" style="max-height:52vh;overflow:auto"><table class="line-items"><thead><tr>
+      <th>Nhà cung cấp</th><th>Điện thoại</th><th class="r">Đã mua</th><th class="r">Đã trả</th><th class="r">Còn nợ</th><th></th>
+    </tr></thead>
+    <tbody id="sup-body">${rows.map((r) => `<tr data-id="${r.id}"><td>${esc(r.name)}<span class="sub">${esc(r.tax_code || '')}</span></td>
+      <td>${esc(r.phone || '')}</td><td class="r">${money(r.purchased)}</td><td class="r">${money(r.paid)}</td>
+      <td class="r ${r.balance > 0 ? 'low' : ''}"><b>${money(r.balance)}</b></td>
+      <td class="r"><button class="btn sm" data-act="pay">Trả tiền</button>
+        <button class="btn sm" data-act="edit">Sửa</button>
+        <button class="btn sm danger" data-act="del">Xóa</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">Chưa có nhà cung cấp</td></tr>'}</tbody></table></div>
+    <div class="toolbar" style="margin-top:10px">
+      <input class="field" id="sup-name" placeholder="Tên NCC">
+      <input class="field" id="sup-phone" placeholder="Điện thoại">
+      <input class="field" id="sup-tax" placeholder="MST">
+      <button class="btn primary" id="sup-add">Thêm</button>
+      <button class="btn" id="sup-close">Đóng</button>
+    </div>`);
   $('#sup-close').onclick = closeModal;
   $('#sup-add').onclick = async () => {
-    try { await api('/api/suppliers', { method: 'POST', body: { name: $('#sup-name').value, phone: $('#sup-phone').value } }); toast('Đã thêm'); openSuppliers(); } catch (e) { toast(e.message, true); }
+    try { await api('/api/suppliers', { method: 'POST', body: { name: $('#sup-name').value, phone: $('#sup-phone').value, tax_code: $('#sup-tax').value } }); toast('Đã thêm'); openSuppliers(); }
+    catch (e) { toast(e.message, true); }
   };
   $('#sup-body').addEventListener('click', async (e) => {
-    if (e.target.dataset.act !== 'del') return;
-    await api('/api/suppliers/' + e.target.closest('tr').dataset.id, { method: 'DELETE' }); toast('Đã xóa'); openSuppliers();
+    const btn = e.target.closest('[data-act]'); if (!btn) return;
+    const id = Number(btn.closest('tr').dataset.id);
+    const row = rows.find((x) => x.id === id);
+    if (btn.dataset.act === 'del') { if (confirm(`Xóa "${row.name}"?`)) { await api('/api/suppliers/' + id, { method: 'DELETE' }); toast('Đã xóa'); openSuppliers(); } }
+    if (btn.dataset.act === 'edit') openSupplierForm(row);
+    if (btn.dataset.act === 'pay') openSupplierPayment(row);
   });
+}
+
+function openSupplierForm(s) {
+  modal(`<h2>Sửa nhà cung cấp</h2>
+    <div class="form-grid">
+      <label class="fld">Tên *<input class="field" id="sf-name" value="${esc(s.name || '')}"></label>
+      <label class="fld">Mã số thuế<input class="field" id="sf-tax" value="${esc(s.tax_code || '')}"></label>
+      <label class="fld">Người liên hệ<input class="field" id="sf-contact" value="${esc(s.contact_name || '')}"></label>
+      <label class="fld">Điện thoại<input class="field" id="sf-phone" value="${esc(s.phone || '')}"></label>
+      <label class="fld">Điều khoản (ngày)<input class="field" id="sf-terms" type="number" min="0" value="${s.payment_terms_days || 0}"></label>
+      <label class="fld">Địa chỉ<input class="field" id="sf-addr" value="${esc(s.address || '')}"></label>
+      <label class="fld full">Ghi chú<input class="field" id="sf-note" value="${esc(s.note || '')}"></label>
+    </div>
+    <div class="modal-actions"><button class="btn primary" id="sf-save">Lưu</button><button class="btn" id="sf-close">Đóng</button></div>`);
+  $('#sf-close').onclick = closeModal;
+  $('#sf-save').onclick = async () => {
+    try {
+      await api('/api/suppliers/' + s.id, { method: 'PUT', body: {
+        name: $('#sf-name').value, tax_code: $('#sf-tax').value, contact_name: $('#sf-contact').value,
+        phone: $('#sf-phone').value, payment_terms_days: $('#sf-terms').value, address: $('#sf-addr').value, note: $('#sf-note').value,
+      } });
+      toast('Đã lưu'); closeModal(); openSuppliers();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+function openSupplierPayment(s) {
+  modal(`<h2>Trả tiền – ${esc(s.name)}</h2>
+    <p class="muted">Đang nợ: <b>${money(s.balance)}</b></p>
+    <div class="form-grid">
+      <label class="fld">Số tiền trả<input class="field" id="sp-amount" type="number" min="0" value="${s.balance > 0 ? s.balance : ''}"></label>
+      <label class="fld">Hình thức<select class="field" id="sp-method"><option value="cash">Tiền mặt</option><option value="transfer">Chuyển khoản</option></select></label>
+      <label class="fld full">Ghi chú<input class="field" id="sp-note"></label>
+    </div>
+    <div class="modal-actions"><button class="btn primary" id="sp-save">Lưu phiếu chi</button><button class="btn" id="sp-close">Đóng</button></div>`);
+  $('#sp-close').onclick = closeModal;
+  $('#sp-save').onclick = async () => {
+    try {
+      await api('/api/suppliers/' + s.id + '/payments', { method: 'POST', body: { amount: $('#sp-amount').value, method: $('#sp-method').value, note: $('#sp-note').value } });
+      toast('Đã ghi phiếu chi'); closeModal(); openSuppliers();
+    } catch (e) { toast(e.message, true); }
+  };
 }
 
 /* ===================== KIỂM KHO ===================== */

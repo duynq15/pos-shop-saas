@@ -10,4 +10,13 @@ function makeCode(db, prefix, table, column = 'code', date = new Date()) {
   return `${prefix}${ymd}-${String(row.c + 1).padStart(4, '0')}`;
 }
 
-module.exports = { makeCode };
+module.exports = { makeCode, nextPaymentRef };
+
+// Mã đối soát thanh toán ngắn (<=13 ký tự) dùng làm orderId/content cho VietQR.
+function nextPaymentRef(db) {
+  const row = db.prepare("SELECT value FROM settings WHERE key='payment_ref_seq'").get();
+  let seq = Number((row && row.value) || 0) + 1;
+  const code = 'P' + String(seq).padStart(10, '0');
+  db.prepare("INSERT INTO settings(key,value) VALUES('payment_ref_seq',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(seq));
+  return code;
+}

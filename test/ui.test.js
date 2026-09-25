@@ -50,6 +50,8 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('Settings test QR image', (await page.locator('#qr-test img').count()) === 1);
     await page.locator('#btn-backup-now').click(); await wait(800);
     ok('Backup created in settings', (await page.locator('#backup-list tr').count()) >= 1);
+    await page.locator('#btn-vqr-test').click(); await wait(600);
+    ok('VietQR test button', (await page.locator('#vqr-test-result').innerText()).toLowerCase().includes('mock'));
 
     // ================= PRODUCTS =================
     await view('products');
@@ -187,6 +189,19 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('QR confirm shows receipt', (await page.locator('#modal-box .receipt').count()) === 1);
     await page.keyboard.press('Escape'); await wait(300);
 
+    // VietQR động: tự xác nhận khi nhận tiền (mock)
+    await page.evaluate(() => fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vqr_enabled: '1', vqr_env: 'mock', bank_account: '99990001' }) }));
+    await wait(400);
+    await scan.fill('2000000000035'); await scan.press('Enter'); await wait(400);
+    await page.locator('.seg-btn[data-method="transfer"]').click(); await wait(200);
+    await page.locator('#btn-pay').click(); await wait(1200);
+    ok('Dynamic VietQR modal', (await page.locator('#modal-box .qr-wrap img').count()) === 1 && (await page.locator('#modal-box').innerText()).includes('Đang chờ'));
+    ok('Mock simulate button visible', (await page.locator('#q-simulate').count()) === 1);
+    await page.locator('#q-simulate').click(); await wait(900);
+    ok('Auto receipt after payment', (await page.locator('#modal-box .receipt').count()) === 1);
+    await page.keyboard.press('Escape'); await wait(300);
+    await page.evaluate(() => fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vqr_enabled: '0' }) }));
+
     // Treo đơn
     await scan.fill('8935001111222'); await scan.press('Enter'); await wait(400);
     await page.locator('#btn-hold').click(); await wait(600);
@@ -252,6 +267,7 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await view('reports');
     ok('Report stats cards', (await page.locator('#rp-stats .stat').count()) >= 10);
     ok('Report top chart', (await page.locator('#rp-top').innerText()).length > 0);
+    ok('Analytics section renders', (await page.locator('#an-abc').count()) === 1 && (await page.locator('#an-reorder').count()) === 1);
     await page.locator('[data-range="month"]').click(); await wait(700);
     ok('Month range', (await page.locator('#rp-from').inputValue()).endsWith('-01'));
 

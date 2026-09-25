@@ -60,7 +60,7 @@ async function load() {
   const rows = await api('/api/invoices?' + qs);
   $('#inv-count').textContent = `${rows.length} ${type === 'return' ? 'phiếu trả' : 'hóa đơn'}`;
   $('#inv-body').innerHTML = rows.map((i) => `<tr data-id="${i.id}">
-    <td><b>${esc(i.code)}</b></td><td>${esc(i.created_at)}</td>
+    <td><b>${esc(i.code)}</b><span class="sub">ID: ${i.id}</span></td><td>${esc(i.created_at)}</td>
     <td>${esc(i.customer_name || '')}${i.customer_phone ? `<span class="sub">${esc(i.customer_phone)}</span>` : ''}</td>
     <td>${methodLabel(i.payment_method)}</td>
     <td class="r"><b>${money(i.total)}</b>${i.discount ? `<span class="sub">giảm ${num(i.discount)}</span>` : ''}</td>
