@@ -1,0 +1,436 @@
+'use strict';
+
+// Lớp database đa tenant: mỗi cửa hàng có một file SQLite riêng trong data/tenants/<code>/pos.db
+// và một kết nối riêng (cách ly mạnh). Trong lúc xử lý request, module này định tuyến
+// tới đúng DB của tenant qua AsyncLocalStorage, nên các route hiện tại dùng `db.prepare(...)`
+// không cần sửa.
+
+const { DatabaseSync } = require('node:sqlite');
+const { AsyncLocalStorage } = require('node:async_hooks');
+const path = require('path');
+const fs = require('fs');
+const { applyPendingRestore } = require('./lib/backup');
+
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+const TENANTS_DIR = path.join(DATA_DIR, 'tenants');
+if (!fs.existsSync(TENANTS_DIR)) fs.mkdirSync(TENANTS_DIR, { recursive: true });
+
+const cache = new Map();
+const als = new AsyncLocalStorage();
+
+const safeCode = (code) => String(code || 'default').toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'default';
+const tenantDir = (code) => path.join(TENANTS_DIR, safeCode(code));
+
+/* ===================== SCHEMA NGHIỆP VỤ (mỗi tenant) ===================== */
+function ensureSchema(conn, { withDemo = false } = {}) {
+  conn.exec(`
+  PRAGMA journal_mode = WAL;
+  PRAGMA foreign_keys = ON;
+
+  CREATE TABLE IF NOT EXISTS categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    sort_order INTEGER DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    barcode TEXT UNIQUE,
+    sku TEXT,
+    name TEXT NOT NULL,
+    category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+    unit TEXT DEFAULT 'cái',
+    cost_price INTEGER DEFAULT 0,
+    sell_price INTEGER NOT NULL DEFAULT 0,
+    stock REAL DEFAULT 0,
+    min_stock REAL DEFAULT 0,
+    max_stock REAL DEFAULT 0,
+    location TEXT,
+    product_type TEXT DEFAULT 'goods',
+    is_weighted INTEGER DEFAULT 0,
+    allow_negative INTEGER DEFAULT 0,
+    warranty_months INTEGER DEFAULT 0,
+    weight REAL DEFAULT 0,
+    description TEXT,
+    image TEXT,
+    active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
+
+  CREATE TABLE IF NOT EXISTS product_units (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    conversion REAL NOT NULL DEFAULT 1,
+    sell_price INTEGER NOT NULL DEFAULT 0,
+    barcode TEXT,
+    is_base INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_units_product ON product_units(product_id);
+  CREATE INDEX IF NOT EXISTS idx_units_barcode ON product_units(barcode);
+
+  CREATE TABLE IF NOT EXISTS price_lists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    note TEXT,
+    is_default INTEGER DEFAULT 0,
+    sort_order INTEGER DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS price_list_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    price_list_id INTEGER NOT NULL REFERENCES price_lists(id) ON DELETE CASCADE,
+    unit_id INTEGER NOT NULL REFERENCES product_units(id) ON DELETE CASCADE,
+    price INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(price_list_id, unit_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS promotions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'order',
+    discount_type TEXT NOT NULL DEFAULT 'percent',
+    discount_value REAL NOT NULL DEFAULT 0,
+    target_type TEXT DEFAULT 'all',
+    target_id INTEGER,
+    min_subtotal INTEGER DEFAULT 0,
+    min_qty REAL DEFAULT 0,
+    start_date TEXT,
+    end_date TEXT,
+    priority INTEGER DEFAULT 0,
+    active INTEGER DEFAULT 1,
+    note TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE IF NOT EXISTS invoices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT UNIQUE NOT NULL,
+    type TEXT NOT NULL DEFAULT 'sale',
+    parent_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+    subtotal INTEGER NOT NULL DEFAULT 0,
+    item_discount INTEGER NOT NULL DEFAULT 0,
+    order_discount INTEGER NOT NULL DEFAULT 0,
+    discount INTEGER NOT NULL DEFAULT 0,
+    total INTEGER NOT NULL DEFAULT 0,
+    payment_method TEXT NOT NULL DEFAULT 'cash',
+    paid_amount INTEGER DEFAULT 0,
+    change_amount INTEGER DEFAULT 0,
+    price_list_id INTEGER,
+    promo_order_id INTEGER,
+    customer_name TEXT,
+    customer_phone TEXT,
+    note TEXT,
+    status TEXT NOT NULL DEFAULT 'paid',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_invoices_created ON invoices(created_at);
+  CREATE INDEX IF NOT EXISTS idx_invoices_type ON invoices(type);
+
+  CREATE TABLE IF NOT EXISTS invoice_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    barcode TEXT,
+    unit_id INTEGER,
+    unit_name TEXT,
+    conversion REAL DEFAULT 1,
+    qty REAL NOT NULL,
+    base_qty REAL DEFAULT 0,
+    price INTEGER NOT NULL,
+    cost_price INTEGER DEFAULT 0,
+    discount INTEGER DEFAULT 0,
+    promo_id INTEGER,
+    promo_name TEXT,
+    line_total INTEGER NOT NULL,
+    note TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS invoice_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    method TEXT NOT NULL DEFAULT 'cash',
+    amount INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE IF NOT EXISTS held_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT UNIQUE NOT NULL,
+    label TEXT,
+    cart_json TEXT NOT NULL,
+    customer_name TEXT,
+    customer_phone TEXT,
+    note TEXT,
+    total INTEGER DEFAULT 0,
+    item_count REAL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE IF NOT EXISTS suppliers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    phone TEXT,
+    address TEXT,
+    email TEXT,
+    note TEXT,
+    active INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE IF NOT EXISTS purchases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT UNIQUE NOT NULL,
+    supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+    supplier_name TEXT,
+    note TEXT,
+    total INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'draft',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    received_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_purchases_created ON purchases(created_at);
+
+  CREATE TABLE IF NOT EXISTS purchase_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    purchase_id INTEGER NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
+    product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    unit_id INTEGER,
+    unit_name TEXT,
+    conversion REAL DEFAULT 1,
+    qty REAL NOT NULL,
+    base_qty REAL DEFAULT 0,
+    cost_price INTEGER NOT NULL DEFAULT 0,
+    line_total INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS stock_checks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT UNIQUE NOT NULL,
+    note TEXT,
+    scope TEXT DEFAULT 'all',
+    category_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'draft',
+    diff_value INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    completed_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS stock_check_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    check_id INTEGER NOT NULL REFERENCES stock_checks(id) ON DELETE CASCADE,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    name TEXT,
+    unit_name TEXT,
+    system_qty REAL DEFAULT 0,
+    counted_qty REAL,
+    diff REAL DEFAULT 0,
+    cost_price INTEGER DEFAULT 0,
+    note TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS stock_moves (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    qty REAL NOT NULL,
+    type TEXT NOT NULL,
+    ref_type TEXT,
+    ref TEXT,
+    unit_id INTEGER,
+    unit_name TEXT,
+    conversion REAL DEFAULT 1,
+    stock_after REAL,
+    note TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_moves_product ON stock_moves(product_id);
+  CREATE INDEX IF NOT EXISTS idx_moves_created ON stock_moves(created_at);
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  );
+  `);
+
+  // ---------- Migration: thêm cột còn thiếu cho DB cũ ----------
+  const columns = (table) => conn.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  const ensureColumn = (table, name, def) => { if (!columns(table).includes(name)) conn.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`); };
+  const ensureColumnWithDefault = (table, name, def, seedExpr) => {
+    if (!columns(table).includes(name)) { conn.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`); conn.exec(`UPDATE ${table} SET ${name} = ${seedExpr}`); }
+  };
+
+  ensureColumn('categories', 'description', 'TEXT');
+  ensureColumn('categories', 'sort_order', 'INTEGER DEFAULT 0');
+  ensureColumn('products', 'sku', 'TEXT');
+  ensureColumn('products', 'max_stock', 'REAL DEFAULT 0');
+  ensureColumn('products', 'location', 'TEXT');
+  ensureColumn('products', 'product_type', "TEXT DEFAULT 'goods'");
+  ensureColumn('products', 'is_weighted', 'INTEGER DEFAULT 0');
+  ensureColumn('products', 'allow_negative', 'INTEGER DEFAULT 0');
+  ensureColumn('products', 'warranty_months', 'INTEGER DEFAULT 0');
+  ensureColumn('products', 'weight', 'REAL DEFAULT 0');
+  ensureColumn('products', 'description', 'TEXT');
+  ensureColumn('products', 'image', 'TEXT');
+  ensureColumn('invoices', 'type', "TEXT DEFAULT 'sale'");
+  ensureColumn('invoices', 'parent_id', 'INTEGER');
+  ensureColumn('invoices', 'item_discount', 'INTEGER DEFAULT 0');
+  ensureColumn('invoices', 'order_discount', 'INTEGER DEFAULT 0');
+  ensureColumn('invoices', 'price_list_id', 'INTEGER');
+  ensureColumn('invoices', 'promo_order_id', 'INTEGER');
+  ensureColumn('invoice_items', 'unit_id', 'INTEGER');
+  ensureColumn('invoice_items', 'unit_name', 'TEXT');
+  ensureColumnWithDefault('invoice_items', 'conversion', 'REAL DEFAULT 1', '1');
+  ensureColumnWithDefault('invoice_items', 'base_qty', 'REAL DEFAULT 0', 'qty');
+  ensureColumn('invoice_items', 'discount', 'INTEGER DEFAULT 0');
+  ensureColumn('invoice_items', 'promo_id', 'INTEGER');
+  ensureColumn('invoice_items', 'promo_name', 'TEXT');
+  ensureColumn('invoice_items', 'note', 'TEXT');
+  ensureColumn('stock_moves', 'unit_id', 'INTEGER');
+  ensureColumn('stock_moves', 'unit_name', 'TEXT');
+  ensureColumn('stock_moves', 'conversion', 'REAL DEFAULT 1');
+  ensureColumn('stock_moves', 'ref_type', 'TEXT');
+  ensureColumn('stock_moves', 'stock_after', 'REAL');
+  conn.exec("UPDATE stock_moves SET ref_type = type WHERE ref_type IS NULL");
+
+  // ---------- Settings mặc định ----------
+  const defaults = {
+    shop_name: 'Cửa hàng tạp hóa & gia dụng', shop_address: '', shop_phone: '', shop_tax_code: '',
+    bank_bin: '970436', bank_name: 'Vietcombank', bank_account: '', account_holder: '',
+    invoice_footer: 'Cảm ơn quý khách. Hẹn gặp lại!',
+    invoice_prefix: 'HD', return_prefix: 'TH', purchase_prefix: 'PN', stockcheck_prefix: 'KK',
+    currency: '₫', vat_rate: '0', allow_negative_stock: '0', default_price_list_id: '', low_stock_alert: '1',
+    receipt_width: '80', label_width: '40', label_height: '30', label_show_name: '1', label_show_price: '1',
+    label_show_barcode: '1', label_show_shop: '1', round_total: '0', print_after_pay: '0',
+    internal_barcode_seq: '0', online_lookup: '1', lookup_url: '', backup_enabled: '1', backup_keep: '30',
+  };
+  const insSetting = conn.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
+  for (const [k, v] of Object.entries(defaults)) insSetting.run(k, v);
+
+  // ---------- Danh mục mặc định ----------
+  if (conn.prepare('SELECT COUNT(*) c FROM categories').get().c === 0) {
+    const ins = conn.prepare('INSERT INTO categories(name, sort_order) VALUES (?,?)');
+    let i = 0;
+    for (const n of ['Tạp hóa', 'Đồ gia dụng', 'Đồ uống', 'Hóa mỹ phẩm', 'Bánh kẹo', 'Khác']) ins.run(n, i++);
+  }
+
+  // ---------- Bảng giá mặc định ----------
+  if (conn.prepare('SELECT COUNT(*) c FROM price_lists').get().c === 0) {
+    conn.prepare('INSERT INTO price_lists(name, is_default, sort_order, note) VALUES (?,?,?,?)').run('Giá bán lẻ', 1, 0, 'Áp dụng mặc định');
+    conn.prepare('INSERT INTO price_lists(name, is_default, sort_order, note) VALUES (?,?,?,?)').run('Giá bán buôn', 0, 1, 'Cho khách mua sỉ');
+  }
+  const dpl = conn.prepare("SELECT value FROM settings WHERE key='default_price_list_id'").get();
+  if (!dpl || !dpl.value) {
+    const d = conn.prepare('SELECT id FROM price_lists WHERE is_default=1 ORDER BY id LIMIT 1').get();
+    if (d) conn.prepare("UPDATE settings SET value=? WHERE key='default_price_list_id'").run(String(d.id));
+  }
+
+  // ---------- Sản phẩm mẫu (chỉ tenant mặc định) ----------
+  if (withDemo && conn.prepare('SELECT COUNT(*) c FROM products').get().c === 0) {
+    const cat = (n) => conn.prepare('SELECT id FROM categories WHERE name=?').get(n).id;
+    const ins = conn.prepare(`INSERT INTO products(barcode,sku,name,category_id,unit,cost_price,sell_price,stock,min_stock,location)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`);
+    const insUnit = conn.prepare('INSERT INTO product_units(product_id,name,conversion,sell_price,barcode,is_base,sort_order) VALUES (?,?,?,?,?,?,?)');
+    const seed = [
+      ['8934673101059', 'SP0001', 'Nước suối Aquafina 500ml', 'Đồ uống', 'chai', 3500, 5000, 120, 24, 'A1'],
+      ['8934588012136', 'SP0002', 'Coca Cola lon 330ml', 'Đồ uống', 'lon', 8000, 10000, 96, 24, 'A2'],
+      ['8934563138165', 'SP0003', 'Mì Hảo Hảo tôm chua cay', 'Tạp hóa', 'gói', 3500, 4500, 300, 50, 'B1'],
+      ['8936017360108', 'SP0004', 'Nước mắm Nam Ngư 500ml', 'Tạp hóa', 'chai', 22000, 28000, 30, 5, 'B2'],
+      ['8934868157007', 'SP0005', 'Dầu ăn Simply 1L', 'Tạp hóa', 'chai', 48000, 55000, 25, 5, 'B3'],
+      ['8935049501114', 'SP0006', 'Bột giặt OMO 3kg', 'Hóa mỹ phẩm', 'túi', 145000, 165000, 15, 3, 'C1'],
+      ['8934822101633', 'SP0007', 'Nước rửa chén Sunlight 750g', 'Hóa mỹ phẩm', 'chai', 25000, 32000, 20, 5, 'C2'],
+      ['8938505970054', 'SP0008', 'Kem đánh răng P/S 180g', 'Hóa mỹ phẩm', 'tuýp', 22000, 29000, 20, 5, 'C3'],
+      ['2000000000011', 'SP0009', 'Chảo chống dính 26cm', 'Đồ gia dụng', 'cái', 120000, 165000, 8, 2, 'D1'],
+      ['2000000000028', 'SP0010', 'Nồi inox 3 đáy 24cm', 'Đồ gia dụng', 'cái', 210000, 290000, 5, 1, 'D2'],
+      ['2000000000035', 'SP0011', 'Rổ nhựa Duy Tân lớn', 'Đồ gia dụng', 'cái', 18000, 25000, 20, 5, 'D3'],
+      ['2000000000042', 'SP0012', 'Thùng rác nhựa 15L', 'Đồ gia dụng', 'cái', 45000, 65000, 10, 2, 'D4'],
+      ['2000000000059', 'SP0013', 'Bóng đèn LED 9W Rạng Đông', 'Đồ gia dụng', 'cái', 28000, 38000, 30, 10, 'D5'],
+      ['2000000000066', 'SP0014', 'Ổ cắm điện Lioa 3 lỗ', 'Đồ gia dụng', 'cái', 65000, 85000, 10, 3, 'D6'],
+      ['2000000000073', 'SP0015', 'Móc treo quần áo (lố 10)', 'Đồ gia dụng', 'lố', 15000, 22000, 25, 5, 'D7'],
+      ['8935001111222', 'SP0016', 'Bánh Oreo hộp 133g', 'Bánh kẹo', 'hộp', 12000, 18000, 40, 10, 'E1'],
+      ['8935001111333', 'SP0017', 'Kẹo Alpenliebe gói', 'Bánh kẹo', 'gói', 9000, 13000, 50, 10, 'E2'],
+    ];
+    const unitsFor = { SP0002: ['Thùng', 24, 225000], SP0001: ['Thùng', 24, 108000], SP0003: ['Thùng', 30, 128000], SP0009: ['Thùng', 6, 900000] };
+    for (const s of seed) {
+      const r = ins.run(s[0], s[1], s[2], cat(s[3]), s[4], s[5], s[6], s[7], s[8], s[9]);
+      const pid = Number(r.lastInsertRowid);
+      insUnit.run(pid, s[4], 1, s[6], s[0], 1, 0);
+      const extra = unitsFor[s[1]];
+      if (extra) insUnit.run(pid, extra[0], extra[1], extra[2], `${s[0]}-${extra[1]}`, 0, 1);
+    }
+  }
+
+  // ---------- Backfill đơn vị cơ bản ----------
+  const missingUnits = conn.prepare(`SELECT p.* FROM products p WHERE NOT EXISTS (SELECT 1 FROM product_units u WHERE u.product_id=p.id)`).all();
+  const insBaseUnit = conn.prepare('INSERT INTO product_units(product_id,name,conversion,sell_price,barcode,is_base,sort_order) VALUES (?,?,?,?,?,?,?)');
+  for (const p of missingUnits) insBaseUnit.run(p.id, p.unit || 'cái', 1, p.sell_price, p.barcode, 1, 0);
+
+  // ---------- Khuyến mãi mẫu (tạm tắt) ----------
+  if (withDemo && conn.prepare('SELECT COUNT(*) c FROM promotions').get().c === 0) {
+    const insPromo = conn.prepare(`INSERT INTO promotions(name,kind,discount_type,discount_value,target_type,min_subtotal,min_qty,active,note)
+      VALUES (?,?,?,?,?,?,?,?,?)`);
+    insPromo.run('Giảm 10% hóa đơn từ 500.000', 'order', 'percent', 10, 'all', 500000, 0, 0, 'Ví dụ khuyến mãi hóa đơn');
+    insPromo.run('Mua 10 gói giảm 5% (Mì Hảo Hảo)', 'item', 'percent', 5, 'all', 0, 10, 0, 'Ví dụ khuyến mãi sản phẩm');
+  }
+}
+
+/* ===================== QUẢN LÝ KẾT NỐI TENANT ===================== */
+function getTenantDb(code) {
+  const key = safeCode(code);
+  if (cache.has(key)) return cache.get(key);
+  const dir = tenantDir(key);
+  fs.mkdirSync(dir, { recursive: true });
+  const dbPath = path.join(dir, 'pos.db');
+
+  // Di trú dữ liệu cũ: data/pos.db -> data/tenants/default/pos.db
+  if (key === 'default' && !fs.existsSync(dbPath)) {
+    const legacy = path.join(DATA_DIR, 'pos.db');
+    if (fs.existsSync(legacy)) {
+      fs.renameSync(legacy, dbPath);
+      for (const ext of ['-wal', '-shm']) {
+        const p = legacy + ext;
+        if (fs.existsSync(p)) fs.renameSync(p, dbPath + ext);
+      }
+    }
+  }
+
+  applyPendingRestore(dir);
+  const conn = new DatabaseSync(dbPath);
+  conn.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  ensureSchema(conn, { withDemo: key === 'default' });
+  conn.__dir = dir;
+  conn.__code = key;
+  cache.set(key, conn);
+  return conn;
+}
+
+/* ===================== ĐỊNH TUYẾN THEO PHIÊN ===================== */
+const current = () => als.getStore() || getTenantDb('default');
+
+const db = {
+  prepare: (...a) => current().prepare(...a),
+  exec: (...a) => current().exec(...a),
+  get tenantCode() { return current().__code; },
+  get DATA_DIR() { return current().__dir; },
+};
+
+// Chạy một hàm trong ngữ cảnh DB của tenant.
+function runWith(code, fn) {
+  const conn = getTenantDb(code);
+  return als.run(conn, () => fn(conn));
+}
+
+module.exports = db;
+module.exports.DATA_DIR_ROOT = DATA_DIR;
+module.exports.TENANTS_DIR = TENANTS_DIR;
+module.exports.getTenantDb = getTenantDb;
+module.exports.runWith = runWith;
+module.exports.ensureSchema = ensureSchema;

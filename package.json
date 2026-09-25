@@ -1,0 +1,21 @@
+{
+  "name": "pos-shop",
+  "version": "2.0.0",
+  "description": "Phần mềm bán hàng & quản lý kho chuyên nghiệp (offline, LAN)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "bash test/run.sh"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.2.1",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}
