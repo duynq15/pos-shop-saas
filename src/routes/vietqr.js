@@ -79,6 +79,11 @@ function processPayment(code, p) {
 
     let inv = db.prepare('SELECT * FROM invoices WHERE payment_ref=? AND type=?').get(orderId, 'sale');
     if (!inv && content) inv = db.prepare('SELECT * FROM invoices WHERE payment_ref=? AND type=?').get(content, 'sale');
+    // Dự phòng: tách mã đối soát P########## từ nội dung (nếu orderId không được trả về)
+    if (!inv) {
+      const m = String(orderId + ' ' + content).match(/P\d{10}/);
+      if (m) inv = db.prepare('SELECT * FROM invoices WHERE payment_ref=? AND type=?').get(m[0], 'sale');
+    }
     const ins = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json)
       VALUES (?,?,?,?,?,?,?,?,?,?)`);
 
@@ -124,9 +129,10 @@ webhook.post('/api/token_generate', (req, res) => {
 webhook.post('/bank/api/transaction-sync', wrap((req, res) => {
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   const pl = verifyToken(token);
-  if (!pl) return res.status(401).json({ error: true, errorReason: 'INVALID_TOKEN', toastMessage: 'Invalid or expired token', object: null });
+  if (!pl) { console.warn('[vqr] transaction-sync: token không hợp lệ'); return res.status(401).json({ error: true, errorReason: 'INVALID_TOKEN', toastMessage: 'Invalid or expired token', object: null }); }
   const b = req.body || {};
   const code = pl.t || resolveTenantByBank(b.bankaccount);
+  console.log(`[vqr] sync nhận: shop=${code || '?'} orderId=${b.orderId || ''} amount=${b.amount || ''} content=${b.content || ''}`);
   if (!code) return res.status(400).json({ error: true, errorReason: 'TENANT_NOT_FOUND', toastMessage: 'Không xác định được cửa hàng theo tài khoản nhận tiền', object: null });
   try {
     const r = processPayment(code, { transactionid: b.transactionid, bankaccount: b.bankaccount, amount: b.amount, content: b.content, orderId: b.orderId, transType: b.transType, raw: b });
