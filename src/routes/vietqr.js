@@ -28,11 +28,12 @@ function vqrSettings() {
   let p = {};
   try { p = getPlatformSettings(); } catch { p = {}; }
   const inherit = !st.vqr_username && !st.vqr_password && !!(p.vqr_username && p.vqr_password);
+  const isProd = process.env.NODE_ENV === 'production';
   return {
     ...st,
     vqr_username: st.vqr_username || p.vqr_username || '',
     vqr_password: st.vqr_password || p.vqr_password || '',
-    vqr_env: inherit ? (p.vqr_env || st.vqr_env || 'mock') : (st.vqr_env || 'mock'),
+    vqr_env: isProd ? 'prod' : (inherit ? (p.vqr_env || st.vqr_env || 'mock') : (st.vqr_env || 'mock')),
     _inherited: inherit,
   };
 }
@@ -220,6 +221,7 @@ router.post('/vietqr/test', requirePerm('settings.edit'), wrap(async (req, res) 
 
 // Giả lập thanh toán qua Test Callback của VietQR (chỉ môi trường dev)
 router.post('/vietqr/simulate-dev', requirePerm('pos.sell'), wrap(async (req, res) => {
+  if (process.env.NODE_ENV === 'production') fail(res, 'Không khả dụng ở môi trường production', 403);
   const s = vqrSettings();
   if ((s.vqr_env || 'mock') !== 'dev') fail(res, 'Chỉ dùng được ở môi trường dev');
   const inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(Number(req.body.invoice_id));
@@ -237,6 +239,7 @@ router.post('/vietqr/simulate-dev', requirePerm('pos.sell'), wrap(async (req, re
 
 // Mô phỏng thanh toán để test (không cần VietQR thật)
 router.post('/vietqr/simulate', requirePerm('pos.sell'), wrap((req, res) => {
+  if (process.env.NODE_ENV === 'production') fail(res, 'Không khả dụng ở môi trường production', 403);
   const id = Number(req.body.invoice_id);
   const inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(id);
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);

@@ -1,5 +1,6 @@
 import { $, esc, num, money, today, toast, modal, closeModal } from '../util.js';
 import { api } from '../store.js';
+import { isProd } from '../auth.js';
 
 let tenants = [];
 let plans = [];
@@ -22,7 +23,7 @@ export default {
 <div class="card" style="margin-bottom:14px"><h3>VietQR dùng chung (nền tảng)</h3>
   <p class="muted">Dùng khi nhiều shop chung một tài khoản VietQR. Shop để trống Username/Password sẽ dùng bộ này; mỗi shop vẫn tự nhập số tài khoản ngân hàng của mình.</p>
   <div class="form-grid">
-    <label class="fld">Môi trường<select class="field" id="pv-env"><option value="mock">mock</option><option value="dev">dev</option><option value="prod">prod</option></select></label>
+    <label class="fld">Môi trường<select class="field" id="pv-env">${isProd() ? '<option value="prod">prod</option>' : '<option value="mock">mock</option><option value="dev">dev</option><option value="prod">prod</option>'}</select></label>
     <label class="fld">Username VietQR<input class="field" id="pv-user" autocapitalize="none"></label>
     <label class="fld full">Password VietQR (để trống nếu không đổi)<input class="field" id="pv-pass" type="password"></label>
   </div>

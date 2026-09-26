@@ -1,5 +1,6 @@
 import { $, esc, num, money, modal, closeModal, toast, printHTML, methodLabel, statusBadge } from '../util.js';
 import { api, state } from '../store.js';
+import { isProd } from '../auth.js';
 
 export function receiptHTML(inv, qr) {
   const s = state.settings;
@@ -91,8 +92,8 @@ export async function showTransferQR(inv) {
       ${inv.status === 'pending' ? `<div class="hint" id="q-wait">${dynamic ? 'Đang chờ khách chuyển khoản… (tự cập nhật khi nhận tiền)' : 'Sau khi nhận tiền, bấm "Đã nhận tiền"'}</div>` : ''}
     </div>
     <div class="modal-actions" style="justify-content:center">
-      ${inv.status === 'pending' && isMock ? `<button class="btn" id="q-simulate">🧪 Mô phỏng đã chuyển tiền</button>` : ''}
-      ${inv.status === 'pending' && env === 'dev' && !isMock ? `<button class="btn" id="q-simulate-dev">🧪 Mô phỏng thanh toán (dev)</button>` : ''}
+      ${inv.status === 'pending' && !isProd() && isMock ? `<button class="btn" id="q-simulate">🧪 Mô phỏng đã chuyển tiền</button>` : ''}
+      ${inv.status === 'pending' && !isProd() && env === 'dev' && !isMock ? `<button class="btn" id="q-simulate-dev">🧪 Mô phỏng thanh toán (dev)</button>` : ''}
       ${inv.status === 'pending' ? `<button class="btn primary" id="q-confirm">✔ Đã nhận tiền</button>` : ''}
       <button class="btn" id="q-print">🖨 In hóa đơn</button>
       <button class="btn" id="q-close">Đóng</button>

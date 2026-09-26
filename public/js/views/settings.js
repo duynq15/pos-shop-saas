@@ -1,6 +1,7 @@
 import { $, $$, esc, toast, modal, closeModal, setCurrency, fmtDT } from '../util.js';
 import { api, state, loadSettings, loadPriceLists } from '../store.js';
 import { showLanInfo } from './lan.js';
+import { isProd } from '../auth.js';
 
 const BANKS = [
   ['970436', 'Vietcombank'], ['970415', 'VietinBank'], ['970418', 'BIDV'], ['970405', 'Agribank'], ['970422', 'MB Bank'], ['970407', 'Techcombank'],
@@ -52,7 +53,7 @@ export default {
     <p class="muted">Bật để tạo QR động và tự xác nhận khi khách chuyển khoản. Môi trường <b>mock</b> để thử không cần tài khoản VietQR.</p>
     <label class="chk"><input type="checkbox" data-s="vqr_enabled"> Bật VietQR động</label>
     <div class="form-grid" style="margin-top:10px">
-      <label class="fld">Môi trường<select class="field" data-s="vqr_env"><option value="mock">mock (thử)</option><option value="dev">dev (sandbox)</option><option value="prod">prod (thật)</option></select></label>
+      <label class="fld">Môi trường<select class="field" data-s="vqr_env">${isProd() ? '<option value="prod">prod (thật)</option>' : '<option value="mock">mock (thử)</option><option value="dev">dev (sandbox)</option><option value="prod">prod (thật)</option>'}</select></label>
       <label class="fld">Mã ngân hàng (VietQR)<input class="field" data-s="vqr_bank_code" placeholder="MB / BIDV"></label>
       <label class="fld">Terminal code<input class="field" data-s="vqr_terminal_code"></label>
       <label class="fld">Username VietQR<input class="field" data-s="vqr_username" autocapitalize="none"></label>
