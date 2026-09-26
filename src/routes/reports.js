@@ -236,4 +236,41 @@ router.get('/reports/analytics', requirePerm('report.view'), wrap((req, res) => 
   ok(res, { from, to, days, abc, reorder, basket, anomalies, cancelled });
 }));
 
+// ---------- Giao dịch VietQR (từ dữ liệu callback đã nhận) ----------
+router.get('/reports/vietqr', requirePerm('report.view'), wrap((req, res) => {
+  const { from, to } = range(req.query);
+  const matched = req.query.matched;
+  const q = (req.query.q || '').trim();
+  let sql = `SELECT v.id, v.transactionid, v.invoice_id, v.bank_account, v.amount, v.content, v.order_id,
+      v.trans_type, v.matched, v.note, v.created_at, i.code AS invoice_code
+    FROM vietqr_transactions v LEFT JOIN invoices i ON i.id=v.invoice_id
+    WHERE date(v.created_at)>=date(?) AND date(v.created_at)<=date(?)`;
+  const params = [from, to];
+  if (matched === '1') sql += ' AND v.matched=1';
+  if (matched === '0') sql += ' AND v.matched=0';
+  if (q) { sql += ' AND (v.order_id LIKE ? OR v.content LIKE ? OR v.transactionid LIKE ? OR i.code LIKE ?)'; params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`); }
+  sql += ' ORDER BY v.id DESC LIMIT 1000';
+  const items = db.prepare(sql).all(...params);
+  const summary = db.prepare(`SELECT COUNT(*) AS count,
+      COALESCE(SUM(CASE WHEN v.trans_type='C' THEN v.amount ELSE 0 END),0) AS received,
+      SUM(CASE WHEN v.matched=1 THEN 1 ELSE 0 END) AS matched_count,
+      SUM(CASE WHEN v.matched=0 THEN 1 ELSE 0 END) AS unmatched_count
+    FROM vietqr_transactions v WHERE date(v.created_at)>=date(?) AND date(v.created_at)<=date(?)`).get(from, to);
+  ok(res, { from, to, summary, items });
+}));
+
+router.get('/reports/vietqr/export', requirePerm('report.export'), wrap((req, res) => {
+  const { from, to } = range(req.query);
+  const rows = db.prepare(`SELECT v.created_at AS 'Thời gian', v.transactionid AS 'Mã giao dịch',
+      i.code AS 'Hóa đơn', v.order_id AS 'Mã đối soát', v.amount AS 'Số tiền', v.trans_type AS 'Loại',
+      v.bank_account AS 'Tài khoản nhận', v.content AS 'Nội dung',
+      CASE WHEN v.matched=1 THEN 'Khớp' ELSE 'Chưa khớp' END AS 'Trạng thái', v.note AS 'Ghi chú'
+    FROM vietqr_transactions v LEFT JOIN invoices i ON i.id=v.invoice_id
+    WHERE date(v.created_at)>=date(?) AND date(v.created_at)<=date(?) ORDER BY v.id DESC`).all(from, to);
+  const csv = toCsv(rows);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="vietqr-${from}_${to}.csv"`);
+  res.send(csv);
+}));
+
 module.exports = router;
