@@ -279,6 +279,15 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('tenant isolation (new shop has no data)', isoProducts.ok && isoProducts.data.length === 0);
   const defProducts = await api('/products');
   ok('default tenant still has data', defProducts.data.length > 0);
+
+  // Webhook định tuyến theo SỐ TÀI KHOẢN (khi 1 tài khoản VietQR phục vụ nhiều shop)
+  await req('iso', '/settings', { method: 'PUT', body: { bank_account: 'BANKISO' } });
+  const isoInv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Hàng test', price: 1000, qty: 1 }], payment_method: 'transfer' } })).json();
+  ok('iso-shop transfer invoice', isoInv.ok && isoInv.data.status === 'pending');
+  const tokRoute = await (await fetch(ROOT + '/vqr/api/token_generate', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('shopA:secretA').toString('base64') } })).json();
+  const syncRoute = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 1000, content: isoInv.data.payment_ref, orderId: isoInv.data.payment_ref, transactionid: 'ROUTE-1', transType: 'C' }) })).json();
+  const isoStatus = await (await req('iso', '/invoices/' + isoInv.data.id + '/payment-status')).json();
+  ok('webhook routes by bank account (not token)', syncRoute.error === false && isoStatus.data.paid === true);
   const plansRes = await (await req('root', '/platform/plans')).json();
   ok('platform plans list', plansRes.ok && plansRes.data.length >= 3);
   const pvGet = await (await req('root', '/platform/vietqr')).json();

@@ -147,7 +147,9 @@ webhook.post('/bank/api/transaction-sync', wrap((req, res) => {
   const pl = verifyToken(token);
   if (!pl) { console.warn('[vqr] transaction-sync: token không hợp lệ'); return res.status(401).json({ error: true, errorReason: 'INVALID_TOKEN', toastMessage: 'Invalid or expired token', object: null }); }
   const b = req.body || {};
-  const code = pl.t || resolveTenantByBank(b.bankaccount);
+  // Ưu tiên nhận diện shop theo SỐ TÀI KHOẢN nhận tiền (hỗ trợ 1 tài khoản VietQR cho nhiều shop).
+  // Token chỉ dùng dự phòng khi không khớp số tài khoản nào.
+  const code = resolveTenantByBank(b.bankaccount) || pl.t;
   console.log(`[vqr] sync nhận: shop=${code || '?'} orderId=${b.orderId || ''} amount=${b.amount || ''} content=${b.content || ''}`);
   if (!code) return res.status(400).json({ error: true, errorReason: 'TENANT_NOT_FOUND', toastMessage: 'Không xác định được cửa hàng theo tài khoản nhận tiền', object: null });
   try {
