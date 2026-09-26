@@ -240,7 +240,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const ana = await api('/reports/analytics');
   ok('analytics endpoint', ana.ok && Array.isArray(ana.data.abc) && Array.isArray(ana.data.reorder) && Array.isArray(ana.data.basket) && typeof ana.data.cancelled === 'number');
   const vr = await api('/reports/vietqr');
-  ok('vietqr transactions report', vr.ok && Array.isArray(vr.data.items) && vr.data.summary.count >= 1);
+  ok('vietqr transactions report', vr.ok && Array.isArray(vr.data.items) && Array.isArray(vr.data.orders) && vr.data.summary.count >= 1);
 
   // ---------- VAT ----------
   await api('/settings', { method: 'PUT', body: { vat_mode: 'inclusive' } });
@@ -300,6 +300,15 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const gA = await api('/invoices', { method: 'POST', body: { items: [{ name: 'g', price: 100, qty: 1 }], payment_method: 'cash' } });
   const gB = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'g', price: 100, qty: 1 }], payment_method: 'cash' } })).json();
   ok('payment_ref globally unique', gA.ok && gB.ok && gA.data.payment_ref !== gB.data.payment_ref);
+
+  // Đối chiếu: QR đã tạo (đã thanh toán) và QR chờ thanh toán đều hiển thị
+  const isoInv3 = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Chờ TT', price: 5000, qty: 1 }], payment_method: 'transfer' } })).json();
+  await req('iso', '/invoices/' + isoInv3.data.id + '/vietqr', { method: 'POST' });
+  const rq = await (await req('iso', '/reports/vietqr?from=2000-01-01&to=2999-12-31')).json();
+  const roPaid = (rq.data.orders || []).find((o) => o.order_id === isoInv2.data.payment_ref);
+  const roPending = (rq.data.orders || []).find((o) => o.order_id === isoInv3.data.payment_ref);
+  ok('vietqr reconcile: paid QR flagged', !!roPaid && roPaid.paid === true && Number(roPaid.amount) === 2000);
+  ok('vietqr reconcile: pending QR flagged', !!roPending && roPending.paid === false && rq.data.summary.pending_count >= 1);
   const plansRes = await (await req('root', '/platform/plans')).json();
   ok('platform plans list', plansRes.ok && plansRes.data.length >= 3);
   const pvGet = await (await req('root', '/platform/vietqr')).json();

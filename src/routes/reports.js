@@ -4,6 +4,7 @@ const express = require('express');
 const db = require('../db');
 const { ok, wrap, round } = require('../lib/util');
 const { can, requirePerm } = require('../middleware');
+const { getQrOrders } = require('../control');
 
 const router = express.Router();
 const DATE = "date(i.created_at)";
@@ -257,7 +258,31 @@ router.get('/reports/vietqr', requirePerm('report.view'), wrap((req, res) => {
       SUM(CASE WHEN v.matched=1 THEN 1 ELSE 0 END) AS matched_count,
       SUM(CASE WHEN v.matched=0 THEN 1 ELSE 0 END) AS unmatched_count
     FROM vietqr_transactions v WHERE date(v.created_at)>=date(?) AND date(v.created_at)<=date(?)`).get(from, to);
-  ok(res, { from, to, summary, items });
+
+  // Đối chiếu QR đã tạo (lúc gọi Generate QR) với giao dịch đã nhận (callback).
+  const paidSet = new Set(db.prepare(`SELECT DISTINCT order_id FROM vietqr_transactions
+    WHERE matched=1 AND order_id IS NOT NULL AND date(created_at)>=date(?) AND date(created_at)<=date(?)`)
+    .all(from, to).map((r) => r.order_id));
+  let orders = getQrOrders(req.tenant.code, from, to).map((o) => ({ ...o, paid: paidSet.has(o.order_id) }));
+  if (matched === '1') orders = orders.filter((o) => o.paid);
+  if (matched === '0') orders = orders.filter((o) => !o.paid);
+  if (q) {
+    const qq = q.toLowerCase();
+    orders = orders.filter((o) => String(o.order_id || '').toLowerCase().includes(qq) || String(o.content || '').toLowerCase().includes(qq));
+  }
+  const ids = [...new Set(orders.map((o) => o.invoice_id).filter(Boolean))];
+  const codeMap = new Map();
+  if (ids.length) {
+    const ph = ids.map(() => '?').join(',');
+    for (const r of db.prepare(`SELECT id, code FROM invoices WHERE id IN (${ph})`).all(...ids)) codeMap.set(r.id, r.code);
+  }
+  orders = orders.map((o) => ({ ...o, invoice_code: codeMap.get(o.invoice_id) || '' }));
+
+  const pending = orders.filter((o) => !o.paid);
+  summary.pending_count = pending.length;
+  summary.pending_amount = pending.reduce((s, o) => s + Number(o.amount || 0), 0);
+
+  ok(res, { from, to, summary, items, orders });
 }));
 
 router.get('/reports/vietqr/export', requirePerm('report.export'), wrap((req, res) => {
@@ -271,6 +296,26 @@ router.get('/reports/vietqr/export', requirePerm('report.export'), wrap((req, re
   const csv = toCsv(rows);
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="vietqr-${from}_${to}.csv"`);
+  res.send(csv);
+}));
+
+// Xuất CSV bảng đối soát QR đã tạo ↔ đã thanh toán
+router.get('/reports/vietqr/reconcile/export', requirePerm('report.export'), wrap((req, res) => {
+  const { from, to } = range(req.query);
+  const paidSet = new Set(db.prepare(`SELECT DISTINCT order_id FROM vietqr_transactions
+    WHERE matched=1 AND order_id IS NOT NULL AND date(created_at)>=date(?) AND date(created_at)<=date(?)`)
+    .all(from, to).map((r) => r.order_id));
+  const rows = getQrOrders(req.tenant.code, from, to).map((o) => ({
+    'Thời gian tạo QR': o.created_at,
+    'Mã đối soát': o.order_id,
+    'Số tiền': o.amount || 0,
+    'Nội dung': o.content || '',
+    'Tài khoản nhận': o.bank_account || '',
+    'Trạng thái': paidSet.has(o.order_id) ? 'Đã thanh toán' : 'Chờ thanh toán',
+  }));
+  const csv = toCsv(rows);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="vietqr-doichieu-${from}_${to}.csv"`);
   res.send(csv);
 }));
 

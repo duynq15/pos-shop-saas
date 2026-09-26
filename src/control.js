@@ -103,6 +103,9 @@ function controlColumns(table) {
   return control.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
 }
 if (!controlColumns('tenants').includes('expires_at')) control.exec('ALTER TABLE tenants ADD COLUMN expires_at TEXT');
+for (const [col, def] of [['amount', 'INTEGER'], ['content', 'TEXT'], ['bank_account', 'TEXT']]) {
+  if (!controlColumns('qr_orders').includes(col)) control.exec(`ALTER TABLE qr_orders ADD COLUMN ${col} ${def}`);
+}
 
 // ---------- Gói dịch vụ mặc định ----------
 if (control.prepare('SELECT COUNT(*) c FROM plans').get().c === 0) {
@@ -177,14 +180,30 @@ function nextGlobalSeq(key) {
 function nextPaymentRef() {
   return 'P' + String(nextGlobalSeq('payment_ref')).padStart(10, '0');
 }
-function saveQrOrder(orderId, tenantCode, invoiceId) {
-  control.prepare(`INSERT INTO qr_orders(order_id,tenant_code,invoice_id) VALUES(?,?,?)
-    ON CONFLICT(order_id) DO UPDATE SET tenant_code=excluded.tenant_code, invoice_id=excluded.invoice_id`)
-    .run(String(orderId), String(tenantCode), invoiceId || null);
+function saveQrOrder(orderId, tenantCode, invoiceId, extra) {
+  const e = extra || {};
+  control.prepare(`INSERT INTO qr_orders(order_id,tenant_code,invoice_id,amount,content,bank_account)
+    VALUES(?,?,?,?,?,?)
+    ON CONFLICT(order_id) DO UPDATE SET
+      tenant_code=excluded.tenant_code,
+      invoice_id=excluded.invoice_id,
+      amount=COALESCE(excluded.amount, qr_orders.amount),
+      content=COALESCE(excluded.content, qr_orders.content),
+      bank_account=COALESCE(excluded.bank_account, qr_orders.bank_account)`)
+    .run(String(orderId), String(tenantCode), invoiceId || null,
+      e.amount == null ? null : Number(e.amount),
+      e.content == null ? null : String(e.content),
+      e.bank_account == null ? null : String(e.bank_account));
 }
 function getQrOrder(orderId) {
   if (!orderId) return null;
   return control.prepare('SELECT * FROM qr_orders WHERE order_id=?').get(String(orderId));
 }
+// Bản ghi QR đã tạo của một shop trong khoảng ngày (phục vụ dashboard đối soát).
+function getQrOrders(tenantCode, from, to) {
+  return control.prepare(`SELECT order_id, invoice_id, amount, content, bank_account, created_at
+    FROM qr_orders WHERE tenant_code=? AND date(created_at)>=date(?) AND date(created_at)<=date(?)
+    ORDER BY created_at DESC, rowid DESC LIMIT 2000`).all(String(tenantCode), from, to);
+}
 
-module.exports = { control, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired, getPlatformSettings, setPlatformSettings, nextGlobalSeq, nextPaymentRef, saveQrOrder, getQrOrder };
+module.exports = { control, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired, getPlatformSettings, setPlatformSettings, nextGlobalSeq, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders };
