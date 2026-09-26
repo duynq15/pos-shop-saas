@@ -281,6 +281,11 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('default tenant still has data', defProducts.data.length > 0);
   const plansRes = await (await req('root', '/platform/plans')).json();
   ok('platform plans list', plansRes.ok && plansRes.data.length >= 3);
+  const pvGet = await (await req('root', '/platform/vietqr')).json();
+  ok('platform vietqr get', pvGet.ok && typeof pvGet.data.vqr_env === 'string');
+  const pvPut = await (await req('root', '/platform/vietqr', { method: 'PUT', body: { vqr_env: 'mock', vqr_username: 'shared', vqr_password: 'sharedpass' } })).json();
+  ok('platform vietqr save', pvPut.ok && pvPut.data.has_password === true);
+  ok('shop inherits shared vietqr creds', (await api('/vietqr/config')).data.has_credentials === true);
   const preport = await (await req('root', '/platform/reports')).json();
   ok('platform per-store report', preport.ok && Array.isArray(preport.data.rows) && preport.data.rows.length >= 1);
   await req('root', '/platform/tenants', { method: 'POST', body: { code: 'exp-shop', name: 'Shop Het Han', owner_username: 'expadmin', owner_password: '123456', expires_at: '2000-01-01 00:00:00' } });

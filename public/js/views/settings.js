@@ -60,6 +60,7 @@ export default {
       <label class="fld">Basic user (cấp cho VietQR)<input class="field" data-s="vqr_exposed_username" autocapitalize="none"></label>
       <label class="fld">Basic pass (cấp cho VietQR)<input class="field" data-s="vqr_exposed_password" type="password"></label>
     </div>
+    <p class="muted">Để trống <b>Username/Password VietQR</b> để dùng tài khoản VietQR dùng chung của nền tảng. Mỗi shop chỉ cần nhập <b>Số tài khoản ngân hàng</b> của mình.</p>
     <p class="muted">Webhook cho VietQR: <code>/vqr/api/token_generate</code> · <code>/vqr/bank/api/transaction-sync</code></p>
     <div class="toolbar" style="margin-top:8px"><button class="btn" id="btn-vqr-test" type="button">Kiểm tra kết nối</button></div>
     <div id="vqr-test-result"></div>
