@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { control, audit } = require('../control');
+const { control, audit, getPlatformSettings, setPlatformSettings } = require('../control');
 const db = require('../db');
 const { ok, fail, wrap, str } = require('../lib/util');
 const { hashPassword } = require('../lib/auth');
@@ -101,6 +101,19 @@ router.get('/reports', wrap((req, res) => {
   });
   const totals = rows.reduce((a, r) => ({ invoices: a.invoices + (r.invoices || 0), revenue: a.revenue + (r.revenue || 0), profit: a.profit + (r.profit || 0) }), { invoices: 0, revenue: 0, profit: 0 });
   ok(res, { from, to, rows, totals });
+}));
+
+// VietQR dùng chung cấp nền tảng (chỉ quản trị nền tảng cấu hình)
+router.get('/vietqr', wrap((req, res) => {
+  const s = getPlatformSettings();
+  ok(res, { vqr_env: s.vqr_env || 'mock', vqr_username: s.vqr_username || '', has_password: !!s.vqr_password });
+}));
+router.put('/vietqr', wrap((req, res) => {
+  const body = { vqr_env: ['mock', 'dev', 'prod'].includes(str(req.body.vqr_env)) ? str(req.body.vqr_env) : 'mock', vqr_username: str(req.body.vqr_username, 120) };
+  if (req.body.vqr_password !== undefined && req.body.vqr_password !== '') body.vqr_password = String(req.body.vqr_password);
+  setPlatformSettings(body);
+  const s = getPlatformSettings();
+  ok(res, { vqr_env: s.vqr_env || 'mock', vqr_username: s.vqr_username || '', has_password: !!s.vqr_password });
 }));
 
 module.exports = router;

@@ -79,6 +79,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_logs(tenant_id, id);
+
+CREATE TABLE IF NOT EXISTS platform_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
 `);
 
 // Thêm cột còn thiếu (DB cũ)
@@ -141,4 +146,13 @@ function newToken() {
 }
 const tokenHash = (token) => crypto.createHash('sha256').update(String(token || '')).digest('hex');
 
-module.exports = { control, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired };
+function getPlatformSettings() {
+  return Object.fromEntries(control.prepare('SELECT key,value FROM platform_settings').all().map((r) => [r.key, r.value]));
+}
+function setPlatformSettings(obj) {
+  const up = control.prepare('INSERT INTO platform_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
+  for (const [k, v] of Object.entries(obj || {})) up.run(String(k), String(v ?? ''));
+  return getPlatformSettings();
+}
+
+module.exports = { control, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired, getPlatformSettings, setPlatformSettings };

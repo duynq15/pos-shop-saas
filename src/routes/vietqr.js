@@ -3,7 +3,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
-const { control } = require('../control');
+const { control, getPlatformSettings } = require('../control');
 const { ok, fail, wrap, str, round } = require('../lib/util');
 const { requirePerm } = require('../middleware');
 const { generateQR, getToken, bases, testCallbackUrl } = require('../payments/vietqr');
@@ -21,6 +21,21 @@ function readSettings() {
   return Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map((r) => [r.key, r.value]));
 }
 const settingsOf = (code) => db.runWith(code, readSettings);
+
+// Cấu hình VietQR hiệu dụng: ưu tiên của shop, fallback credentials dùng chung cấp nền tảng.
+function vqrSettings() {
+  const st = readSettings();
+  let p = {};
+  try { p = getPlatformSettings(); } catch { p = {}; }
+  const inherit = !st.vqr_username && !st.vqr_password && !!(p.vqr_username && p.vqr_password);
+  return {
+    ...st,
+    vqr_username: st.vqr_username || p.vqr_username || '',
+    vqr_password: st.vqr_password || p.vqr_password || '',
+    vqr_env: inherit ? (p.vqr_env || st.vqr_env || 'mock') : (st.vqr_env || 'mock'),
+    _inherited: inherit,
+  };
+}
 
 function signToken(payload) {
   const p = Buffer.from(JSON.stringify(payload)).toString('base64url');
@@ -144,19 +159,20 @@ webhook.post('/bank/api/transaction-sync', wrap((req, res) => {
 
 /* ===================== API phía app ===================== */
 router.get('/vietqr/config', wrap((req, res) => {
-  const s = readSettings();
+  const s = vqrSettings();
   ok(res, {
     enabled: s.vqr_enabled === '1', env: s.vqr_env || 'mock',
     bank_code: s.vqr_bank_code || '', bank_account: s.bank_account || '', account_holder: s.account_holder || '',
     terminal_code: s.vqr_terminal_code || '', exposed_username: s.vqr_exposed_username || '',
     has_credentials: !!(s.vqr_username && s.vqr_password),
+    inherited: !!s._inherited,
   });
 }));
 
 // Tạo QR động cho hóa đơn
 router.post('/invoices/:id/vietqr', requirePerm('invoice.view'), wrap(async (req, res) => {
   const id = Number(req.params.id);
-  const s = readSettings();
+  const s = vqrSettings();
   if (s.vqr_enabled !== '1') fail(res, 'VietQR động chưa bật trong Cài đặt');
   let inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(id);
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
@@ -180,7 +196,7 @@ router.get('/invoices/:id/payment-status', requirePerm('invoice.view'), wrap((re
 
 // Kiểm tra kết nối thật tới VietQR (lấy token + tạo thử 1 QR)
 router.post('/vietqr/test', requirePerm('settings.edit'), wrap(async (req, res) => {
-  const s = readSettings();
+  const s = vqrSettings();
   const env = s.vqr_env || 'mock';
   const out = { env, bases: bases(env), token_ok: false, qr_ok: false, message: '' };
   if (env === 'mock') {
@@ -204,7 +220,7 @@ router.post('/vietqr/test', requirePerm('settings.edit'), wrap(async (req, res) 
 
 // Giả lập thanh toán qua Test Callback của VietQR (chỉ môi trường dev)
 router.post('/vietqr/simulate-dev', requirePerm('pos.sell'), wrap(async (req, res) => {
-  const s = readSettings();
+  const s = vqrSettings();
   if ((s.vqr_env || 'mock') !== 'dev') fail(res, 'Chỉ dùng được ở môi trường dev');
   const inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(Number(req.body.invoice_id));
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
@@ -224,7 +240,7 @@ router.post('/vietqr/simulate', requirePerm('pos.sell'), wrap((req, res) => {
   const id = Number(req.body.invoice_id);
   const inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(id);
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
-  const s = readSettings();
+  const s = vqrSettings();
   const r = processPayment(req.tenant.code, {
     transactionid: 'SIM-' + randId(), bankaccount: s.bank_account, amount: req.body.amount != null ? req.body.amount : inv.total,
     content: inv.payment_ref, orderId: inv.payment_ref, transType: 'C', raw: { simulated: true, at: new Date().toISOString() },

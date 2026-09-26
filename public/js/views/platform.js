@@ -19,11 +19,21 @@ export default {
     <th>Cửa hàng</th><th class="r">Số HĐ</th><th class="r">Doanh thu</th><th class="r">Lợi nhuận</th><th class="r">Sản phẩm</th><th class="r">Sắp hết</th><th>Trạng thái</th>
   </tr></thead><tbody id="pr-body"></tbody></table></div>
 </div>
+<div class="card" style="margin-bottom:14px"><h3>VietQR dùng chung (nền tảng)</h3>
+  <p class="muted">Dùng khi nhiều shop chung một tài khoản VietQR. Shop để trống Username/Password sẽ dùng bộ này; mỗi shop vẫn tự nhập số tài khoản ngân hàng của mình.</p>
+  <div class="form-grid">
+    <label class="fld">Môi trường<select class="field" id="pv-env"><option value="mock">mock</option><option value="dev">dev</option><option value="prod">prod</option></select></label>
+    <label class="fld">Username VietQR<input class="field" id="pv-user" autocapitalize="none"></label>
+    <label class="fld full">Password VietQR (để trống nếu không đổi)<input class="field" id="pv-pass" type="password"></label>
+  </div>
+  <div class="toolbar"><button class="btn primary" id="pv-save">Lưu</button><span id="pv-status" class="muted"></span></div>
+</div>
 <div class="tbl-wrap"><table class="grid"><thead><tr>
   <th>Mã</th><th>Tên cửa hàng</th><th>Gói</th><th class="r">Người dùng</th><th>Hết hạn</th><th>Trạng thái</th><th></th>
 </tr></thead><tbody id="pf-body"></tbody></table></div>`;
     $('#pf-new').onclick = () => openForm(null);
     $('#pr-view').onclick = loadReport;
+    $('#pv-save').onclick = saveVqrConfig;
     $('#pf-body').addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-act]'); if (!btn) return;
       const t = tenants.find((x) => x.id === Number(btn.closest('tr').dataset.id));
@@ -41,8 +51,28 @@ export default {
     if (!$('#pr-from').value) { $('#pr-from').value = today(); $('#pr-to').value = today(); }
     await load();
     loadReport();
+    loadVqrConfig();
   },
 };
+
+async function loadVqrConfig() {
+  try {
+    const r = await api('/api/platform/vietqr');
+    $('#pv-env').value = r.vqr_env || 'mock';
+    $('#pv-user').value = r.vqr_username || '';
+    $('#pv-pass').value = '';
+    $('#pv-status').textContent = r.has_password ? 'Đã có mật khẩu (để trống nếu không đổi).' : 'Chưa có mật khẩu.';
+  } catch (e) { $('#pv-status').textContent = e.message; }
+}
+
+async function saveVqrConfig() {
+  try {
+    const r = await api('/api/platform/vietqr', { method: 'PUT', body: { vqr_env: $('#pv-env').value, vqr_username: $('#pv-user').value, vqr_password: $('#pv-pass').value } });
+    $('#pv-pass').value = '';
+    $('#pv-status').textContent = 'Đã lưu. ' + (r.has_password ? 'Có mật khẩu.' : 'Chưa có mật khẩu.');
+    toast('Đã lưu VietQR dùng chung');
+  } catch (e) { toast(e.message, true); }
+}
 
 async function loadReport() {
   const from = $('#pr-from').value || today();
