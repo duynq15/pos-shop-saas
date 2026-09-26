@@ -4,7 +4,8 @@ const express = require('express');
 const db = require('../db');
 const { ok, fail, wrap, bad, round, num, str, bool } = require('../lib/util');
 const { priceCart } = require('../lib/pricing');
-const { makeCode, nextPaymentRef } = require('../lib/codes');
+const { makeCode } = require('../lib/codes');
+const { nextPaymentRef } = require('../control');
 const { getSettings } = require('./admin');
 const { requirePerm } = require('../middleware');
 

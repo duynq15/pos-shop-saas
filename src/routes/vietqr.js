@@ -3,7 +3,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
-const { control, getPlatformSettings } = require('../control');
+const { control, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder } = require('../control');
 const { ok, fail, wrap, str, round } = require('../lib/util');
 const { requirePerm } = require('../middleware');
 const { generateQR, getToken, bases, testCallbackUrl } = require('../payments/vietqr');
@@ -147,9 +147,11 @@ webhook.post('/bank/api/transaction-sync', wrap((req, res) => {
   const pl = verifyToken(token);
   if (!pl) { console.warn('[vqr] transaction-sync: token không hợp lệ'); return res.status(401).json({ error: true, errorReason: 'INVALID_TOKEN', toastMessage: 'Invalid or expired token', object: null }); }
   const b = req.body || {};
-  // Ưu tiên nhận diện shop theo SỐ TÀI KHOẢN nhận tiền (hỗ trợ 1 tài khoản VietQR cho nhiều shop).
-  // Token chỉ dùng dự phòng khi không khớp số tài khoản nào.
-  const code = resolveTenantByBank(b.bankaccount) || pl.t;
+  // Nhận diện shop theo orderId (đã ghi lúc tạo QR) -> đúng cho mọi mô hình,
+  // kể cả khi tiền về một tài khoản quản lý chung. Dự phòng: theo số TK, rồi theo token.
+  const orderIdForResolve = str(b.orderId, 20) || ((String(b.content || '').match(/P\d{10}/) || [])[0] || '');
+  const mapped = getQrOrder(orderIdForResolve);
+  const code = (mapped && mapped.tenant_code) || resolveTenantByBank(b.bankaccount) || pl.t;
   console.log(`[vqr] sync nhận: shop=${code || '?'} orderId=${b.orderId || ''} amount=${b.amount || ''} content=${b.content || ''}`);
   if (!code) return res.status(400).json({ error: true, errorReason: 'TENANT_NOT_FOUND', toastMessage: 'Không xác định được cửa hàng theo tài khoản nhận tiền', object: null });
   try {
@@ -180,10 +182,10 @@ router.post('/invoices/:id/vietqr', requirePerm('invoice.view'), wrap(async (req
   let inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(id);
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
   if (!inv.payment_ref) {
-    const { nextPaymentRef } = require('../lib/codes');
-    inv.payment_ref = nextPaymentRef(db);
+    inv.payment_ref = nextPaymentRef();
     db.prepare('UPDATE invoices SET payment_ref=? WHERE id=?').run(inv.payment_ref, id);
   }
+  saveQrOrder(inv.payment_ref, req.tenant.code, id);
   try {
     const q = await generateQR(s, req.tenant.code, { amount: inv.total, orderId: inv.payment_ref, content: inv.payment_ref });
     db.prepare('UPDATE invoices SET payment_content=? WHERE id=?').run(q.content || '', id);

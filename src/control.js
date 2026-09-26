@@ -84,6 +84,18 @@ CREATE TABLE IF NOT EXISTS platform_settings (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS control_seqs (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS qr_orders (
+  order_id TEXT PRIMARY KEY,
+  tenant_code TEXT NOT NULL,
+  invoice_id INTEGER,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
 `);
 
 // Thêm cột còn thiếu (DB cũ)
@@ -155,4 +167,24 @@ function setPlatformSettings(obj) {
   return getPlatformSettings();
 }
 
-module.exports = { control, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired, getPlatformSettings, setPlatformSettings };
+// Cấp số toàn cục (dùng cho mã đối soát VietQR, không trùng giữa các shop)
+function nextGlobalSeq(key) {
+  const row = control.prepare(`INSERT INTO control_seqs(key,value) VALUES(?, '1')
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1
+    RETURNING value`).get(key);
+  return Number(row.value);
+}
+function nextPaymentRef() {
+  return 'P' + String(nextGlobalSeq('payment_ref')).padStart(10, '0');
+}
+function saveQrOrder(orderId, tenantCode, invoiceId) {
+  control.prepare(`INSERT INTO qr_orders(order_id,tenant_code,invoice_id) VALUES(?,?,?)
+    ON CONFLICT(order_id) DO UPDATE SET tenant_code=excluded.tenant_code, invoice_id=excluded.invoice_id`)
+    .run(String(orderId), String(tenantCode), invoiceId || null);
+}
+function getQrOrder(orderId) {
+  if (!orderId) return null;
+  return control.prepare('SELECT * FROM qr_orders WHERE order_id=?').get(String(orderId));
+}
+
+module.exports = { control, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired, getPlatformSettings, setPlatformSettings, nextGlobalSeq, nextPaymentRef, saveQrOrder, getQrOrder };
