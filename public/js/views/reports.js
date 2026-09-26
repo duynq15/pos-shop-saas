@@ -42,6 +42,19 @@ export default {
     <div><h4 style="margin:6px 0">Thường mua kèm</h4><div class="tbl-wrap" style="box-shadow:none;max-height:220px"><table class="grid"><thead><tr><th>Cặp sản phẩm</th><th class="r">Số lần</th></tr></thead><tbody id="an-basket"></tbody></table></div></div>
     <div><h4 style="margin:6px 0">Bất thường (giảm giá cao)</h4><div class="tbl-wrap" style="box-shadow:none;max-height:220px"><table class="grid"><thead><tr><th>Hóa đơn</th><th class="r">Giảm %</th><th class="r">Tổng</th></tr></thead><tbody id="an-anom"></tbody></table></div></div>
   </div>
+</div>
+<div class="card" style="margin-top:14px"><h3>🏦 Giao dịch VietQR</h3>
+  <div id="vqr-sum" class="muted" style="margin-bottom:8px"></div>
+  <div class="toolbar">
+    <input class="field grow" id="vqr-q" placeholder="Tìm mã đối soát / mã giao dịch / hóa đơn...">
+    <select class="field" id="vqr-matched"><option value="">Tất cả</option><option value="1">Đã khớp</option><option value="0">Chưa khớp</option></select>
+    <button class="btn" id="vqr-filter">Lọc</button>
+    <span class="spacer"></span>
+    <button class="btn" id="vqr-export">Xuất CSV</button>
+  </div>
+  <div class="tbl-wrap" style="box-shadow:none;max-height:320px"><table class="grid"><thead><tr>
+    <th>Thời gian</th><th>Mã GD</th><th>Hóa đơn</th><th class="r">Số tiền</th><th>Trạng thái</th><th>Đối soát</th>
+  </tr></thead><tbody id="vqr-body"></tbody></table></div>
 </div>`;
     el.addEventListener('click', (e) => {
       const r = e.target.closest('[data-range]');
@@ -49,6 +62,8 @@ export default {
       const ex = e.target.closest('[data-export]');
       if (ex) return exportCSV(ex.dataset.export);
       if (e.target.id === 'btn-rp') return load();
+      if (e.target.id === 'vqr-filter') return loadVietqr($('#rp-from').value, $('#rp-to').value);
+      if (e.target.id === 'vqr-export') { window.location.href = `/api/reports/vietqr/export?from=${$('#rp-from').value}&to=${$('#rp-to').value}`; return; }
     });
   },
 
@@ -124,6 +139,23 @@ async function load() {
   $('#an-reorder').innerHTML = (ana.reorder || []).map((p) => `<tr><td>${esc(p.name)}</td><td class="r ${p.stock <= p.min_stock ? 'low' : ''}">${num(p.stock)}</td><td class="r">${p.per_day}</td><td class="r">${p.days_cover >= 999 ? '—' : p.days_cover}</td><td class="r"><b>${p.suggest}</b></td></tr>`).join('') || '<tr><td colspan="5" class="empty">Chưa có gợi ý</td></tr>';
   $('#an-basket').innerHTML = (ana.basket || []).map((b) => `<tr><td>${esc(b.a)} + ${esc(b.b)}</td><td class="r">${b.times}</td></tr>`).join('') || '<tr><td colspan="2" class="empty">Chưa có dữ liệu</td></tr>';
   $('#an-anom').innerHTML = (ana.anomalies || []).map((a) => `<tr><td>${esc(a.code)}</td><td class="r low">${a.pct}%</td><td class="r">${num(a.total)}</td></tr>`).join('') || `<tr><td colspan="3" class="empty">Không có bất thường · HĐ hủy: ${ana.cancelled}</td></tr>`;
+  await loadVietqr(from, to);
+}
+
+async function loadVietqr(from, to) {
+  try {
+    const params = new URLSearchParams({ from, to, q: $('#vqr-q').value.trim(), matched: $('#vqr-matched').value });
+    const r = await api('/api/reports/vietqr?' + params);
+    const s = r.summary || {};
+    $('#vqr-sum').innerHTML = `Tổng <b>${num(s.count)}</b> giao dịch · Đã khớp <b>${num(s.matched_count)}</b> · Chưa khớp <b>${num(s.unmatched_count)}</b> · Tổng tiền nhận <b>${money(s.received)}</b>`;
+    $('#vqr-body').innerHTML = (r.items || []).map((t) => `<tr>
+      <td>${esc(t.created_at)}</td>
+      <td><code>${esc(String(t.transactionid || '').slice(0, 12))}</code></td>
+      <td>${esc(t.invoice_code || '—')}</td>
+      <td class="r"><b>${money(t.amount)}</b></td>
+      <td>${t.matched ? '<span class="badge paid">Đã khớp</span>' : '<span class="badge cancelled">Chưa khớp</span>'}</td>
+      <td class="muted">${esc(t.note || '')}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Chưa có giao dịch VietQR</td></tr>';
+  } catch (e) { $('#vqr-body').innerHTML = `<tr><td colspan="6" class="empty">${esc(e.message)}</td></tr>`; }
 }
 
 function exportCSV(type) {

@@ -239,6 +239,8 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   // ---------- Phân tích thông minh ----------
   const ana = await api('/reports/analytics');
   ok('analytics endpoint', ana.ok && Array.isArray(ana.data.abc) && Array.isArray(ana.data.reorder) && Array.isArray(ana.data.basket) && typeof ana.data.cancelled === 'number');
+  const vr = await api('/reports/vietqr');
+  ok('vietqr transactions report', vr.ok && Array.isArray(vr.data.items) && vr.data.summary.count >= 1);
 
   // ---------- VAT ----------
   await api('/settings', { method: 'PUT', body: { vat_mode: 'inclusive' } });
