@@ -133,7 +133,7 @@ function bindLogin() {
 
 async function boot() {
   try {
-    await bootstrap();
+    if (!auth.isPlatform) await bootstrap();
     refreshBrand();
     renderUser();
     build();
@@ -144,6 +144,7 @@ async function boot() {
     $('#btn-menu')?.addEventListener('click', openMenu);
     $('#nav-overlay')?.addEventListener('click', closeMenu);
     $('#btn-lan')?.addEventListener('click', async () => {
+      if (auth.isPlatform) return;
       const { showLanInfo } = await import('./views/lan.js');
       showLanInfo();
     });
