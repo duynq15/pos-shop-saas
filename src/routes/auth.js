@@ -35,6 +35,7 @@ const payload = (user, tenant) => ({
   user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role, tenant_id: user.tenant_id },
   tenant: tenant ? { code: tenant.code, name: tenant.name, status: tenant.status } : null,
   permissions: user.role === 'platform' ? ['*'] : rbac.permsFor(user.role),
+  app_env: process.env.NODE_ENV || 'development',
 });
 
 router.post('/login', wrap((req, res) => {
@@ -71,7 +72,7 @@ router.post('/logout', wrap((req, res) => {
 
 router.get('/me', wrap((req, res) => {
   if (!req.user) return fail(res, 'Chưa đăng nhập', 401);
-  ok(res, { user: req.user, tenant: req.tenant || null, permissions: req.permissions });
+  ok(res, { user: req.user, tenant: req.tenant || null, permissions: req.permissions, app_env: process.env.NODE_ENV || 'development' });
 }));
 
 router.post('/change-password', wrap((req, res) => {

@@ -1,7 +1,9 @@
 // Trạng thái đăng nhập + kiểm tra quyền ở phía giao diện.
 import { get, post } from './api.js';
 
-export const auth = { user: null, tenant: null, permissions: [], isPlatform: false };
+export const auth = { user: null, tenant: null, permissions: [], isPlatform: false, appEnv: 'development' };
+
+export const isProd = () => auth.appEnv === 'production';
 
 export function can(perm) {
   const list = auth.permissions || [];
@@ -14,6 +16,7 @@ export function applyAuth(data) {
   auth.tenant = data.tenant || null;
   auth.permissions = data.permissions || [];
   auth.isPlatform = !!(data.user && data.user.role === 'platform');
+  auth.appEnv = data.app_env || 'development';
 }
 
 export async function loadMe() {
