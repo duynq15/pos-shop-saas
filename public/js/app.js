@@ -5,18 +5,37 @@ import pos from './views/pos.js';
 import products from './views/products.js';
 import inventory from './views/inventory.js';
 import invoices from './views/invoices.js';
-import reports from './views/reports.js';
+import { makeReportView } from './views/reports.js';
+import vietqr from './views/vietqr.js';
 import promotions from './views/promotions.js';
 import usersView from './views/users.js';
 import settings from './views/settings.js';
 import platformView from './views/platform.js';
+
+const reportOverview = makeReportView('overview');
+const reportProducts = makeReportView('products');
+const reportVat = makeReportView('vat');
+const reportAnalytics = makeReportView('analytics');
 
 const VIEWS = [
   { mod: pos, perm: 'pos.sell' },
   { mod: products, perm: 'product.view' },
   { mod: inventory, perm: 'stock.view' },
   { mod: invoices, perm: 'invoice.view' },
-  { mod: reports, perm: 'report.view' },
+  {
+    mod: reportOverview, perm: 'report.view',
+    subs: [
+      { view: 'report-overview', label: 'Tổng quan' },
+      { view: 'report-products', label: 'Báo cáo sản phẩm' },
+      { view: 'report-vat', label: 'Thuế VAT' },
+      { view: 'report-analytics', label: 'Phân tích thông minh' },
+      { view: 'vietqr', label: 'Giao dịch VietQR' },
+    ],
+  },
+  { mod: reportProducts, perm: 'report.view', subOnly: true },
+  { mod: reportVat, perm: 'report.view', subOnly: true },
+  { mod: reportAnalytics, perm: 'report.view', subOnly: true },
+  { mod: vietqr, perm: 'report.view', subOnly: true },
   { mod: promotions, perm: 'promo.manage' },
   { mod: usersView, perm: 'user.manage' },
   { mod: settings, perm: 'settings.edit' },
@@ -33,11 +52,25 @@ const allowed = (perm) => {
   return can(perm);
 };
 
+const permFor = (id) => (VIEWS.find((v) => v.mod.id === id) || {}).perm;
+const collapsed = new Set();
+
+function setGroup(id, open) {
+  const wrap = document.getElementById('subs-' + id);
+  const btn = document.querySelector(`.nav-item[data-view="${id}"]`);
+  if (!wrap) return;
+  wrap.classList.toggle('hidden', !open);
+  if (btn) btn.classList.toggle('open', open);
+  if (open) collapsed.delete(id); else collapsed.add(id);
+}
+function toggleGroup(id) { setGroup(id, collapsed.has(id)); }
+
 function build() {
   const main = $('#main');
   const navList = $('#nav-list');
   navList.innerHTML = '';
-  for (const { mod, perm } of VIEWS) {
+  for (const entry of VIEWS) {
+    const { mod, perm, subs, subOnly } = entry;
     if (!allowed(perm)) continue;
     let sec = document.getElementById('view-' + mod.id);
     if (!sec) {
@@ -46,26 +79,57 @@ function build() {
       sec.id = 'view-' + mod.id;
       main.appendChild(sec);
     }
+    registry[mod.id] = { ...mod, el: sec, btn: null };
+    if (subOnly) continue; // đăng ký view nhưng không hiện mục top-level
     const btn = document.createElement('button');
-    btn.className = 'nav-item';
+    btn.className = 'nav-item' + (subs ? ' has-subs' : '');
     btn.dataset.view = mod.id;
-    btn.innerHTML = `<span class="nav-icon">${mod.icon}</span><span class="nav-label">${mod.label}</span>${mod.key ? `<kbd>${mod.key}</kbd>` : ''}`;
-    btn.onclick = () => { showView(mod.id); closeMenu(); };
+    btn.innerHTML = `<span class="nav-icon">${mod.icon}</span><span class="nav-label">${mod.label}</span>`
+      + (subs ? '<span class="caret">▾</span>' : (mod.key ? `<kbd>${mod.key}</kbd>` : ''));
+    btn.onclick = (e) => {
+      if (subs && e.target.classList.contains('caret')) { toggleGroup(mod.id); return; }
+      showView(mod.id);
+      if (subs) setGroup(mod.id, !collapsed.has(mod.id));
+      closeMenu();
+    };
     navList.appendChild(btn);
-    registry[mod.id] = { ...mod, el: sec, btn };
+    registry[mod.id].btn = btn;
+    if (subs) {
+      const wrap = document.createElement('div');
+      wrap.className = 'nav-subs';
+      wrap.id = 'subs-' + mod.id;
+      for (const s of subs) {
+        if (!allowed(permFor(s.view))) continue;
+        const sb = document.createElement('button');
+        sb.className = 'nav-sub';
+        sb.dataset.subview = s.view;
+        if (s.anchor) sb.dataset.anchor = s.anchor;
+        sb.textContent = s.label;
+        sb.onclick = () => { showView(s.view, s.anchor); setGroup(mod.id, true); closeMenu(); };
+        wrap.appendChild(sb);
+      }
+      navList.appendChild(wrap);
+      setGroup(mod.id, true);
+    }
   }
 }
 
-export function showView(id) {
+export function showView(id, anchor) {
   const r = registry[id];
   if (!r) return;
+  const same = current === id;
   if (current && registry[current]?.hide) registry[current].hide();
   current = id;
   $$('.view').forEach((x) => x.classList.toggle('active', x.id === 'view-' + id));
   $$('.nav-item[data-view]').forEach((x) => x.classList.toggle('active', x.dataset.view === id));
+  $$('.nav-sub').forEach((x) => {
+    const match = x.dataset.subview === id && (anchor || '') === (x.dataset.anchor || '');
+    x.classList.toggle('active', match);
+  });
   if (!mounted.has(id)) { r.mount(r.el); mounted.add(id); }
-  if (r.show) r.show();
+  if (!same && r.show) r.show();
   $('#mobile-title').textContent = r.label;
+  if (anchor) setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30);
 }
 window.showView = showView;
 

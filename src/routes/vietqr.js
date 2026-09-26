@@ -3,8 +3,9 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
-const { control, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder } = require('../control');
+const { control, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders } = require('../control');
 const { ok, fail, wrap, str, round } = require('../lib/util');
+const { sendXlsx } = require('../lib/xlsx');
 const { requirePerm } = require('../middleware');
 const { generateQR, getToken, bases, testCallbackUrl } = require('../payments/vietqr');
 
@@ -254,6 +255,92 @@ router.post('/vietqr/simulate', requirePerm('pos.sell'), wrap((req, res) => {
     content: inv.payment_ref, orderId: inv.payment_ref, transType: 'C', raw: { simulated: true, at: new Date().toISOString() },
   });
   ok(res, r);
+}));
+
+/* ===================== Module: Giao dịch VietQR (hợp nhất QR đã tạo + callback) ===================== */
+function txList(req, paged) {
+  const from = str(req.query.from, 10) || new Date().toISOString().slice(0, 10);
+  const to = str(req.query.to, 10) || from;
+  const bank = str(req.query.bank, 40);
+  const field = ['ref', 'order', 'content'].includes(req.query.field) ? req.query.field : 'ref';
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const status = ['success', 'pending', 'unmatched', 'refund'].includes(req.query.status) ? req.query.status : '';
+  const holder = (db.prepare("SELECT value FROM settings WHERE key='account_holder'").get() || {}).value || '';
+
+  const qrOrders = getQrOrders(req.tenant.code, from, to);
+  const txns = db.prepare(`SELECT transactionid, invoice_id, bank_account, amount, content, order_id, trans_type, matched, note, created_at
+    FROM vietqr_transactions WHERE date(created_at)>=date(?) AND date(created_at)<=date(?) ORDER BY id DESC LIMIT 3000`).all(from, to);
+
+  const ids = [...new Set([...qrOrders.map((o) => o.invoice_id), ...txns.map((t) => t.invoice_id)].filter(Boolean))];
+  const codeMap = new Map();
+  if (ids.length) {
+    const ph = ids.map(() => '?').join(',');
+    for (const r of db.prepare(`SELECT id, code FROM invoices WHERE id IN (${ph})`).all(...ids)) codeMap.set(r.id, r.code);
+  }
+
+  const orderMap = new Map(qrOrders.map((o) => [o.order_id, o]));
+  const rows = [];
+  const used = new Set();
+  for (const t of txns) {
+    const st = t.trans_type === 'D' ? 'refund' : (t.matched === 1 ? 'success' : 'unmatched');
+    if (t.order_id && orderMap.has(t.order_id)) used.add(t.order_id);
+    rows.push({
+      ref: t.transactionid || '', amount: Number(t.amount) || 0, time: t.created_at,
+      bank_account: t.bank_account || '', account_holder: holder,
+      content: t.content || '', type: t.trans_type === 'D' ? 'Hoàn tiền' : 'QR giao dịch',
+      note: t.note || '', order_id: t.order_id || '',
+      invoice_code: t.invoice_id ? (codeMap.get(t.invoice_id) || '') : '', status: st,
+    });
+  }
+  for (const o of qrOrders) {
+    if (used.has(o.order_id)) continue;
+    rows.push({
+      ref: '', amount: Number(o.amount) || 0, time: o.created_at,
+      bank_account: o.bank_account || '', account_holder: holder,
+      content: o.content || '', type: 'QR giao dịch', note: '', order_id: o.order_id || '',
+      invoice_code: o.invoice_id ? (codeMap.get(o.invoice_id) || '') : '', status: 'pending',
+    });
+  }
+  rows.sort((a, b) => String(b.time).localeCompare(String(a.time)));
+
+  const nbank = (v) => String(v || '').replace(/[\s.-]/g, '');
+  let data = rows;
+  if (bank) data = data.filter((r) => nbank(r.bank_account) === nbank(bank));
+  if (status) data = data.filter((r) => r.status === status);
+  if (q) data = data.filter((r) => {
+    if (field === 'order') return String(r.order_id).toLowerCase().includes(q) || String(r.invoice_code).toLowerCase().includes(q);
+    if (field === 'content') return String(r.content).toLowerCase().includes(q);
+    return String(r.ref).toLowerCase().includes(q) || String(r.order_id).toLowerCase().includes(q);
+  });
+
+  const sum = (arr) => arr.reduce((s, r) => s + (r.amount || 0), 0);
+  const by = (st) => data.filter((r) => r.status === st);
+  const summary = {
+    total_count: data.length, total_amount: sum(data.filter((r) => r.status !== 'refund')),
+    success_count: by('success').length, success_amount: sum(by('success')),
+    unmatched_count: by('unmatched').length, unmatched_amount: sum(by('unmatched')),
+    pending_count: by('pending').length, pending_amount: sum(by('pending')),
+    refund_count: by('refund').length, refund_amount: sum(by('refund')),
+  };
+
+  if (paged === false) return { from, to, summary, rows: data };
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const size = Math.min(200, Math.max(5, Number(req.query.size) || 20));
+  return { from, to, summary, items: data.slice((page - 1) * size, page * size), total: data.length, page, size };
+}
+
+router.get('/vietqr/transactions', requirePerm('report.view'), wrap((req, res) => ok(res, txList(req, true))));
+
+router.get('/vietqr/transactions/export', requirePerm('report.export'), wrap((req, res) => {
+  const { from, to, rows } = txList(req, false);
+  const label = { success: 'Thành công', pending: 'Chờ thanh toán', unmatched: 'Chưa khớp', refund: 'Hoàn tiền' };
+  const out = rows.map((r, i) => ({
+    'STT': i + 1, 'Mã tham chiếu': r.ref, 'Số tiền': r.amount, 'Thời gian': r.time,
+    'Tài khoản ngân hàng': r.bank_account, 'Chủ tài khoản': r.account_holder, 'Nội dung': r.content,
+    'Loại giao dịch': r.type, 'Ghi chú': r.note, 'Mã đơn hàng': r.order_id, 'Hóa đơn': r.invoice_code,
+    'Trạng thái': label[r.status] || r.status,
+  }));
+  sendXlsx(res, `giao-dich-vietqr-${from}_${to}`, out, { sheet: 'Giao dich VietQR' });
 }));
 
 module.exports = { router, webhook, processPayment };
