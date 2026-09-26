@@ -43,6 +43,17 @@ export default {
     <div><h4 style="margin:6px 0">Bất thường (giảm giá cao)</h4><div class="tbl-wrap" style="box-shadow:none;max-height:220px"><table class="grid"><thead><tr><th>Hóa đơn</th><th class="r">Giảm %</th><th class="r">Tổng</th></tr></thead><tbody id="an-anom"></tbody></table></div></div>
   </div>
 </div>
+<div class="card" style="margin-top:14px"><h3>📦 Báo cáo theo sản phẩm</h3>
+  <div class="toolbar">
+    <select class="field" id="rp-prod-sort"><option value="revenue">Xếp theo doanh thu</option><option value="qty">Xếp theo số lượng</option><option value="profit">Xếp theo lợi nhuận</option><option value="name">Xếp theo tên</option></select>
+    <button class="btn" id="rp-prod-view">Xem</button>
+    <span class="spacer"></span>
+    <button class="btn" id="rp-prod-export">Xuất CSV</button>
+  </div>
+  <div class="tbl-wrap" style="box-shadow:none;max-height:360px"><table class="grid"><thead><tr>
+    <th>Sản phẩm</th><th class="r">SL bán</th><th class="r">Doanh thu</th><th class="r">Lợi nhuận</th><th class="r">Giá TB</th>
+  </tr></thead><tbody id="rp-prod"></tbody></table></div>
+</div>
 <div class="card" style="margin-top:14px"><h3>🏦 Giao dịch VietQR</h3>
   <div id="vqr-sum" class="muted" style="margin-bottom:8px"></div>
   <div class="toolbar">
@@ -64,6 +75,8 @@ export default {
       if (e.target.id === 'btn-rp') return load();
       if (e.target.id === 'vqr-filter') return loadVietqr($('#rp-from').value, $('#rp-to').value);
       if (e.target.id === 'vqr-export') { window.location.href = `/api/reports/vietqr/export?from=${$('#rp-from').value}&to=${$('#rp-to').value}`; return; }
+      if (e.target.id === 'rp-prod-view') return loadProducts($('#rp-from').value, $('#rp-to').value);
+      if (e.target.id === 'rp-prod-export') { window.location.href = `/api/reports/export?type=products&from=${$('#rp-from').value}&to=${$('#rp-to').value}`; return; }
     });
   },
 
@@ -140,6 +153,17 @@ async function load() {
   $('#an-basket').innerHTML = (ana.basket || []).map((b) => `<tr><td>${esc(b.a)} + ${esc(b.b)}</td><td class="r">${b.times}</td></tr>`).join('') || '<tr><td colspan="2" class="empty">Chưa có dữ liệu</td></tr>';
   $('#an-anom').innerHTML = (ana.anomalies || []).map((a) => `<tr><td>${esc(a.code)}</td><td class="r low">${a.pct}%</td><td class="r">${num(a.total)}</td></tr>`).join('') || `<tr><td colspan="3" class="empty">Không có bất thường · HĐ hủy: ${ana.cancelled}</td></tr>`;
   await loadVietqr(from, to);
+  await loadProducts(from, to);
+}
+
+async function loadProducts(from, to) {
+  try {
+    const sort = $('#rp-prod-sort').value || 'revenue';
+    const rows = await api(`/api/reports/products?from=${from}&to=${to}&sort=${sort}`);
+    $('#rp-prod').innerHTML = rows.map((p) => `<tr>
+      <td>${esc(p.name)}</td><td class="r">${num(p.qty)}</td><td class="r"><b>${money(p.revenue)}</b></td>
+      <td class="r">${money(p.profit)}</td><td class="r">${money(p.avg_price)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">Chưa có dữ liệu bán hàng</td></tr>';
+  } catch (e) { $('#rp-prod').innerHTML = `<tr><td colspan="5" class="empty">${esc(e.message)}</td></tr>`; }
 }
 
 async function loadVietqr(from, to) {
