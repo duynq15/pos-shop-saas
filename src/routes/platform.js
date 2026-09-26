@@ -75,4 +75,32 @@ router.get('/stats', wrap((req, res) => {
   ok(res, { tenants, users, by_status: byStatus, roles: Object.keys(rbac.ROLES) });
 }));
 
+// Báo cáo theo từng cửa hàng (chỉ quản trị nền tảng)
+router.get('/reports', wrap((req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const from = str(req.query.from, 20) || today;
+  const to = str(req.query.to, 20) || from;
+  const list = control.prepare('SELECT code,name,status,plan FROM tenants ORDER BY name').all();
+  const rows = list.map((t) => {
+    try {
+      return db.runWith(t.code, () => {
+        const s = db.prepare(`SELECT COUNT(*) invoices, COALESCE(SUM(total),0) revenue FROM invoices
+          WHERE status='paid' AND type='sale' AND date(created_at)>=date(?) AND date(created_at)<=date(?)`).get(from, to);
+        const ret = db.prepare(`SELECT COALESCE(SUM(total),0) r FROM invoices
+          WHERE status='paid' AND type='return' AND date(created_at)>=date(?) AND date(created_at)<=date(?)`).get(from, to).r;
+        const profit = db.prepare(`SELECT COALESCE(SUM((ii.line_total - ii.cost_price*ii.base_qty) * CASE WHEN i.type='return' THEN -1 ELSE 1 END),0) p
+          FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id
+          WHERE i.status='paid' AND date(i.created_at)>=date(?) AND date(i.created_at)<=date(?)`).get(from, to).p;
+        const prod = db.prepare('SELECT COUNT(*) c FROM products WHERE active=1').get().c;
+        const low = db.prepare('SELECT COUNT(*) c FROM products WHERE active=1 AND stock<=min_stock').get().c;
+        return { code: t.code, name: t.name, status: t.status, plan: t.plan, invoices: s.invoices, revenue: s.revenue - ret, profit, products: prod, low_stock: low };
+      });
+    } catch (e) {
+      return { code: t.code, name: t.name, status: t.status, plan: t.plan, error: e.message };
+    }
+  });
+  const totals = rows.reduce((a, r) => ({ invoices: a.invoices + (r.invoices || 0), revenue: a.revenue + (r.revenue || 0), profit: a.profit + (r.profit || 0) }), { invoices: 0, revenue: 0, profit: 0 });
+  ok(res, { from, to, rows, totals });
+}));
+
 module.exports = router;

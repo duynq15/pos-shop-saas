@@ -101,6 +101,7 @@ router.get('/reports/products', wrap((req, res) => {
     FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id
     WHERE i.status='paid' AND i.type='sale' AND date(i.created_at)>=date(?) AND date(i.created_at)<=date(?)
     GROUP BY ii.product_id, ii.name ORDER BY ${sort} DESC LIMIT 500`).all(from, to);
+  if (!can(req, 'report.profit')) for (const r of rows) delete r.profit;
   ok(res, rows);
 }));
 

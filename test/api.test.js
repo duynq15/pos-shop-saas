@@ -281,6 +281,8 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('default tenant still has data', defProducts.data.length > 0);
   const plansRes = await (await req('root', '/platform/plans')).json();
   ok('platform plans list', plansRes.ok && plansRes.data.length >= 3);
+  const preport = await (await req('root', '/platform/reports')).json();
+  ok('platform per-store report', preport.ok && Array.isArray(preport.data.rows) && preport.data.rows.length >= 1);
   await req('root', '/platform/tenants', { method: 'POST', body: { code: 'exp-shop', name: 'Shop Het Han', owner_username: 'expadmin', owner_password: '123456', expires_at: '2000-01-01 00:00:00' } });
   const expLogin = await (await req('exp', '/auth/login', { method: 'POST', body: { username: 'expadmin', password: '123456' } })).json();
   ok('expired tenant blocked', !expLogin.ok);

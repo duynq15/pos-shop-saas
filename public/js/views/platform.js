@@ -1,4 +1,4 @@
-import { $, esc, toast, modal, closeModal } from '../util.js';
+import { $, esc, num, money, today, toast, modal, closeModal } from '../util.js';
 import { api } from '../store.js';
 
 let tenants = [];
@@ -13,10 +13,17 @@ export default {
     el.innerHTML = `
 <div class="view-head"><div><h1>Quản trị nền tảng</h1><div class="sub" id="pf-stats"></div></div>
   <button class="btn primary" id="pf-new">+ Thêm cửa hàng</button></div>
+<div class="card" style="margin-bottom:14px"><h3>Báo cáo theo cửa hàng</h3>
+  <div class="toolbar"><input type="date" class="field" id="pr-from"><input type="date" class="field" id="pr-to"><button class="btn primary" id="pr-view">Xem</button><span class="spacer"></span><span id="pr-total" class="muted"></span></div>
+  <div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr>
+    <th>Cửa hàng</th><th class="r">Số HĐ</th><th class="r">Doanh thu</th><th class="r">Lợi nhuận</th><th class="r">Sản phẩm</th><th class="r">Sắp hết</th><th>Trạng thái</th>
+  </tr></thead><tbody id="pr-body"></tbody></table></div>
+</div>
 <div class="tbl-wrap"><table class="grid"><thead><tr>
   <th>Mã</th><th>Tên cửa hàng</th><th>Gói</th><th class="r">Người dùng</th><th>Hết hạn</th><th>Trạng thái</th><th></th>
 </tr></thead><tbody id="pf-body"></tbody></table></div>`;
     $('#pf-new').onclick = () => openForm(null);
+    $('#pr-view').onclick = loadReport;
     $('#pf-body').addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-act]'); if (!btn) return;
       const t = tenants.find((x) => x.id === Number(btn.closest('tr').dataset.id));
@@ -30,8 +37,30 @@ export default {
     });
   },
 
-  async show() { await load(); },
+  async show() {
+    if (!$('#pr-from').value) { $('#pr-from').value = today(); $('#pr-to').value = today(); }
+    await load();
+    loadReport();
+  },
 };
+
+async function loadReport() {
+  const from = $('#pr-from').value || today();
+  const to = $('#pr-to').value || from;
+  try {
+    const r = await api(`/api/platform/reports?from=${from}&to=${to}`);
+    $('#pr-total').textContent = `Tổng: ${num(r.totals.invoices)} hóa đơn · ${money(r.totals.revenue)}`;
+    $('#pr-body').innerHTML = r.rows.map((t) => `<tr>
+      <td>${esc(t.name)}<span class="sub">${esc(t.code)}</span></td>
+      <td class="r">${num(t.invoices || 0)}</td>
+      <td class="r"><b>${money(t.revenue || 0)}</b></td>
+      <td class="r">${money(t.profit || 0)}</td>
+      <td class="r">${num(t.products || 0)}</td>
+      <td class="r ${t.low_stock ? 'low' : ''}">${num(t.low_stock || 0)}</td>
+      <td>${t.status === 'active' ? '<span class="badge paid">Hoạt động</span>' : '<span class="badge cancelled">Tạm ngưng</span>'}</td></tr>`).join('')
+      || '<tr><td colspan="7" class="empty">Chưa có cửa hàng</td></tr>';
+  } catch (e) { $('#pr-body').innerHTML = `<tr><td colspan="7" class="empty">${esc(e.message)}</td></tr>`; }
+}
 
 const expired = (t) => t.expires_at && t.expires_at < new Date().toISOString().slice(0, 19).replace('T', ' ');
 

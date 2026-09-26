@@ -269,6 +269,7 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('Report top chart', (await page.locator('#rp-top').innerText()).length > 0);
     ok('Analytics section renders', (await page.locator('#an-abc').count()) === 1 && (await page.locator('#an-reorder').count()) === 1);
     ok('VietQR transactions section', (await page.locator('#vqr-body').count()) === 1);
+    ok('Product report section', (await page.locator('#rp-prod').count()) === 1);
     await page.locator('[data-range="month"]').click(); await wait(700);
     ok('Month range', (await page.locator('#rp-from').inputValue()).endsWith('-01'));
 
