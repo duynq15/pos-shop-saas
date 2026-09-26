@@ -109,8 +109,8 @@ export default {
     <label class="fld" style="margin-top:10px">Số bản giữ lại<input class="field" type="number" min="1" data-s="backup_keep"></label>
     <div class="toolbar">
       <button class="btn primary" id="btn-backup-now" type="button">Sao lưu ngay</button>
-      <button class="btn" data-export="inventory">Xuất tồn kho CSV</button>
-      <button class="btn" data-export="sales">Xuất hóa đơn CSV</button>
+      <button class="btn" data-export="inventory">Xuất tồn kho (Excel)</button>
+      <button class="btn" data-export="sales">Xuất hóa đơn (Excel)</button>
     </div>
     <div id="backup-list" class="scroll-x" style="margin-top:8px"></div>
   </div>

@@ -176,7 +176,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('slow-moving report', Array.isArray((await api('/reports/slow-moving')).data));
   ok('search by sku', (await api('/products?q=SP0001')).data.some((x) => x.sku === 'SP0001'));
   const csvRes = await req('admin', '/reports/export?type=sales');
-  ok('csv export', csvRes.status === 200 && /text\/csv/.test(csvRes.headers.get('content-type') || ''));
+  ok('excel export', csvRes.status === 200 && /spreadsheetml\.sheet/.test(csvRes.headers.get('content-type') || '') && /\.xlsx/.test(csvRes.headers.get('content-disposition') || ''));
 
   // ---------- VietQR động & callback ----------
   const vset = await api('/settings', { method: 'PUT', body: { vqr_enabled: '1', vqr_env: 'mock', bank_account: '99990001', bank_name: 'MB Bank', bank_bin: '970422', account_holder: 'NGUYEN VAN A' } });
@@ -309,6 +309,13 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const roPending = (rq.data.orders || []).find((o) => o.order_id === isoInv3.data.payment_ref);
   ok('vietqr reconcile: paid QR flagged', !!roPaid && roPaid.paid === true && Number(roPaid.amount) === 2000);
   ok('vietqr reconcile: pending QR flagged', !!roPending && roPending.paid === false && rq.data.summary.pending_count >= 1);
+
+  // Module Giao dịch VietQR (hợp nhất QR + callback)
+  const vt = await (await req('iso', '/vietqr/transactions?from=2000-01-01&to=2999-12-31')).json();
+  ok('vietqr module list', vt.ok && Array.isArray(vt.data.items) && typeof vt.data.summary.total_count === 'number');
+  ok('vietqr module statuses', (vt.data.items || []).some((r) => r.status === 'success') && (vt.data.items || []).some((r) => r.status === 'pending') && typeof vt.data.summary.refund_count === 'number');
+  const vtPend = await (await req('iso', '/vietqr/transactions?from=2000-01-01&to=2999-12-31&status=pending')).json();
+  ok('vietqr module filter pending', (vtPend.data.items || []).length >= 1 && (vtPend.data.items || []).every((r) => r.status === 'pending'));
   const plansRes = await (await req('root', '/platform/plans')).json();
   ok('platform plans list', plansRes.ok && plansRes.data.length >= 3);
   const pvGet = await (await req('root', '/platform/vietqr')).json();

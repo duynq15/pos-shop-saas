@@ -27,6 +27,7 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await page.waitForSelector('#scan-input'); await wait(400);
     ok('App loads after login', await page.locator('#app-loading.hidden').count() === 1);
     ok('Nav rendered per role', await page.locator('.nav-item[data-view]').count() === 8);
+    ok('Reports submenu', await page.locator('#subs-report-overview .nav-sub').count() === 5);
     ok('User box shows name', (await page.locator('#sidebar-user').innerText()).length > 0);
     // Người dùng
     await view('users');
@@ -263,15 +264,27 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await page.locator('#pm-save').click(); await wait(600);
     ok('Promotion created', (await page.locator('#pm-body').innerText()).includes('KM test 5%'));
 
-    // ================= REPORTS =================
-    await view('reports');
+    // ================= REPORTS (mỗi submenu = màn hình riêng) =================
+    await view('report-overview');
     ok('Report stats cards', (await page.locator('#rp-stats .stat').count()) >= 10);
     ok('Report top chart', (await page.locator('#rp-top').innerText()).length > 0);
+    await page.locator('#view-report-overview [data-range="month"]').click(); await wait(700);
+    ok('Month range', (await page.locator('#view-report-overview [data-role="from"]').inputValue()).endsWith('-01'));
+
+    await view('report-analytics');
     ok('Analytics section renders', (await page.locator('#an-abc').count()) === 1 && (await page.locator('#an-reorder').count()) === 1);
-    ok('VietQR transactions section', (await page.locator('#vqr-body').count()) === 1);
+
+    await view('report-products');
     ok('Product report section', (await page.locator('#rp-prod').count()) === 1);
-    await page.locator('[data-range="month"]').click(); await wait(700);
-    ok('Month range', (await page.locator('#rp-from').inputValue()).endsWith('-01'));
+
+    await view('report-vat');
+    ok('VAT report section', (await page.locator('#rp-vat').count()) === 1);
+
+    // ================= VIETQR TRANSACTIONS (module riêng) =================
+    await view('vietqr');
+    ok('VietQR module table', (await page.locator('#vqt-body').count()) === 1);
+    ok('VietQR summary cards', (await page.locator('#vqt-stats .stat').count()) === 4);
+    ok('VietQR tabs', (await page.locator('#vqt-tabs .tab').count()) === 2);
 
     // ================= MOBILE =================
     await page.setViewportSize({ width: 400, height: 820 });

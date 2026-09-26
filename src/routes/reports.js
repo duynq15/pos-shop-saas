@@ -5,6 +5,7 @@ const db = require('../db');
 const { ok, wrap, round } = require('../lib/util');
 const { can, requirePerm } = require('../middleware');
 const { getQrOrders } = require('../control');
+const { sendXlsx } = require('../lib/xlsx');
 
 const router = express.Router();
 const DATE = "date(i.created_at)";
@@ -134,16 +135,7 @@ router.get('/reports/purchases', wrap((req, res) => {
   ok(res, rows);
 }));
 
-/* ===================== XUẤT CSV ===================== */
-function toCsv(rows) {
-  if (!rows.length) return '';
-  const headers = Object.keys(rows[0]);
-  const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
-  const lines = [headers.map(esc).join(',')];
-  for (const r of rows) lines.push(headers.map((h) => esc(r[h])).join(','));
-  return '\ufeff' + lines.join('\n');
-}
-
+/* ===================== XUẤT EXCEL ===================== */
 router.get('/reports/export', wrap((req, res) => {
   const { from, to } = range(req.query);
   const type = req.query.type || 'sales';
@@ -168,10 +160,7 @@ router.get('/reports/export', wrap((req, res) => {
         (p.stock*p.cost_price) AS 'Giá trị tồn'
       FROM products p LEFT JOIN categories c ON c.id=p.category_id WHERE p.active=1 ORDER BY p.name`).all();
   }
-  const csv = toCsv(rows);
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${name}.csv"`);
-  res.send(csv);
+  sendXlsx(res, name, rows, { sheet: 'Bao cao' });
 }));
 
 router.get('/reports/vat', wrap((req, res) => {
@@ -293,13 +282,10 @@ router.get('/reports/vietqr/export', requirePerm('report.export'), wrap((req, re
       CASE WHEN v.matched=1 THEN 'Khớp' ELSE 'Chưa khớp' END AS 'Trạng thái', v.note AS 'Ghi chú'
     FROM vietqr_transactions v LEFT JOIN invoices i ON i.id=v.invoice_id
     WHERE date(v.created_at)>=date(?) AND date(v.created_at)<=date(?) ORDER BY v.id DESC`).all(from, to);
-  const csv = toCsv(rows);
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="vietqr-${from}_${to}.csv"`);
-  res.send(csv);
+  sendXlsx(res, `giao-dich-vietqr-${from}_${to}`, rows, { sheet: 'Giao dich VietQR' });
 }));
 
-// Xuất CSV bảng đối soát QR đã tạo ↔ đã thanh toán
+// Xuất Excel bảng đối soát QR đã tạo ↔ đã thanh toán
 router.get('/reports/vietqr/reconcile/export', requirePerm('report.export'), wrap((req, res) => {
   const { from, to } = range(req.query);
   const paidSet = new Set(db.prepare(`SELECT DISTINCT order_id FROM vietqr_transactions
@@ -313,10 +299,7 @@ router.get('/reports/vietqr/reconcile/export', requirePerm('report.export'), wra
     'Tài khoản nhận': o.bank_account || '',
     'Trạng thái': paidSet.has(o.order_id) ? 'Đã thanh toán' : 'Chờ thanh toán',
   }));
-  const csv = toCsv(rows);
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="vietqr-doichieu-${from}_${to}.csv"`);
-  res.send(csv);
+  sendXlsx(res, `vietqr-doichieu-${from}_${to}`, rows, { sheet: 'Doi chieu' });
 }));
 
 module.exports = router;
