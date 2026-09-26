@@ -72,10 +72,13 @@ export default {
   <div class="toolbar" id="vqt-pager" style="justify-content:flex-end;margin:10px 0 0"></div>
 </div>`;
 
-    const banks = [];
+    // Mỗi cửa hàng chỉ có 1 tài khoản ngân hàng → mặc định chọn luôn tài khoản của shop.
     const ba = state.settings?.bank_account || '';
-    if (ba) banks.push({ v: ba, t: `${ba}${state.settings?.account_holder ? ' · ' + state.settings.account_holder : ''}` });
-    $('#vqt-bank').innerHTML = `<option value="">Tất cả tài khoản</option>` + banks.map((b) => `<option value="${esc(b.v)}">${esc(b.t)}</option>`).join('');
+    const holder = state.settings?.account_holder ? ' · ' + state.settings.account_holder : '';
+    $('#vqt-bank').innerHTML = ba
+      ? `<option value="${esc(ba)}" selected>${esc(ba + holder)}</option>`
+      : '<option value="">Chưa cấu hình tài khoản</option>';
+    V.bank = ba;
 
     el.addEventListener('click', (e) => {
       const t = e.target;
