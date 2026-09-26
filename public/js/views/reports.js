@@ -58,11 +58,17 @@ export default {
   <div id="vqr-sum" class="muted" style="margin-bottom:8px"></div>
   <div class="toolbar">
     <input class="field grow" id="vqr-q" placeholder="Tìm mã đối soát / mã giao dịch / hóa đơn...">
-    <select class="field" id="vqr-matched"><option value="">Tất cả</option><option value="1">Đã khớp</option><option value="0">Chưa khớp</option></select>
+    <select class="field" id="vqr-matched"><option value="">Tất cả</option><option value="1">Đã thanh toán</option><option value="0">Chờ thanh toán</option></select>
     <button class="btn" id="vqr-filter">Lọc</button>
     <span class="spacer"></span>
-    <button class="btn" id="vqr-export">Xuất CSV</button>
+    <button class="btn" id="vqr-export-reconcile">CSV đối chiếu</button>
+    <button class="btn" id="vqr-export">CSV giao dịch</button>
   </div>
+  <h4 style="margin:4px 0 6px">Đối soát QR đã tạo</h4>
+  <div class="tbl-wrap" style="box-shadow:none;max-height:320px"><table class="grid"><thead><tr>
+    <th>Thời gian tạo</th><th>Mã đối soát</th><th>Hóa đơn</th><th class="r">Số tiền</th><th>Nội dung</th><th>Trạng thái</th>
+  </tr></thead><tbody id="vqr-orders"></tbody></table></div>
+  <h4 style="margin:12px 0 6px">Giao dịch nhận được (callback)</h4>
   <div class="tbl-wrap" style="box-shadow:none;max-height:320px"><table class="grid"><thead><tr>
     <th>Thời gian</th><th>Mã GD</th><th>Hóa đơn</th><th class="r">Số tiền</th><th>Trạng thái</th><th>Đối soát</th>
   </tr></thead><tbody id="vqr-body"></tbody></table></div>
@@ -75,6 +81,7 @@ export default {
       if (e.target.id === 'btn-rp') return load();
       if (e.target.id === 'vqr-filter') return loadVietqr($('#rp-from').value, $('#rp-to').value);
       if (e.target.id === 'vqr-export') { window.location.href = `/api/reports/vietqr/export?from=${$('#rp-from').value}&to=${$('#rp-to').value}`; return; }
+      if (e.target.id === 'vqr-export-reconcile') { window.location.href = `/api/reports/vietqr/reconcile/export?from=${$('#rp-from').value}&to=${$('#rp-to').value}`; return; }
       if (e.target.id === 'rp-prod-view') return loadProducts($('#rp-from').value, $('#rp-to').value);
       if (e.target.id === 'rp-prod-export') { window.location.href = `/api/reports/export?type=products&from=${$('#rp-from').value}&to=${$('#rp-to').value}`; return; }
     });
@@ -171,7 +178,14 @@ async function loadVietqr(from, to) {
     const params = new URLSearchParams({ from, to, q: $('#vqr-q').value.trim(), matched: $('#vqr-matched').value });
     const r = await api('/api/reports/vietqr?' + params);
     const s = r.summary || {};
-    $('#vqr-sum').innerHTML = `Tổng <b>${num(s.count)}</b> giao dịch · Đã khớp <b>${num(s.matched_count)}</b> · Chưa khớp <b>${num(s.unmatched_count)}</b> · Tổng tiền nhận <b>${money(s.received)}</b>`;
+    $('#vqr-sum').innerHTML = `QR đã tạo <b>${num((r.orders || []).length)}</b> · <span class="badge cancelled">Chờ thanh toán ${num(s.pending_count)}</span> (${money(s.pending_amount)}) · Đã thanh toán <b>${num(s.matched_count)}</b> · Chưa khớp <b>${num(s.unmatched_count)}</b> · Tiền nhận <b>${money(s.received)}</b>`;
+    $('#vqr-orders').innerHTML = (r.orders || []).map((o) => `<tr>
+      <td>${esc(o.created_at)}</td>
+      <td><code>${esc(o.order_id || '')}</code></td>
+      <td>${esc(o.invoice_code || '—')}</td>
+      <td class="r"><b>${money(o.amount)}</b></td>
+      <td class="muted">${esc(o.content || '')}</td>
+      <td>${o.paid ? '<span class="badge paid">Đã thanh toán</span>' : '<span class="badge cancelled">Chờ thanh toán</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Chưa có QR nào được tạo</td></tr>';
     $('#vqr-body').innerHTML = (r.items || []).map((t) => `<tr>
       <td>${esc(t.created_at)}</td>
       <td><code>${esc(String(t.transactionid || '').slice(0, 12))}</code></td>

@@ -185,9 +185,10 @@ router.post('/invoices/:id/vietqr', requirePerm('invoice.view'), wrap(async (req
     inv.payment_ref = nextPaymentRef();
     db.prepare('UPDATE invoices SET payment_ref=? WHERE id=?').run(inv.payment_ref, id);
   }
-  saveQrOrder(inv.payment_ref, req.tenant.code, id);
+  saveQrOrder(inv.payment_ref, req.tenant.code, id, { amount: inv.total, bank_account: s.bank_account });
   try {
     const q = await generateQR(s, req.tenant.code, { amount: inv.total, orderId: inv.payment_ref, content: inv.payment_ref });
+    saveQrOrder(inv.payment_ref, req.tenant.code, id, { amount: inv.total, content: q.content || inv.payment_ref, bank_account: s.bank_account });
     db.prepare('UPDATE invoices SET payment_content=? WHERE id=?').run(q.content || '', id);
     ok(res, { ...q, env: s.vqr_env || 'mock', invoice_id: id, total: inv.total, payment_ref: inv.payment_ref, status: inv.status });
   } catch (e) { fail(res, e.message, 502); }
