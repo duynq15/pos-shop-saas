@@ -288,6 +288,18 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const syncRoute = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 1000, content: isoInv.data.payment_ref, orderId: isoInv.data.payment_ref, transactionid: 'ROUTE-1', transType: 'C' }) })).json();
   const isoStatus = await (await req('iso', '/invoices/' + isoInv.data.id + '/payment-status')).json();
   ok('webhook routes by bank account (not token)', syncRoute.error === false && isoStatus.data.paid === true);
+
+  // Định tuyến theo orderId (bản đồ QR) khi tiền về một tài khoản chung
+  await req('iso', '/settings', { method: 'PUT', body: { vqr_enabled: '1', vqr_env: 'mock', bank_account: 'BANKISO' } });
+  const isoInv2 = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Hàng test 2', price: 2000, qty: 1 }], payment_method: 'transfer' } })).json();
+  await req('iso', '/invoices/' + isoInv2.data.id + '/vietqr', { method: 'POST' });
+  const syncRoute2 = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: 'ACCOUNT-KHAC', amount: 2000, content: isoInv2.data.payment_ref, orderId: isoInv2.data.payment_ref, transactionid: 'ROUTE-2', transType: 'C' }) })).json();
+  const isoStatus2 = await (await req('iso', '/invoices/' + isoInv2.data.id + '/payment-status')).json();
+  ok('webhook routes by orderId map (shared account)', syncRoute2.error === false && isoStatus2.data.paid === true);
+
+  const gA = await api('/invoices', { method: 'POST', body: { items: [{ name: 'g', price: 100, qty: 1 }], payment_method: 'cash' } });
+  const gB = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'g', price: 100, qty: 1 }], payment_method: 'cash' } })).json();
+  ok('payment_ref globally unique', gA.ok && gB.ok && gA.data.payment_ref !== gB.data.payment_ref);
   const plansRes = await (await req('root', '/platform/plans')).json();
   ok('platform plans list', plansRes.ok && plansRes.data.length >= 3);
   const pvGet = await (await req('root', '/platform/vietqr')).json();
