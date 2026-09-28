@@ -19,6 +19,7 @@ const inventory = require('./src/routes/inventory');
 const reports = require('./src/routes/reports');
 const backup = require('./src/routes/backup');
 const vietqr = require('./src/routes/vietqr');
+const publicRoutes = require('./src/routes/public');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -33,6 +34,10 @@ app.get('/api/health', (req, res) => res.json({ ok: true, data: { status: 'up', 
 
 // Webhook công khai cho VietQR gọi vào (không cần đăng nhập)
 app.use('/vqr', vietqr.webhook);
+
+// Báo cáo thống kê giao dịch công khai (chia sẻ bằng link token, không cần đăng nhập)
+app.get('/r/:token', publicRoutes.page);
+app.use('/public/api', publicRoutes.router);
 
 // Xác thực & định tuyến theo tenant
 app.use(attachSession);

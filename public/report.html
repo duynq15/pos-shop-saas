@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Thống kê giao dịch số</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/report.css">
+</head>
+<body>
+<header class="rp-hero">
+  <div class="rp-wrap rp-hero-inner">
+    <div>
+      <div class="rp-brand"><span class="rp-logo">📈</span> Thống kê giao dịch số</div>
+      <p class="rp-tagline">Số liệu tổng hợp giao dịch thanh toán số của toàn hệ thống đối tác — góc nhìn trung lập của nền tảng.</p>
+    </div>
+    <div class="rp-hero-side">
+      <div class="rp-actions">
+        <button class="rp-btn" data-preset="7">7 ngày</button>
+        <button class="rp-btn" data-preset="30">30 ngày</button>
+        <button class="rp-btn" data-preset="90">90 ngày</button>
+        <button class="rp-btn" data-preset="180">6 tháng</button>
+        <span class="rp-range">
+          <input type="date" id="rp-from"> <span class="rp-dash">→</span> <input type="date" id="rp-to">
+          <button class="rp-btn rp-btn-primary" id="rp-apply">Xem</button>
+        </span>
+        <button class="rp-btn" id="rp-groups-export" title="Xuất danh sách nhóm sản phẩm (Excel)">📊 Xuất nhóm</button>
+        <button class="rp-btn" id="rp-print" title="Xuất PDF (chọn Lưu dưới dạng PDF)">📄 Xuất PDF</button>
+      </div>
+      <div class="rp-meta" id="rp-meta">Đang tải…</div>
+    </div>
+  </div>
+</header>
+
+<main class="rp-wrap" id="rp-main">
+  <div class="rp-loading" id="rp-loading">Đang tổng hợp dữ liệu…</div>
+  <div class="rp-error" id="rp-error" hidden></div>
+
+  <section class="rp-kpis" id="rp-kpis"></section>
+
+  <section class="rp-card rp-filter-card">
+    <div class="rp-card-head"><h2>Bộ lọc</h2><span class="rp-hint">Áp dụng cho phần đối tác, khu vực và nhóm sản phẩm</span></div>
+    <div class="rp-filters">
+      <label class="rp-fld"><span>Đối tác</span><select id="rp-f-partner"><option value="">Tất cả đối tác</option></select></label>
+      <label class="rp-fld"><span>Khu vực</span><select id="rp-f-area"><option value="">Tất cả khu vực</option></select></label>
+      <label class="rp-fld"><span>Nhóm sản phẩm</span><select id="rp-f-category"><option value="">Tất cả nhóm</option></select></label>
+      <label class="rp-fld rp-grow"><span>Tên sản phẩm</span><input id="rp-f-q" type="search" placeholder="Nhập tên sản phẩm…"></label>
+      <div class="rp-fbtns">
+        <button class="rp-btn rp-btn-primary" id="rp-f-apply">Áp dụng</button>
+        <button class="rp-btn rp-btn-ghost" id="rp-f-reset">Xóa lọc</button>
+      </div>
+    </div>
+    <div class="rp-active" id="rp-f-active" hidden></div>
+  </section>
+
+  <section class="rp-grid rp-charts">
+    <div class="rp-card">
+      <div class="rp-card-head"><h2>Giá trị giao dịch theo ngày</h2><span class="rp-hint">Chỉ giao dịch thanh toán số</span></div>
+      <div id="rp-chart-day" class="rp-chart"></div>
+    </div>
+    <div class="rp-card">
+      <div class="rp-card-head"><h2>Giá trị giao dịch theo tháng</h2></div>
+      <div id="rp-chart-month" class="rp-chart rp-chart-month"></div>
+    </div>
+  </section>
+
+  <section class="rp-card">
+    <div class="rp-card-head"><h2>Cơ cấu theo khu vực</h2><span class="rp-hint">Trong khu vực · Ngoài khu vực</span></div>
+    <div id="rp-areas" class="rp-bars"></div>
+  </section>
+
+  <section class="rp-card">
+    <div class="rp-card-head"><h2>Theo đối tác</h2><span class="rp-hint" id="rp-partner-hint"></span></div>
+    <div class="rp-table-wrap">
+      <table class="rp-table" id="rp-partners">
+        <thead><tr>
+          <th>#</th><th>Đối tác</th><th>Khu vực</th><th class="r">Số giao dịch</th>
+          <th class="r">Giá trị giao dịch</th><th class="r">Tỷ trọng</th><th class="r">Đối tác thanh toán</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="rp-card">
+    <div class="rp-card-head"><h2>Nhóm sản phẩm</h2><span class="rp-hint">Phục vụ tìm nhà cung cấp</span></div>
+    <div id="rp-groups" class="rp-bars"></div>
+  </section>
+
+  <section class="rp-card">
+    <div class="rp-card-head"><h2>Cơ cấu thanh toán</h2><span class="rp-hint">Thanh toán số so với tổng giá trị ghi nhận</span></div>
+    <div class="rp-pay">
+      <div class="rp-donut" id="rp-donut"></div>
+      <div class="rp-legend" id="rp-legend"></div>
+    </div>
+  </section>
+
+  <section class="rp-card">
+    <div class="rp-card-head"><h2>Chỉ số giao dịch</h2></div>
+    <div id="rp-ops" class="rp-ops"></div>
+  </section>
+
+  <footer class="rp-footer">
+    <span id="rp-generated"></span> · Số liệu tổng hợp tự động · POS Shop
+  </footer>
+</main>
+
+<script src="/js/report.js"></script>
+</body>
+</html>

@@ -29,12 +29,28 @@ export default {
   </div>
   <div class="toolbar"><button class="btn primary" id="pv-save">Lưu</button><span id="pv-status" class="muted"></span></div>
 </div>
+<div class="card" style="margin-bottom:14px"><h3>Báo cáo thống kê giao dịch (công khai)</h3>
+  <p class="muted">Bật để có trang thống kê giao dịch thanh toán số cho ban điều hành, chia sẻ bằng <b>link bí mật</b> (không cần đăng nhập; chỉ hiển thị chỉ số giao dịch và mức tham gia, không có giá vốn/lợi nhuận). Đổi link bất cứ lúc nào để thu hồi quyền xem.</p>
+  <label class="chk"><input type="checkbox" id="pp-enabled"> Bật báo cáo công khai</label>
+  <div class="toolbar" style="margin-top:8px">
+    <input class="field" id="pp-url" readonly placeholder="Chưa có liên kết" style="flex:1">
+    <button class="btn" id="pp-copy">Sao chép</button>
+    <button class="btn" id="pp-open">Mở</button>
+    <button class="btn" id="pp-rotate">Đổi link</button>
+    <button class="btn primary" id="pp-save">Lưu</button>
+  </div>
+  <div class="muted" id="pp-status" style="margin-top:6px"></div>
+</div>
 <div class="tbl-wrap"><table class="grid"><thead><tr>
-  <th>Mã</th><th>Tên cửa hàng</th><th>Gói</th><th class="r">Người dùng</th><th>Hết hạn</th><th>Trạng thái</th><th></th>
+  <th>Mã</th><th>Tên đối tác</th><th>Khu vực</th><th>Gói</th><th class="r">Người dùng</th><th>Hết hạn</th><th>Trạng thái</th><th></th>
 </tr></thead><tbody id="pf-body"></tbody></table></div>`;
     $('#pf-new').onclick = () => openForm(null);
     $('#pr-view').onclick = loadReport;
     $('#pv-save').onclick = saveVqrConfig;
+    $('#pp-save').onclick = savePublicReport;
+    $('#pp-rotate').onclick = rotatePublicReport;
+    $('#pp-open').onclick = () => { const u = $('#pp-url').value; if (u) window.open(u, '_blank', 'noopener'); };
+    $('#pp-copy').onclick = copyPublicLink;
     $('#pf-body').addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-act]'); if (!btn) return;
       const t = tenants.find((x) => x.id === Number(btn.closest('tr').dataset.id));
@@ -53,8 +69,52 @@ export default {
     await load();
     loadReport();
     loadVqrConfig();
+    loadPublicReport();
   },
 };
+
+const publicUrl = (u) => (u ? location.origin + u : '');
+
+async function loadPublicReport() {
+  try {
+    const r = await api('/api/platform/public-report');
+    $('#pp-enabled').checked = !!r.enabled;
+    $('#pp-url').value = publicUrl(r.url);
+    $('#pp-status').textContent = r.enabled ? 'Đang bật — ai có link đều xem được.' : 'Đang tắt.';
+  } catch (e) { $('#pp-status').textContent = e.message; }
+}
+
+async function savePublicReport() {
+  try {
+    const r = await api('/api/platform/public-report', { method: 'PUT', body: { enabled: $('#pp-enabled').checked } });
+    $('#pp-url').value = publicUrl(r.url);
+    $('#pp-status').textContent = r.enabled ? 'Đang bật — ai có link đều xem được.' : 'Đang tắt.';
+    toast(r.enabled ? 'Đã bật báo cáo công khai' : 'Đã tắt báo cáo công khai');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function rotatePublicReport() {
+  if (!confirm('Đổi link? Link cũ sẽ ngừng hoạt động ngay.')) return;
+  try {
+    const r = await api('/api/platform/public-report/rotate', { method: 'POST' });
+    $('#pp-url').value = publicUrl(r.url);
+    $('#pp-status').textContent = 'Đã đổi link. Hãy chia sẻ link mới.';
+    toast('Đã đổi link báo cáo');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function copyPublicLink() {
+  const u = $('#pp-url').value;
+  if (!u) return toast('Chưa có liên kết', true);
+  try {
+    await navigator.clipboard.writeText(u);
+    toast('Đã sao chép liên kết');
+  } catch {
+    $('#pp-url').select();
+    document.execCommand('copy');
+    toast('Đã sao chép liên kết');
+  }
+}
 
 async function loadVqrConfig() {
   try {
@@ -101,6 +161,7 @@ async function load() {
   $('#pf-stats').textContent = `${stats.tenants} cửa hàng · ${stats.users} người dùng · ${plans.length} gói`;
   $('#pf-body').innerHTML = tenants.map((t) => `<tr data-id="${t.id}">
     <td><code>${esc(t.code)}</code></td><td><b>${esc(t.name)}</b></td>
+    <td>${t.area ? esc(t.area) : '<span class="muted">Ngoài khu vực</span>'}</td>
     <td>${esc(plans.find((p) => p.code === t.plan)?.name || t.plan)}</td>
     <td class="r">${t.user_count}</td>
     <td class="${expired(t) ? 'low' : 'muted'}">${t.expires_at ? esc(t.expires_at.slice(0, 10)) : '—'}</td>
@@ -108,7 +169,7 @@ async function load() {
     <td class="r"><button class="btn sm" data-act="users">Người dùng</button>
       <button class="btn sm" data-act="edit">Sửa</button>
       <button class="btn sm" data-act="toggle">${t.status === 'active' ? 'Tạm ngưng' : 'Mở lại'}</button></td>
-  </tr>`).join('') || '<tr><td colspan="7" class="empty">Chưa có cửa hàng</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="8" class="empty">Chưa có đối tác</td></tr>';
 }
 
 const planOptions = (sel) => plans.map((p) => `<option value="${p.code}" ${p.code === sel ? 'selected' : ''}>${esc(p.name)} · ${p.max_users} user · ${p.max_products} SP</option>`).join('');
@@ -123,7 +184,8 @@ function openForm(t) {
         <label class="fld">Tài khoản chủ *<input class="field" id="tf-owner" autocapitalize="none"></label>
         <label class="fld">Mật khẩu chủ *<input class="field" id="tf-pass" type="password"></label>
         <label class="fld">Tên chủ cửa hàng<input class="field" id="tf-owner-name"></label>` : ''}
-      <label class="fld">Tên cửa hàng *<input class="field" id="tf-name" value="${esc(d.name || '')}"></label>
+      <label class="fld">Tên đối tác *<input class="field" id="tf-name" value="${esc(d.name || '')}"></label>
+      <label class="fld">Khu vực<input class="field" id="tf-area" placeholder="VD: Thôn A (để trống = ngoài khu vực)" value="${esc(d.area || '')}"></label>
       <label class="fld">Gói dịch vụ<select class="field" id="tf-plan">${planOptions(d.plan)}</select></label>
       <label class="fld">Hết hạn (để trống = không giới hạn)<input class="field" id="tf-exp" type="date" value="${d.expires_at ? esc(d.expires_at.slice(0, 10)) : ''}"></label>
       ${isNew ? '' : '<label class="fld">Trạng thái<select class="field" id="tf-status"><option value="active" ' + (d.status === 'active' ? 'selected' : '') + '>Hoạt động</option><option value="suspended" ' + (d.status !== 'active' ? 'selected' : '') + '>Tạm ngưng</option></select></label>'}
@@ -133,7 +195,7 @@ function openForm(t) {
   $('#tf-close').onclick = closeModal;
   $('#tf-save').onclick = async () => {
     const body = {
-      name: $('#tf-name').value.trim(), plan: $('#tf-plan').value,
+      name: $('#tf-name').value.trim(), area: $('#tf-area').value.trim(), plan: $('#tf-plan').value,
       expires_at: $('#tf-exp').value || null,
     };
     if (isNew) Object.assign(body, {

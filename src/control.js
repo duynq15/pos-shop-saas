@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS tenants (
   name TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
   plan TEXT NOT NULL DEFAULT 'standard',
+  area TEXT,
   note TEXT,
   expires_at TEXT,
   created_at TEXT DEFAULT (datetime('now','localtime'))
@@ -103,6 +104,7 @@ function controlColumns(table) {
   return control.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
 }
 if (!controlColumns('tenants').includes('expires_at')) control.exec('ALTER TABLE tenants ADD COLUMN expires_at TEXT');
+if (!controlColumns('tenants').includes('area')) control.exec('ALTER TABLE tenants ADD COLUMN area TEXT');
 for (const [col, def] of [['amount', 'INTEGER'], ['content', 'TEXT'], ['bank_account', 'TEXT']]) {
   if (!controlColumns('qr_orders').includes(col)) control.exec(`ALTER TABLE qr_orders ADD COLUMN ${col} ${def}`);
 }

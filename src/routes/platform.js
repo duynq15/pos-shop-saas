@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const crypto = require('crypto');
 const { control, audit, getPlatformSettings, setPlatformSettings } = require('../control');
 const db = require('../db');
 const { ok, fail, wrap, str } = require('../lib/util');
@@ -37,8 +38,8 @@ router.post('/tenants', wrap((req, res) => {
   if (!ownerUser || ownerPass.length < 6) return fail(res, 'Cần tài khoản chủ (tối thiểu 6 ký tự mật khẩu)');
   if (control.prepare('SELECT id FROM users WHERE lower(username)=?').get(ownerUser)) return fail(res, 'Tên đăng nhập chủ đã tồn tại');
 
-  const r = control.prepare('INSERT INTO tenants(code,name,plan,note,expires_at) VALUES (?,?,?,?,?)')
-    .run(code, name, str(req.body.plan, 30) || 'standard', str(req.body.note, 300) || null, str(req.body.expires_at, 30) || null);
+  const r = control.prepare('INSERT INTO tenants(code,name,plan,area,note,expires_at) VALUES (?,?,?,?,?,?)')
+    .run(code, name, str(req.body.plan, 30) || 'standard', str(req.body.area, 120) || null, str(req.body.note, 300) || null, str(req.body.expires_at, 30) || null);
   const tenantId = Number(r.lastInsertRowid);
   control.prepare('INSERT INTO users(tenant_id,username,password_hash,full_name,role) VALUES (?,?,?,?,?)')
     .run(tenantId, ownerUser, hashPassword(ownerPass), str(req.body.owner_name, 120) || 'Chủ cửa hàng', 'owner');
@@ -53,8 +54,9 @@ router.put('/tenants/:id', wrap((req, res) => {
   const id = Number(req.params.id);
   const t = control.prepare('SELECT * FROM tenants WHERE id=?').get(id);
   if (!t) return fail(res, 'Không tìm thấy cửa hàng', 404);
-  control.prepare('UPDATE tenants SET name=?, status=?, plan=?, note=?, expires_at=? WHERE id=?')
-    .run(str(req.body.name, 160) || t.name, str(req.body.status, 20) || t.status, str(req.body.plan, 30) || t.plan, str(req.body.note, 300) || null,
+  control.prepare('UPDATE tenants SET name=?, status=?, plan=?, area=?, note=?, expires_at=? WHERE id=?')
+    .run(str(req.body.name, 160) || t.name, str(req.body.status, 20) || t.status, str(req.body.plan, 30) || t.plan,
+      req.body.area === undefined ? t.area : (str(req.body.area, 120) || null), str(req.body.note, 300) || null,
       req.body.expires_at === undefined ? t.expires_at : (str(req.body.expires_at, 30) || null), id);
   audit({ userId: req.user.id, username: req.user.username, action: 'tenant.update', entity: 'tenant', entityId: id, ip: req.ip });
   ok(res, control.prepare('SELECT * FROM tenants WHERE id=?').get(id));
@@ -114,6 +116,31 @@ router.put('/vietqr', wrap((req, res) => {
   setPlatformSettings(body);
   const s = getPlatformSettings();
   ok(res, { vqr_env: s.vqr_env || 'mock', vqr_username: s.vqr_username || '', has_password: !!s.vqr_password });
+}));
+
+// Báo cáo tổng thể công khai: bật/tắt, lấy link chia sẻ, đổi link (token).
+function publicReport() {
+  const s = getPlatformSettings();
+  const token = s.public_report_token || '';
+  return { enabled: s.public_report_enabled === '1', token, url: token ? '/r/' + token : '' };
+}
+const newToken = () => crypto.randomBytes(16).toString('hex');
+
+router.get('/public-report', wrap((req, res) => ok(res, publicReport())));
+
+router.put('/public-report', wrap((req, res) => {
+  const s = getPlatformSettings();
+  const enabled = req.body.enabled ? '1' : '0';
+  const token = s.public_report_token || newToken();
+  setPlatformSettings({ public_report_enabled: enabled, public_report_token: token });
+  audit({ userId: req.user.id, username: req.user.username, action: 'publicreport.update', entity: 'platform', detail: enabled === '1' ? 'on' : 'off', ip: req.ip });
+  ok(res, publicReport());
+}));
+
+router.post('/public-report/rotate', wrap((req, res) => {
+  setPlatformSettings({ public_report_token: newToken() });
+  audit({ userId: req.user.id, username: req.user.username, action: 'publicreport.rotate', entity: 'platform', ip: req.ip });
+  ok(res, publicReport());
 }));
 
 module.exports = router;
