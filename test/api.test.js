@@ -325,11 +325,27 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('shop inherits shared vietqr creds', (await api('/vietqr/config')).data.has_credentials === true);
   const preport = await (await req('root', '/platform/reports')).json();
   ok('platform per-store report', preport.ok && Array.isArray(preport.data.rows) && preport.data.rows.length >= 1);
+
+  // ---------- Báo cáo thống kê giao dịch công khai ----------
+  const pr = await (await req('root', '/platform/public-report', { method: 'PUT', body: { enabled: true } })).json();
+  ok('public report enabled', pr.ok && pr.data.enabled === true && /^[a-f0-9]{32}$/.test(pr.data.token));
+  const pubTok = pr.data.token;
+  const pageRes = await fetch(ROOT + '/r/' + pubTok);
+  ok('public report page served', pageRes.status === 200 && /text\/html/.test(pageRes.headers.get('content-type') || ''));
+  const pub = await (await fetch(ROOT + '/public/api/report/' + pubTok + '?from=2000-01-01&to=2999-12-31')).json();
+  ok('public report data', pub.ok && typeof pub.data.totals.value === 'number' && typeof pub.data.totals.txns === 'number' && Array.isArray(pub.data.partners) && Array.isArray(pub.data.by_day) && Array.isArray(pub.data.groups) && Array.isArray(pub.data.areas));
+  const pubJson = JSON.stringify(pub.data);
+  ok('public report hides profit/cost', pubJson.indexOf('profit') === -1 && pubJson.indexOf('cost') === -1);
+  const grpRes = await fetch(ROOT + '/public/api/report/' + pubTok + '/groups.xlsx?from=2000-01-01&to=2999-12-31');
+  ok('public report groups export', grpRes.status === 200 && /spreadsheetml\.sheet/.test(grpRes.headers.get('content-type') || ''));
+  ok('public report bad token 404', (await fetch(ROOT + '/public/api/report/deadbeef')).status === 404);
+  const prOff = await (await req('root', '/platform/public-report', { method: 'PUT', body: { enabled: false } })).json();
+  ok('public report disabled 404', prOff.ok && (await fetch(ROOT + '/public/api/report/' + pubTok)).status === 404);
   await req('root', '/platform/tenants', { method: 'POST', body: { code: 'exp-shop', name: 'Shop Het Han', owner_username: 'expadmin', owner_password: '123456', expires_at: '2000-01-01 00:00:00' } });
   const expLogin = await (await req('exp', '/auth/login', { method: 'POST', body: { username: 'expadmin', password: '123456' } })).json();
   ok('expired tenant blocked', !expLogin.ok);
 
-  for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);
+  for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg', '/report.html', '/report.css', '/js/report.js']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);
   console.log(R.join('\n'));
   const pass = R.filter((x) => x.startsWith('PASS')).length;
   console.log(`\n${pass}/${R.length} passed`);

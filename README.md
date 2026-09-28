@@ -83,6 +83,15 @@ Sau khi chạy, terminal in ra các địa chỉ LAN. Trong **Cài đặt → K�
 - Tạo/quản lý chương trình khuyến mãi, bật/tắt, đặt thời gian hiệu lực.
 - Cài đặt cửa hàng, tiền tố chứng từ, tài khoản ngân hàng (VietQR), quy tắc bán âm kho, khổ tem nhãn, kết nối LAN, sao lưu.
 
+### Báo cáo thống kê giao dịch công khai (nền tảng)
+- Trang thống kê giao dịch thanh toán số cho **ban điều hành**, góc nhìn trung lập: **tổng giá trị giao dịch**, **tổng số giao dịch**, **mức tham gia thanh toán số** (đối tác cung cấp và đối tác thanh toán), giá trị theo ngày/tháng.
+- Phân **trong khu vực / ngoài khu vực** theo trường **Khu vực** của từng đối tác (cấu hình ở màn Quản trị nền tảng).
+- **Nhóm sản phẩm** kèm nút **Xuất Excel** danh sách nhóm + sản phẩm để tìm nhà cung cấp.
+- **Bộ lọc**: đối tác, khu vực, nhóm sản phẩm, tên sản phẩm.
+- Chia sẻ bằng **link bí mật** khó đoán (`/r/<token>`), người nhận xem **không cần đăng nhập**. Không hiển thị giá vốn/lợi nhuận.
+- Bật/tắt, sao chép và **đổi link** (thu hồi quyền xem) trong **Quản trị nền tảng** (tài khoản `root`).
+- Nút **Xuất PDF**: server tự render PDF A4 đầy đủ màu (không có URL/chân trang trình duyệt). Cần Playwright (đã có sẵn ở môi trường dev: `npm i -D playwright && npx playwright install chromium`). Nếu máy chủ không có Playwright, nút tự chuyển sang hộp thoại in của trình duyệt.
+
 ## Đầu đọc mã vạch
 Cắm đầu đọc USB, để con trỏ ở ô quét rồi quét. Đa số đầu đọc gửi mã kèm Enter, phần mềm tự nhận.
 
@@ -116,3 +125,13 @@ test/
 npm i -D playwright && npx playwright install chromium   # một lần
 npm test        # chạy 105 test API + 67 test giao diện trên DB tạm
 ```
+
+## Dữ liệu mẫu (để xem báo cáo phong phú)
+```bash
+npm run seed:demo                       # tạo ~8 cửa hàng, ~360 sản phẩm, ~16.000 hóa đơn trong 6 tháng vào ./data-demo
+npm run seed:demo -- --reset            # xóa ./data-demo rồi tạo lại từ đầu
+DATA_DIR=./data npm run seed:demo       # ghi thẳng vào dữ liệu thật (chỉ thêm khi cửa hàng chưa có hóa đơn)
+DATA_DIR=./data-demo npm start          # chạy thử với dữ liệu mẫu
+```
+Sau khi chạy, đăng nhập `root`/`root123`, vào **Cửa hàng → Báo cáo tổng thể công khai**, bật và sao chép link để xem.
+
