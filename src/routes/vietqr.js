@@ -180,7 +180,7 @@ router.get('/vietqr/config', wrap((req, res) => {
 router.post('/invoices/:id/vietqr', requirePerm('invoice.view'), wrap(async (req, res) => {
   const id = Number(req.params.id);
   const s = vqrSettings();
-  if (s.vqr_enabled !== '1') fail(res, 'VietQR động chưa bật trong Cài đặt');
+  if (s.vqr_enabled !== '1') return fail(res, 'VietQR động chưa bật trong Cài đặt');
   // GĐ0.2 (BR-02, SEC-01): kiểm lại khi tạo QR, phòng dữ liệu cũ hoặc tenant được gán vào cộng đồng sau khi đã khai tài khoản
   if (accountConflict(req.tenant.code, s.bank_account)) return fail(res, CONFLICT_MSG);
   let inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(id);
@@ -230,12 +230,12 @@ router.post('/vietqr/test', requirePerm('settings.edit'), wrap(async (req, res) 
 
 // Giả lập thanh toán qua Test Callback của VietQR (chỉ môi trường dev)
 router.post('/vietqr/simulate-dev', requirePerm('pos.sell'), wrap(async (req, res) => {
-  if (process.env.NODE_ENV === 'production') fail(res, 'Không khả dụng ở môi trường production', 403);
+  if (process.env.NODE_ENV === 'production') return fail(res, 'Không khả dụng ở môi trường production', 403);
   const s = vqrSettings();
-  if ((s.vqr_env || 'mock') !== 'dev') fail(res, 'Chỉ dùng được ở môi trường dev');
+  if ((s.vqr_env || 'mock') !== 'dev') return fail(res, 'Chỉ dùng được ở môi trường dev');
   const inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(Number(req.body.invoice_id));
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
-  if (!inv.payment_content) fail(res, 'Chưa có mã QR — hãy tạo QR (chuyển khoản) trước');
+  if (!inv.payment_content) return fail(res, 'Chưa có mã QR — hãy tạo QR (chuyển khoản) trước');
   let token;
   try { token = await getToken(s, req.tenant.code); } catch (e) { return fail(res, e.message, 502); }
   const body = { bankAccount: s.bank_account, content: inv.payment_content, amount: String(inv.total), bankCode: s.vqr_bank_code, transType: 'C' };
@@ -248,7 +248,7 @@ router.post('/vietqr/simulate-dev', requirePerm('pos.sell'), wrap(async (req, re
 
 // Mô phỏng thanh toán để test (không cần VietQR thật)
 router.post('/vietqr/simulate', requirePerm('pos.sell'), wrap((req, res) => {
-  if (process.env.NODE_ENV === 'production') fail(res, 'Không khả dụng ở môi trường production', 403);
+  if (process.env.NODE_ENV === 'production') return fail(res, 'Không khả dụng ở môi trường production', 403);
   const id = Number(req.body.invoice_id);
   const inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(id);
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);

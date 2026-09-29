@@ -57,7 +57,7 @@ router.get('/info/qr', wrap(async (req, res) => {
 /* ===================== QR CHUYỂN KHOẢN ===================== */
 router.get('/qr', wrap(async (req, res) => {
   const s = getSettings();
-  if (!s.bank_account || !s.bank_bin) fail(res, 'Chưa cấu hình tài khoản ngân hàng trong Cài đặt');
+  if (!s.bank_account || !s.bank_bin) return fail(res, 'Chưa cấu hình tài khoản ngân hàng trong Cài đặt');
   const amount = round(req.query.amount || 0);
   const message = str(req.query.message, 120);
   const payload = buildVietQR({ bankBin: s.bank_bin, accountNo: s.bank_account, amount, message });

@@ -65,7 +65,9 @@ app.use('/api', reports);
 app.use('/api', (req, res) => fail(res, 'Không tìm thấy API: ' + req.method + ' ' + req.originalUrl, 404));
 
 app.use((err, req, res, next) => {
-  const code = err.code || 500;
+  // Response already sent: log only; passing on to finalhandler would destroy a keep-alive socket
+  if (res.headersSent) return console.error(err);
+  const code = Number.isInteger(err.code) ? err.code : 500;
   if (code >= 500) console.error(err);
   fail(res, err.message || 'Lỗi máy chủ', code);
 });
