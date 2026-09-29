@@ -2,7 +2,8 @@
 
 const express = require('express');
 const crypto = require('crypto');
-const { control, audit, getPlatformSettings, setPlatformSettings } = require('../control');
+const { control, audit, getPlatformSettings, setPlatformSettings, TENANT_KINDS } = require('../control');
+const { bankAccountOf, accountConflict, CONFLICT_MSG } = require('../lib/community');
 const db = require('../db');
 const { ok, fail, wrap, str } = require('../lib/util');
 const { hashPassword } = require('../lib/auth');
@@ -16,6 +17,52 @@ router.use((req, res, next) => {
 });
 
 const codeOk = (c) => /^[a-z0-9_-]{2,30}$/.test(c);
+
+// kind + community_id của tenant (GĐ1.2). Trả { error } hoặc { kind, communityId }.
+function tenantCommunity(body, current = {}) {
+  const kind = body.kind === undefined ? (current.kind || 'shop') : str(body.kind, 20);
+  if (!TENANT_KINDS.includes(kind)) return { error: 'Loại cửa hàng không hợp lệ (shop / seller / community)' };
+  let communityId = body.community_id === undefined ? (current.community_id ?? null) : (body.community_id ? Number(body.community_id) : null);
+  if (communityId != null) {
+    const c = control.prepare('SELECT id FROM communities WHERE id=?').get(communityId);
+    if (!c) return { error: 'Không tìm thấy cộng đồng' };
+  }
+  if (kind !== 'shop' && communityId == null) return { error: 'Người bán / sổ quỹ cộng đồng phải thuộc một cộng đồng' };
+  return { kind, communityId };
+}
+
+// ---------- Cộng đồng (GĐ1.1, NFR-05) ----------
+const COMMUNITY_TYPES = ['village'];
+router.get('/communities', wrap((req, res) => {
+  ok(res, control.prepare(`SELECT c.*, (SELECT COUNT(*) FROM tenants t WHERE t.community_id=c.id) AS tenant_count
+    FROM communities c ORDER BY c.id`).all());
+}));
+
+router.post('/communities', wrap((req, res) => {
+  const code = str(req.body.code, 30).toLowerCase();
+  const name = str(req.body.name, 160);
+  const type = str(req.body.type, 20) || 'village';
+  if (!codeOk(code)) return fail(res, 'Mã cộng đồng chỉ gồm a-z, 0-9, _ , - (2–30 ký tự)');
+  if (!name) return fail(res, 'Nhập tên cộng đồng');
+  if (!COMMUNITY_TYPES.includes(type)) return fail(res, 'Loại cộng đồng không hợp lệ');
+  if (control.prepare('SELECT id FROM communities WHERE code=?').get(code)) return fail(res, 'Mã cộng đồng đã tồn tại');
+  const r = control.prepare('INSERT INTO communities(code,name,type,area) VALUES (?,?,?,?)').run(code, name, type, str(req.body.area, 120) || null);
+  const id = Number(r.lastInsertRowid);
+  audit({ userId: req.user.id, username: req.user.username, action: 'community.create', entity: 'community', entityId: id, detail: code, ip: req.ip });
+  ok(res, control.prepare('SELECT * FROM communities WHERE id=?').get(id));
+}));
+
+router.put('/communities/:id', wrap((req, res) => {
+  const id = Number(req.params.id);
+  const c = control.prepare('SELECT * FROM communities WHERE id=?').get(id);
+  if (!c) return fail(res, 'Không tìm thấy cộng đồng', 404);
+  const status = str(req.body.status, 20) || c.status;
+  if (!['active', 'suspended'].includes(status)) return fail(res, 'Trạng thái không hợp lệ');
+  control.prepare('UPDATE communities SET name=?, area=?, status=? WHERE id=?')
+    .run(str(req.body.name, 160) || c.name, req.body.area === undefined ? c.area : (str(req.body.area, 120) || null), status, id);
+  audit({ userId: req.user.id, username: req.user.username, action: 'community.update', entity: 'community', entityId: id, ip: req.ip });
+  ok(res, control.prepare('SELECT * FROM communities WHERE id=?').get(id));
+}));
 
 router.get('/plans', wrap((req, res) => {
   ok(res, control.prepare('SELECT * FROM plans WHERE active=1 ORDER BY price').all());
@@ -37,9 +84,11 @@ router.post('/tenants', wrap((req, res) => {
   const ownerPass = String(req.body.owner_password || '');
   if (!ownerUser || ownerPass.length < 6) return fail(res, 'Cần tài khoản chủ (tối thiểu 6 ký tự mật khẩu)');
   if (control.prepare('SELECT id FROM users WHERE lower(username)=?').get(ownerUser)) return fail(res, 'Tên đăng nhập chủ đã tồn tại');
+  const tc = tenantCommunity(req.body);
+  if (tc.error) return fail(res, tc.error);
 
-  const r = control.prepare('INSERT INTO tenants(code,name,plan,area,note,expires_at) VALUES (?,?,?,?,?,?)')
-    .run(code, name, str(req.body.plan, 30) || 'standard', str(req.body.area, 120) || null, str(req.body.note, 300) || null, str(req.body.expires_at, 30) || null);
+  const r = control.prepare('INSERT INTO tenants(code,name,plan,area,note,expires_at,kind,community_id) VALUES (?,?,?,?,?,?,?,?)')
+    .run(code, name, str(req.body.plan, 30) || 'standard', str(req.body.area, 120) || null, str(req.body.note, 300) || null, str(req.body.expires_at, 30) || null, tc.kind, tc.communityId);
   const tenantId = Number(r.lastInsertRowid);
   control.prepare('INSERT INTO users(tenant_id,username,password_hash,full_name,role) VALUES (?,?,?,?,?)')
     .run(tenantId, ownerUser, hashPassword(ownerPass), str(req.body.owner_name, 120) || 'Chủ cửa hàng', 'owner');
@@ -54,11 +103,20 @@ router.put('/tenants/:id', wrap((req, res) => {
   const id = Number(req.params.id);
   const t = control.prepare('SELECT * FROM tenants WHERE id=?').get(id);
   if (!t) return fail(res, 'Không tìm thấy cửa hàng', 404);
-  control.prepare('UPDATE tenants SET name=?, status=?, plan=?, area=?, note=?, expires_at=? WHERE id=?')
+  const tc = tenantCommunity(req.body, t);
+  if (tc.error) return fail(res, tc.error);
+  // GĐ0.2 (BR-02, SEC-01): không gán vào cộng đồng khi tài khoản nhận tiền đang dùng chung
+  if (tc.communityId != null && !t.community_id) {
+    const other = accountConflict(t.code, bankAccountOf(t.code), tc.communityId);
+    if (other) return fail(res, `${CONFLICT_MSG}. Trùng với: ${other}`);
+  }
+  control.prepare('UPDATE tenants SET name=?, status=?, plan=?, area=?, note=?, expires_at=?, kind=?, community_id=? WHERE id=?')
     .run(str(req.body.name, 160) || t.name, str(req.body.status, 20) || t.status, str(req.body.plan, 30) || t.plan,
       req.body.area === undefined ? t.area : (str(req.body.area, 120) || null), str(req.body.note, 300) || null,
-      req.body.expires_at === undefined ? t.expires_at : (str(req.body.expires_at, 30) || null), id);
-  audit({ userId: req.user.id, username: req.user.username, action: 'tenant.update', entity: 'tenant', entityId: id, ip: req.ip });
+      req.body.expires_at === undefined ? t.expires_at : (str(req.body.expires_at, 30) || null), tc.kind, tc.communityId, id);
+  const changed = t.kind !== tc.kind || (t.community_id ?? null) !== tc.communityId;
+  audit({ userId: req.user.id, username: req.user.username, action: 'tenant.update', entity: 'tenant', entityId: id,
+    detail: changed ? `kind=${tc.kind} community_id=${tc.communityId ?? ''}` : undefined, ip: req.ip });
   ok(res, control.prepare('SELECT * FROM tenants WHERE id=?').get(id));
 }));
 

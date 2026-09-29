@@ -345,6 +345,39 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const expLogin = await (await req('exp', '/auth/login', { method: 'POST', body: { username: 'expadmin', password: '123456' } })).json();
   ok('expired tenant blocked', !expLogin.ok);
 
+  // ---------- Cộng đồng (GĐ1.1–1.2, NFR-05) + chặn tài khoản chung (GĐ0.2 — BR-02, FR-05, SEC-01) ----------
+  const rootJ = async (u, o) => (await req('root', u, o)).json();
+  const com = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Thôn A', area: 'Xã X' } });
+  ok('community create (type village)', com.ok && com.data.type === 'village' && com.data.status === 'active');
+  ok('community dup code rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Trùng' } })).ok);
+  ok('community bad type rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'cho-b', name: 'Chợ B', type: 'market' } })).ok);
+  ok('community update', (await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { name: 'Thôn A mới' } })).data.name === 'Thôn A mới');
+  ok('tenant bad kind rejected', !(await rootJ('/platform/tenants', { method: 'POST', body: { code: 'bad-kind', name: 'x', owner_username: 'badkind', owner_password: '123456', kind: 'xyz' } })).ok);
+  ok('seller without community rejected', !(await rootJ('/platform/tenants', { method: 'POST', body: { code: 'no-com', name: 'x', owner_username: 'nocom', owner_password: '123456', kind: 'seller' } })).ok);
+  ok('tenant unknown community rejected', !(await rootJ('/platform/tenants', { method: 'POST', body: { code: 'no-com', name: 'x', owner_username: 'nocom', owner_password: '123456', kind: 'seller', community_id: 99999 } })).ok);
+  const sel = await rootJ('/platform/tenants', { method: 'POST', body: { code: 'seller-a', name: 'Người bán A', owner_username: 'sellera', owner_password: '123456', kind: 'seller', community_id: com.data.id } });
+  ok('seller tenant in community', sel.ok && sel.data.kind === 'seller' && sel.data.community_id === com.data.id);
+  ok('old tenant defaults kind=shop', (await rootJ('/platform/tenants')).data.find((t) => t.code === 'iso-shop').kind === 'shop');
+  await req('sel', '/auth/login', { method: 'POST', body: { username: 'sellera', password: '123456' } });
+  const defAcc = (await api('/settings')).data.bank_account;
+  ok('BR-02: seller cannot reuse another shop account', !(await (await req('sel', '/settings', { method: 'PUT', body: { bank_account: defAcc } })).json()).ok);
+  ok('BR-02: formatting does not bypass check', !(await (await req('sel', '/settings', { method: 'PUT', body: { bank_account: defAcc.slice(0, 4) + ' ' + defAcc.slice(4) } })).json()).ok);
+  const selSet = await (await req('sel', '/settings', { method: 'PUT', body: { bank_account: 'SELLERA01', vqr_enabled: '1', vqr_env: 'mock' } })).json();
+  ok('BR-02: seller saves own account', selSet.ok && selSet.data.bank_account === 'SELLERA01');
+  ok('BR-02: shop cannot reuse community tenant account', !(await api('/settings', { method: 'PUT', body: { bank_account: 'SELLERA01' } })).ok);
+  ok('BR-02: other settings still saved without bank_account', (await (await req('sel', '/settings', { method: 'PUT', body: { shop_name: 'Quán A' } })).json()).ok);
+  const selInv = await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'Rau', price: 3000, qty: 1 }], payment_method: 'transfer' } })).json();
+  const selQr = await (await req('sel', '/invoices/' + selInv.data.id + '/vietqr', { method: 'POST' })).json();
+  ok('seller with own account creates VietQR', selQr.ok && !!selQr.data.payment_ref);
+  ok('kind=shop: two shops may share account (old behaviour)', (await (await req('iso', '/settings', { method: 'PUT', body: { bank_account: defAcc } })).json()).ok);
+  const assign = await rootJ('/platform/tenants/' + newT.data.id, { method: 'PUT', body: { kind: 'seller', community_id: com.data.id } });
+  ok('BR-02: cannot join community while sharing account', !assign.ok && /BR-02/.test(assign.error || ''));
+  await req('iso', '/settings', { method: 'PUT', body: { bank_account: 'BANKISO' } });
+  const assign2 = await rootJ('/platform/tenants/' + newT.data.id, { method: 'PUT', body: { kind: 'seller', community_id: com.data.id } });
+  ok('join community with own account', assign2.ok && assign2.data.community_id === com.data.id);
+  ok('community lists tenant count', (await rootJ('/platform/communities')).data.find((c) => c.id === com.data.id).tenant_count === 2);
+  ok('tenant cannot manage communities', (await req('admin', '/platform/communities')).status === 403);
+
   for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg', '/report.html', '/report.css', '/js/report.js']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);
   console.log(R.join('\n'));
   const pass = R.filter((x) => x.startsWith('PASS')).length;

@@ -7,6 +7,7 @@ const { control, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder, g
 const { ok, fail, wrap, str, round } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
 const { requirePerm } = require('../middleware');
+const { accountConflict, CONFLICT_MSG } = require('../lib/community');
 const { generateQR, getToken, bases, testCallbackUrl } = require('../payments/vietqr');
 
 const router = express.Router();   // API phía app (đã đăng nhập), mount /api
@@ -180,6 +181,8 @@ router.post('/invoices/:id/vietqr', requirePerm('invoice.view'), wrap(async (req
   const id = Number(req.params.id);
   const s = vqrSettings();
   if (s.vqr_enabled !== '1') fail(res, 'VietQR động chưa bật trong Cài đặt');
+  // GĐ0.2 (BR-02, SEC-01): kiểm lại khi tạo QR, phòng dữ liệu cũ hoặc tenant được gán vào cộng đồng sau khi đã khai tài khoản
+  if (accountConflict(req.tenant.code, s.bank_account)) return fail(res, CONFLICT_MSG);
   let inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(id);
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
   if (!inv.payment_ref) {

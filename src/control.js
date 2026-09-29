@@ -30,6 +30,17 @@ CREATE TABLE IF NOT EXISTS tenants (
   created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
+-- Cộng đồng (NFR-05, quyết định 0.9): thôn là một loại (type='village')
+CREATE TABLE IF NOT EXISTS communities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'village',
+  area TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   code TEXT UNIQUE NOT NULL,
@@ -105,6 +116,9 @@ function controlColumns(table) {
 }
 if (!controlColumns('tenants').includes('expires_at')) control.exec('ALTER TABLE tenants ADD COLUMN expires_at TEXT');
 if (!controlColumns('tenants').includes('area')) control.exec('ALTER TABLE tenants ADD COLUMN area TEXT');
+// GĐ1.2: loại tenant và cộng đồng. Tenant cũ nhận kind='shop', không thuộc cộng đồng (ADR-0002)
+if (!controlColumns('tenants').includes('kind')) control.exec("ALTER TABLE tenants ADD COLUMN kind TEXT NOT NULL DEFAULT 'shop'");
+if (!controlColumns('tenants').includes('community_id')) control.exec('ALTER TABLE tenants ADD COLUMN community_id INTEGER REFERENCES communities(id)');
 for (const [col, def] of [['amount', 'INTEGER'], ['content', 'TEXT'], ['bank_account', 'TEXT']]) {
   if (!controlColumns('qr_orders').includes(col)) control.exec(`ALTER TABLE qr_orders ADD COLUMN ${col} ${def}`);
 }
@@ -208,4 +222,28 @@ function getQrOrders(tenantCode, from, to) {
     ORDER BY created_at DESC, rowid DESC LIMIT 2000`).all(String(tenantCode), from, to);
 }
 
-module.exports = { control, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired, getPlatformSettings, setPlatformSettings, nextGlobalSeq, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders };
+// ---------- Chặn tài khoản nhận tiền dùng chung (GĐ0.2 — BR-02, FR-05, SEC-01) ----------
+// Tenant thuộc cộng đồng phải nhận tiền vào tài khoản riêng: số tài khoản không được trùng
+// với bất kỳ tenant nào khác. Chiều ngược lại cũng chặn: shop thường không được khai trùng
+// tài khoản của tenant thuộc cộng đồng. Hai shop thường trùng nhau vẫn được (hành vi cũ).
+const TENANT_KINDS = ['shop', 'seller', 'community'];
+const normAccount = (v) => String(v || '').replace(/[\s.-]/g, '');
+function tenantByCode(code) {
+  return control.prepare('SELECT * FROM tenants WHERE code=?').get(code);
+}
+// Trả về mã tenant đang dùng trùng tài khoản (vi phạm BR-02), hoặc null.
+// readAccount(code) đọc bank_account trong DB của tenant (truyền vào để tránh vòng require với db.js).
+function sharedAccountConflict(tenantCode, account, readAccount, communityId) {
+  const acc = normAccount(account);
+  if (!acc) return null;
+  const self = tenantByCode(tenantCode);
+  const selfInCommunity = communityId !== undefined ? !!communityId : !!(self && self.community_id);
+  for (const t of control.prepare('SELECT code, community_id FROM tenants WHERE code<>?').all(tenantCode)) {
+    if (!selfInCommunity && !t.community_id) continue;
+    if (normAccount(readAccount(t.code)) === acc) return t.code;
+  }
+  return null;
+}
+
+module.exports = { control, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired, getPlatformSettings, setPlatformSettings, nextGlobalSeq, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders,
+  TENANT_KINDS, tenantByCode, sharedAccountConflict };
