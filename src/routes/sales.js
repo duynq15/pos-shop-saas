@@ -152,7 +152,7 @@ function getInvoice(id) {
   return inv;
 }
 
-router.get('/invoices', wrap((req, res) => {
+router.get('/invoices', requirePerm('invoice.view'), wrap((req, res) => {
   const { from, to, q, method, status, type } = req.query;
   let sql = 'SELECT * FROM invoices WHERE 1=1';
   const params = [];
@@ -166,7 +166,7 @@ router.get('/invoices', wrap((req, res) => {
   ok(res, db.prepare(sql).all(...params));
 }));
 
-router.get('/invoices/:id', wrap((req, res) => {
+router.get('/invoices/:id', requirePerm('invoice.view'), wrap((req, res) => {
   const inv = getInvoice(Number(req.params.id));
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
   ok(res, inv);

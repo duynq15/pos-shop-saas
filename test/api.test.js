@@ -405,6 +405,31 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const leaderId = (await (await req('cadm', '/users')).json()).data.find((u) => u.username === 'qa-community_leader').id;
   ok('FR-02: cannot switch community user to POS role', !(await (await req('cadm', '/users/' + leaderId, { method: 'PUT', body: { role: 'manager' } })).json()).ok);
 
+  // ---------- Phạm vi cộng đồng (GĐ1.4 — BR-07, BR-09, ERR-08) ----------
+  const day = new Date().toISOString().slice(0, 10);
+  // Cộng đồng B với người bán riêng: số của B không được lẫn vào A
+  const comB = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-b', name: 'Thôn B' } });
+  await rootJ('/platform/tenants', { method: 'POST', body: { code: 'seller-b', name: 'Người bán B', owner_username: 'sellerb', owner_password: '123456', kind: 'seller', community_id: comB.data.id } });
+  await req('selb', '/auth/login', { method: 'POST', body: { username: 'sellerb', password: '123456' } });
+  await req('selb', '/invoices', { method: 'POST', body: { items: [{ name: 'Gạo', price: 777000, qty: 1 }], payment_method: 'cash', paid_amount: 777000 } });
+  // Người bán A có thêm một hóa đơn đã thanh toán
+  const paidA = await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'Rau', price: 5000, qty: 2 }], payment_method: 'cash', paid_amount: 10000 } })).json();
+  ok('seller A paid invoice', paidA.ok);
+  const sumRes = await req('c-community_leader', '/community/summary?from=' + day + '&to=' + day);
+  const summ = (await sumRes.json()).data;
+  ok('BR-09: leader gets community summary', sumRes.status === 200 && summ.sellers === 2 && summ.community_id === com.data.id);
+  // Thôn A: seller-a (1 hóa đơn 10.000) + iso-shop đã gia nhập (3 hóa đơn 1.000 + 2.000 + 100). Hóa đơn chờ VietQR không tính.
+  ok('BR-07: converted = sellers with a paid sale', summ.converted_sellers === 2);
+  ok('summary counts only own community', summ.transactions === 4 && summ.amount === 13100);
+  ok('BR-09: summary has no per-seller data', !/seller-a|iso-shop|Người bán|Quán A/.test(JSON.stringify(summ)) && Object.values(summ).every((v) => typeof v !== 'object'));
+  ok('summary rejects inverted range', (await req('c-community_leader', '/community/summary?from=' + day + '&to=2000-01-01')).status === 400);
+  ok('ERR-08: seller owner cannot read community summary', (await req('sel', '/community/summary')).status === 403);
+  ok('ERR-08: shop owner cannot read community summary', (await req('admin', '/community/summary')).status === 403);
+  ok('ERR-08: treasurer lacks community.report', (await req('c-treasurer', '/community/summary')).status === 403);
+  ok('ERR-08: leader cannot list invoices', (await req('c-community_leader', '/invoices')).status === 403);
+  ok('ERR-08: leader cannot read POS reports', (await req('c-community_leader', '/reports/summary')).status === 403);
+  ok('ERR-08: platform root has no community summary', (await req('root', '/community/summary')).status === 403);
+
   for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg', '/report.html', '/report.css', '/js/report.js']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);
   console.log(R.join('\n'));
   const pass = R.filter((x) => x.startsWith('PASS')).length;
