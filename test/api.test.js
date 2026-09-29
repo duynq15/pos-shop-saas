@@ -405,6 +405,49 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const leaderId = (await (await req('cadm', '/users')).json()).data.find((u) => u.username === 'qa-community_leader').id;
   ok('FR-02: cannot switch community user to POS role', !(await (await req('cadm', '/users/' + leaderId, { method: 'PUT', body: { role: 'manager' } })).json()).ok);
 
+  // ---------- Sổ quỹ (GĐ2.1–2.2 — FR-12 → FR-15, BR-03, BR-04, BR-05, ERR-06) ----------
+  const cj = async (who, u, o) => (await req(who, u, o)).json();
+  const fund = await cj('c-approver', '/funds', { method: 'POST', body: { code: 'cong-duc', name: 'Quỹ công đức', kind: 'donation', bank_account: 'QUY-A 001' } });
+  ok('fund create (account normalised)', fund.ok && fund.data.bank_account === 'QUYA001' && fund.data.balance === 0);
+  ok('fund dup account rejected', !(await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-2', name: 'Quỹ 2', bank_account: 'QUYA001' } })).ok);
+  ok('fund cannot reuse shop account', !(await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-3', name: 'Quỹ 3', bank_account: 'SELLERA01' } })).ok);
+  ok('treasurer cannot create fund', (await req('c-treasurer', '/funds', { method: 'POST', body: { code: 'quy-4', name: 'Quỹ 4' } })).status === 403);
+  ok('shop tenant has no fund book', (await req('admin', '/funds')).status === 403);
+  const fid = fund.data.id;
+  const cashIn = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 500000, payer_name: 'Ông Ba', note: 'Công đức' } });
+  ok('cash in recorded at once', cashIn.ok && cashIn.data.status === 'approved' && /^PT/.test(cashIn.data.code));
+  await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 100000, anonymous: true } });
+  ok('balance from approved entries', (await cj('c-community_leader', '/funds/' + fid)).data.balance === 600000);
+  ok('leader cannot enter', (await req('c-community_leader', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).status === 403);
+  ok('approver cannot enter (BR-05)', (await req('c-approver', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).status === 403);
+  const out = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 200000, note: 'Mua hương' } });
+  ok('out starts as draft', out.ok && out.data.status === 'draft' && /^PC/.test(out.data.code));
+  ok('draft cannot be approved', !(await cj('c-approver', '/fund-entries/' + out.data.id + '/approve', { method: 'POST' })).ok);
+  ok('submit', (await cj('c-treasurer', '/fund-entries/' + out.data.id + '/submit', { method: 'POST' })).data.status === 'submitted');
+  ok('treasurer cannot approve (SEC-04)', (await req('c-treasurer', '/fund-entries/' + out.data.id + '/approve', { method: 'POST' })).status === 403);
+  ok('approve', (await cj('c-approver', '/fund-entries/' + out.data.id + '/approve', { method: 'POST' })).data.status === 'approved');
+  ok('balance after out', (await cj('cadm', '/funds/' + fid)).data.balance === 400000);
+  // Chủ tài khoản có mọi quyền nhưng vẫn không được tự duyệt phiếu mình lập
+  const own = await cj('cadm', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000 } });
+  await cj('cadm', '/fund-entries/' + own.data.id + '/submit', { method: 'POST' });
+  ok('ERR-06: creator cannot approve own entry', (await req('cadm', '/fund-entries/' + own.data.id + '/approve', { method: 'POST' })).status === 403);
+  ok('reject needs reason', !(await cj('c-approver', '/fund-entries/' + own.data.id + '/reject', { method: 'POST' })).ok);
+  ok('reject', (await cj('c-approver', '/fund-entries/' + own.data.id + '/reject', { method: 'POST', body: { reason: 'Thiếu chứng từ' } })).data.status === 'rejected');
+  const big = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 400001 } });
+  await cj('c-treasurer', '/fund-entries/' + big.data.id + '/submit', { method: 'POST' });
+  ok('BR-03: overspend blocked', !(await cj('c-approver', '/fund-entries/' + big.data.id + '/approve', { method: 'POST' })).ok);
+  ok('adjust needs ref + reason', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'adjust', amount: -50000 } })).ok);
+  const adj = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'adjust', amount: -50000, ref_entry_id: cashIn.data.id, note: 'Ghi thừa 50.000' } });
+  await cj('c-treasurer', '/fund-entries/' + adj.data.id + '/submit', { method: 'POST' });
+  await cj('c-approver', '/fund-entries/' + adj.data.id + '/approve', { method: 'POST' });
+  ok('adjust approved lowers balance', /^DC/.test(adj.data.code) && (await cj('cadm', '/funds/' + fid)).data.balance === 350000);
+  ok('BR-04: no delete route', (await req('cadm', '/fund-entries/' + out.data.id, { method: 'DELETE' })).status === 404);
+  const list = await cj('c-community_leader', '/funds/' + fid + '/entries?type=out&status=approved');
+  ok('entries filter', list.ok && list.data.entries.length === 1 && list.data.entries[0].id === out.data.id);
+  await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'closed' } });
+  ok('closed fund takes no entries', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).ok);
+  await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'active' } });
+
   // ---------- Phạm vi cộng đồng (GĐ1.4 — BR-07, BR-09, ERR-08) ----------
   const day = new Date().toISOString().slice(0, 10);
   // Cộng đồng B với người bán riêng: số của B không được lẫn vào A

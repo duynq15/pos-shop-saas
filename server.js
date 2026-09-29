@@ -21,6 +21,7 @@ const backup = require('./src/routes/backup');
 const vietqr = require('./src/routes/vietqr');
 const publicRoutes = require('./src/routes/public');
 const community = require('./src/routes/community');
+const funds = require('./src/routes/funds');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -54,6 +55,7 @@ app.use('/api', (req, res, next) => {
 });
 app.use('/api', usersRoutes);
 app.use('/api', community);
+app.use('/api', funds);
 app.use('/api', admin.router);
 app.use('/api', backup.router);
 app.use('/api', vietqr.router);
