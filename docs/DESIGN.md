@@ -1,452 +1,661 @@
 # Thiết kế kỹ thuật – POS Shop (SaaS đa cửa hàng)
 
-> Tài liệu thiết kế chi tiết cho phiên bản SaaS nhiều cửa hàng (tenant), một link truy cập.
-> Lộ trình & tiến độ xem [`ROADMAP.md`](./ROADMAP.md).
+> Tài liệu thiết kế hệ thống **theo hiện trạng mã nguồn** (as-built, cập nhật 28/09/2026), kèm định hướng cho các phần chưa làm.
+> Lộ trình & tiến độ xem [`ROADMAP.md`](./ROADMAP.md); kế hoạch gia cố bảo mật xem [`PLAN-HARDENING.md`](./PLAN-HARDENING.md).
+
+**Ký hiệu trạng thái:** ✅ đã triển khai · 🟡 triển khai một phần · ⏳ kế hoạch, chưa có mã
 
 ## Mục lục
-1. [Nguyên tắc thiết kế](#1-nguyên-tắc-thiết-kế)
+1. [Tổng quan & nguyên tắc](#1-tổng-quan--nguyên-tắc)
 2. [Stack công nghệ](#2-stack-công-nghệ)
-3. [Đa tenant (multi-tenancy)](#3-đa-tenant-multi-tenancy)
-4. [Xác thực & phân quyền](#4-xác-thực--phân-quyền)
-5. [Mô hình dữ liệu](#5-mô-hình-dữ-liệu)
-6. [VAT](#6-vat)
-7. [Hóa đơn điện tử](#7-hóa-đơn-điện-tử)
-8. [Thanh toán VietQR (động + callback)](#8-thanh-toán-vietqr)
-9. [Nhà cung cấp, mua hàng & công nợ](#9-nhà-cung-cấp-mua-hàng--công-nợ)
-10. [Thống kê & phân tích](#10-thống-kê--phân-tích)
-11. [Bề mặt API](#11-bề-mặt-api)
-12. [Kiến trúc frontend](#12-kiến-trúc-frontend)
-13. [Triển khai & vận hành](#13-triển-khai--vận-hành)
-14. [Bảo mật](#14-bảo-mật)
-15. [Kiểm thử](#15-kiểm-thử)
-16. [Chuyển đổi từ bản hiện tại](#16-chuyển-đổi-từ-bản-hiện-tại)
-17. [Phụ lục](#17-phụ-lục)
+3. [Kiến trúc tổng thể](#3-kiến-trúc-tổng-thể)
+4. [Đa tenant (multi-tenancy)](#4-đa-tenant-multi-tenancy)
+5. [Xác thực & phân quyền](#5-xác-thực--phân-quyền)
+6. [Mô hình dữ liệu](#6-mô-hình-dữ-liệu)
+7. [Nghiệp vụ bán hàng](#7-nghiệp-vụ-bán-hàng)
+8. [Kho, nhà cung cấp & mua hàng](#8-kho-nhà-cung-cấp--mua-hàng)
+9. [Giá, khuyến mãi & VAT](#9-giá-khuyến-mãi--vat)
+10. [Thanh toán VietQR](#10-thanh-toán-vietqr)
+11. [Hóa đơn điện tử](#11-hóa-đơn-điện-tử)
+12. [Báo cáo & phân tích](#12-báo-cáo--phân-tích)
+13. [Sao lưu & phục hồi](#13-sao-lưu--phục-hồi)
+14. [Bề mặt API](#14-bề-mặt-api)
+15. [Kiến trúc frontend](#15-kiến-trúc-frontend)
+16. [Triển khai & vận hành](#16-triển-khai--vận-hành)
+17. [Bảo mật](#17-bảo-mật)
+18. [Kiểm thử](#18-kiểm-thử)
+19. [Hạn chế đã biết & hướng phát triển](#19-hạn-chế-đã-biết--hướng-phát-triển)
+20. [Phụ lục](#20-phụ-lục)
 
 ---
 
-## 1. Nguyên tắc thiết kế
+## 1. Tổng quan & nguyên tắc
 
-1. **Cách ly dữ liệu là trên hết.** Mọi bảng nghiệp vụ có `tenant_id`; mọi truy vấn bắt buộc lọc tenant; PostgreSQL Row-Level Security làm lớp chặn thứ hai.
-2. **Phân quyền thực thi ở server.** Không bao giờ gửi dữ liệu nhạy cảm (giá vốn/lợi nhuận) xuống client rồi ẩn bằng CSS.
-3. **Adapter cho dịch vụ ngoài.** Hóa đơn điện tử và VietQR đều đi qua interface chung để đổi nhà cung cấp không phải sửa lõi.
-4. **Idempotent với sự kiện ngoài.** Callback/thanh toán có thể trùng; xử lý theo khoá duy nhất.
-5. **Không phá dữ liệu.** Migration có version + rollback; backup trước mỗi lần nâng cấp.
-6. **Offline-first chỉ khi cần.** Mặc định online; kiến trúc mở để thêm hàng đợi offline sau.
+POS Shop là phần mềm bán hàng & quản lý kho cho cửa hàng tạp hóa/gia dụng, chạy dạng **SaaS nhiều cửa hàng trên một máy chủ, một đường dẫn đăng nhập**. Có thể chạy trong mạng LAN (không cần internet) hoặc trên VPS công khai (bắt buộc khi dùng webhook VietQR).
+
+Nguyên tắc thiết kế:
+
+1. **Cách ly dữ liệu là trên hết.** Mỗi cửa hàng một file SQLite riêng; request chỉ được truy cập DB của tenant gắn với phiên đăng nhập.
+2. **Phân quyền thực thi ở server.** Dữ liệu nhạy cảm (giá vốn, lợi nhuận) bị lọc ở API, không ẩn bằng CSS.
+3. **Tối giản phụ thuộc.** Chỉ 2 dependency runtime (`express`, `qrcode`). SQLite, băm mật khẩu, ghi file Excel đều dùng module có sẵn của Node hoặc tự viết.
+4. **Không build frontend.** SPA dùng ES modules thuần, phục vụ tĩnh.
+5. **Idempotent với sự kiện ngoài.** Callback thanh toán có thể trùng; xử lý theo khoá `transactionid`.
+6. **Không phá dữ liệu.** Migration chỉ thêm bảng/cột; phục hồi backup luôn giữ lại bản DB cũ.
+7. **Adapter cho dịch vụ ngoài.** VietQR đi qua một client riêng (có chế độ mock); HĐĐT sẽ theo cùng hướng.
 
 ---
 
 ## 2. Stack công nghệ
 
-| Lớp | Chọn | Lý do |
+| Lớp | Hiện tại | Ghi chú |
 |---|---|---|
-| Backend | Node.js + Express 5 | Đang dùng, nhẹ, quen thuộc |
-| DB | **PostgreSQL 16** | Đa tenant, ghi đồng thời, RLS, PITR |
-| Truy cập DB | `pg` + lớp repository tự viết | Kiểm soát chèn `tenant_id`, tránh ORM nặng |
-| Cache/queue | Redis (tuỳ chọn) | Cache token VietQR, hàng đợi HĐĐT, rate limit |
-| Auth | Session cookie `httpOnly` + bảng `sessions` | An toàn hơn localStorage; thu hồi được |
-| Băm mật khẩu | argon2id (hoặc bcrypt) | Chuẩn hiện đại |
-| Frontend | Vanilla ES modules (giữ nguyên) | Không build, nhanh, gọn |
-| Deploy | Docker + Nginx + SSL | Chuẩn, dễ nhân bản |
-| Test | Node test + Playwright | Đang có (94 API + 63 UI) |
+| Runtime | Node.js 22 (Docker `node:22-alpine`) | CommonJS |
+| Web framework | Express 5 | Body JSON tối đa 8 MB |
+| CSDL | **SQLite qua `node:sqlite` (`DatabaseSync`)** | Built-in của Node, không cần cài DB. WAL + foreign keys |
+| Truy cập DB | Câu lệnh chuẩn bị (`prepare`) trực tiếp, định tuyến tenant bằng `AsyncLocalStorage` | Không ORM |
+| Phiên đăng nhập | Cookie `httpOnly` + bảng `sessions` (token băm SHA-256) | Thu hồi được |
+| Băm mật khẩu/PIN | `crypto.scryptSync` (salt 16 byte, key 64 byte) | So sánh thời gian hằng |
+| QR | `qrcode` + tự sinh payload EMVCo/NAPAS | |
+| Excel | Bộ ghi `.xlsx` tự viết (`src/lib/xlsx.js`) | Không phụ thuộc thư viện |
+| Frontend | Vanilla ES modules + CSS thuần | Không build |
+| Triển khai | Docker Compose + Caddy (SSL tự động) hoặc Nginx ngoài | |
+| Kiểm thử | Test API tự viết (`fetch`) + Playwright UI | |
+
+> Định hướng cũ chuyển sang PostgreSQL + RLS + Redis **chưa thực hiện** (⏳). Mô hình SQLite-mỗi-tenant đang đáp ứng quy mô hiện tại; xem [§19](#19-hạn-chế-đã-biết--hướng-phát-triển).
 
 ---
 
-## 3. Đa tenant (multi-tenancy)
+## 3. Kiến trúc tổng thể
 
-### 3.1 Mô hình
-**Shared database, shared schema, cột `tenant_id`** (không tách schema/DB riêng từng shop) để vận hành đơn giản; tăng cường bằng **RLS**.
-
+```mermaid
+flowchart LR
+  subgraph Client
+    B[Trình duyệt SPA<br/>public/]
+    S[Máy quét mã vạch<br/>keyboard-wedge]
+  end
+  subgraph Server["Node/Express (server.js)"]
+    MW[attachSession → requireAuth → tenantContext]
+    R[Routes /api/*]
+    WH[Webhook /vqr/*]
+    JOB[autoBackup mỗi 6h]
+  end
+  subgraph Data["DATA_DIR"]
+    C[(control.db<br/>tenant, user, session, audit)]
+    T1[(tenants/shop-a/pos.db)]
+    T2[(tenants/shop-b/pos.db)]
+    BK[/backups/*.db/]
+  end
+  V[VietQR API]
+  S --> B --> MW --> R
+  R --> C
+  R --> T1 & T2
+  V -- callback --> WH --> C
+  WH --> T1 & T2
+  R -- token / generate QR --> V
+  JOB --> BK
 ```
-tenants (1) ──< users, products, invoices, ... (n)   [mọi bảng có tenant_id]
-platform_users (super admin) — tách riêng, không thuộc tenant
+
+### 3.1 Thứ tự middleware (`server.js`)
+1. Static `public/`, `GET /api/health` (công khai).
+2. `/vqr` — webhook VietQR, **mount trước** xác thực phiên.
+3. `attachSession` — đọc cookie, nạp `req.user`, `req.tenant`, `req.permissions`.
+4. `/api/auth` — đăng nhập/đăng xuất/`me`/đổi mật khẩu.
+5. `requireAuth` — 401 nếu chưa đăng nhập; 403 nếu tenant `suspended`.
+6. `tenantContext` — chạy phần còn lại của request trong `db.runWith(tenant.code)`.
+7. `/api/platform` — chỉ quản trị nền tảng.
+8. Chặn tài khoản `platform` khỏi mọi API nghiệp vụ cửa hàng.
+9. Các router nghiệp vụ: `users, admin, backup, vietqr, catalog, sales, inventory, reports`.
+10. 404 cho `/api/*`; bộ xử lý lỗi trung tâm dùng `ApiError.code`.
+
+### 3.2 Cấu trúc mã nguồn
 ```
-
-### 3.2 Nhận diện tenant
-- Người dùng đăng nhập tại một link chung `/login`.
-- Tài khoản (email/username) là **duy nhất trong toàn hệ thống** ⇒ suy ra tenant từ tài khoản.
-- Session lưu `tenant_id`; middleware gắn `req.tenantId` cho mọi request.
-- Webhook công khai (VietQR/HĐĐT) nhận diện tenant bằng `bankaccount`/`terminalCode`/`tenant_code`, không bằng session.
-
-### 3.3 Thực thi cách ly
-- **Lớp repository:** mọi câu lệnh tự chèn `WHERE tenant_id = $tenantId`; cấm truy vấn thô không qua lớp này.
-- **RLS:** `CREATE POLICY tenant_isolation USING (tenant_id = current_setting('app.tenant_id')::int)`; trước mỗi request đặt `SET app.tenant_id`.
-- **Test cách ly:** bộ test bắt buộc — tài khoản tenant A gọi mọi API không được thấy dữ liệu tenant B (kể cả truy cập theo `id`).
-
-### 3.4 Trạng thái tenant
-`active | trial | suspended | cancelled`. Hết hạn/trial → giới hạn tính năng (read-only hoặc chặn bán) theo gói.
+server.js                 khởi động, thứ tự middleware, lịch backup, in địa chỉ LAN
+src/
+  control.js              control DB: tenants, plans, users, sessions, audit_logs, qr_orders
+  db.js                   DB từng tenant: schema, migration cộng dồn, seed, AsyncLocalStorage
+  middleware.js           attachSession, requireAuth, tenantContext, requirePerm
+  lib/
+    auth.js               scrypt, cookie phiên
+    rbac.js               vai trò, mã quyền, kiểm tra wildcard
+    pricing.js            engine giá: bảng giá, khuyến mãi, chiết khấu, VAT
+    codes.js              sinh mã chứng từ PREFIXyyyymmdd-NNNN
+    barcode.js            sinh EAN-13 nội bộ (tiền tố 2)
+    backup.js             VACUUM INTO, xoay vòng, phục hồi theo lịch
+    vietqr.js             payload EMVCo/NAPAS + CRC16
+    xlsx.js               bộ ghi .xlsx tối giản
+    util.js               ok/fail, ApiError, wrap, ép kiểu
+  payments/vietqr.js      client VietQR (token cache, generate QR, mock)
+  routes/                 auth, users, platform, admin, catalog, sales, inventory, reports, backup, vietqr
+public/
+  index.html, style.css   khung SPA + giao diện responsive
+  js/                     app, api, store, auth, util, barcode
+  js/views/               pos, products, inventory, invoices, reports, vietqr, promotions, users, settings, platform, receipt, …
+test/                     run.sh, api.test.js, ui.test.js
+deploy/                   Caddyfile, oneclick.sh, VPS.md, nginx
+```
 
 ---
 
-## 4. Xác thực & phân quyền
+## 4. Đa tenant (multi-tenancy)
 
-### 4.1 Hai tầng
+### 4.1 Mô hình ✅
+**Database-per-tenant** trên SQLite:
 
-**Tầng nền tảng (nhà phát hành)** — `platform_users`:
+```
+DATA_DIR/
+  control.db                     dữ liệu nền tảng (dùng chung)
+  tenants/<code>/pos.db          dữ liệu nghiệp vụ của từng cửa hàng
+  tenants/<code>/backups/*.db    bản sao lưu của cửa hàng đó
+```
 
-| Vai trò | Quyền |
-|---|---|
-| Super Admin | Quản lý tenant, gói, license; xem thống kê tổng hợp |
-| Support | Xem/hỗ trợ 1 tenant khi được yêu cầu (có ghi log, có thời hạn) |
-| Billing | Thu phí, gia hạn, hóa đơn dịch vụ |
+- `code` được chuẩn hoá (`[a-z0-9_-]`, rỗng thì là `default`) trước khi ghép đường dẫn.
+- Bảng nghiệp vụ **không có cột `tenant_id`** — ranh giới cách ly là file DB.
+- Tương thích ngược: nếu có `DATA_DIR/pos.db` kiểu cũ (một cửa hàng), tự chuyển vào `tenants/default/`.
 
-**Tầng cửa hàng (tenant)** — `users`:
+### 4.2 Nhận diện tenant ✅
+- Đăng nhập tại một trang chung; `username` **duy nhất toàn hệ thống** ⇒ suy ra tenant từ `users.tenant_id`.
+- Phiên (`sessions`) lưu `tenant_id`; `attachSession` join `sessions → users → tenants`.
+- Webhook VietQR không có phiên: nhận diện tenant từ `orderId` (bảng `qr_orders`), rồi số tài khoản ngân hàng, rồi tenant trong token (xem [§10.3](#103-chiều-vào--webhook)).
 
-| Vai trò | Mô tả |
-|---|---|
-| Chủ shop (owner) | Toàn quyền trong tenant |
-| Quản lý (manager) | Bán, kho, NCC, khuyến mãi, xem lợi nhuận; không quản lý user/hệ thống |
-| Thu ngân (cashier) | Bán, treo đơn, giảm giá trong hạn mức, in; **không** thấy giá vốn/lợi nhuận, không sửa giá, không hủy HĐ |
-| Thủ kho (warehouse) | Kho, nhập hàng, kiểm kho; không bán, không tài chính |
-| Kế toán (accountant) | VAT, HĐĐT, công nợ, báo cáo; không tạo giao dịch bán |
-| Nhân viên bán hàng (sales) | Như thu ngân, hạn mức giảm giá thấp hơn |
-| Chỉ xem (viewer) | Chỉ đọc báo cáo/nhật ký |
+### 4.3 Thực thi cách ly ✅
+- `db.getTenantDb(code)` mở và cache kết nối (`Map`) cho từng tenant.
+- `db.runWith(code, fn)` dùng `AsyncLocalStorage` gắn kết nối vào ngữ cảnh request; `db.prepare/exec` luôn đi qua kết nối hiện hành.
+- Tác vụ nền (backup, báo cáo nền tảng, webhook) cũng gọi `db.runWith` tường minh.
+- ⚠️ Ngoài ngữ cảnh, `db.prepare` rơi về tenant `default` — mọi code mới phải chạy trong `runWith`.
 
-### 4.2 Mô hình RBAC
-- `permissions` (mã quyền) — ví dụ:
-  `pos.sell, pos.discount, pos.change_price, pos.return, pos.hold,`
-  `invoice.view, invoice.print, invoice.cancel, invoice.einvoice,`
-  `product.view, product.create, product.edit, product.delete, product.view_cost,`
-  `stock.view, stock.adjust, purchase.create, purchase.receive, stockcheck.do,`
-  `supplier.view, supplier.edit, payable.pay,`
-  `report.view, report.profit, report.supplier, report.export,`
-  `settings.edit, user.manage, backup.restore, einvoice.config, vietqr.config`
-- `roles` + `role_permissions` + `user_permissions` (override cộng/trừ theo user).
-- Middleware `requirePerm('product.edit')`; danh sách field nhạy cảm bị lọc ở tầng serializer nếu thiếu `*.view_cost` / `report.profit`.
-- Hạn mức giảm giá theo vai trò: `roles.max_discount_percent`, `max_discount_amount`.
-
-### 4.3 Phiên & bảo mật đăng nhập
-- Bảng `sessions(token_hash, tenant_id, user_id, ip, user_agent, expires_at, revoked_at)`.
-- Cookie `httpOnly; Secure; SameSite=Lax`; CSRF token cho thao tác ghi.
-- **PIN** cho thu ngân (đổi ca nhanh, khóa màn hình), mật khẩu đầy đủ cho quản lý.
-- Giới hạn đăng nhập sai (rate limit), tự khóa màn hình sau thời gian cấu hình.
-- 2FA (TOTP) cho tài khoản nền tảng.
-
-### 4.4 Audit log
-`audit_logs(tenant_id, user_id, action, entity, entity_id, before_json, after_json, ip, created_at)`.
-Ghi cho: hủy/điều chỉnh hóa đơn, sửa giá, điều chỉnh kho, thay đổi quyền, đăng nhập, phục hồi dữ liệu.
+### 4.4 Trạng thái & gói dịch vụ 🟡
+- `tenants.status`: `active` (mặc định) | `suspended` (chặn đăng nhập và chặn cả phiên đang mở). Giá trị khác được lưu nhưng xử lý như `active`.
+- `tenants.expires_at`: hết hạn ⇒ chặn **đăng nhập mới** (phiên đang mở vẫn dùng đến khi hết 12h).
+- `plans`: `trial` (2 user/100 SP), `standard` (5 user/2.000 SP, 200.000đ/tháng), `pro` (30 user/20.000 SP, 500.000đ/tháng). Giới hạn `max_users`, `max_products` được kiểm tra khi tạo mới. Trường `features` mới là chuỗi mô tả, chưa dùng để bật/tắt tính năng.
 
 ---
 
-## 5. Mô hình dữ liệu
+## 5. Xác thực & phân quyền
 
-### 5.1 Bảng nền tảng
+### 5.1 Hai tầng tài khoản ✅
+- **Nền tảng:** `users.tenant_id IS NULL`, `role = 'platform'` (tài khoản `root` tự tạo khi khởi động, mật khẩu từ `ROOT_PASS`). Có toàn quyền (`*`) nhưng **chỉ dùng được `/api/platform`** — bị chặn khỏi API nghiệp vụ cửa hàng.
+- **Cửa hàng:** `users.tenant_id` trỏ tới tenant; vai trò theo bảng dưới. Tài khoản chủ đầu tiên được tạo khi nền tảng tạo cửa hàng.
+
+### 5.2 Vai trò (`src/lib/rbac.js`) ✅
+| Vai trò | Tên | Quyền | Hạn mức giảm giá* |
+|---|---|---|---|
+| `owner` | Chủ cửa hàng | `*` | 100% |
+| `manager` | Quản lý | `pos.* invoice.* product.* stock.* purchase.* supplier.* report.* promo.manage backup.restore einvoice.config vietqr.config` | 100% |
+| `cashier` | Thu ngân | `pos.sell pos.hold pos.discount pos.misc invoice.view invoice.print product.view stock.view report.view` | 10% |
+| `sales` | Nhân viên bán hàng | `pos.sell pos.hold pos.misc invoice.view invoice.print product.view stock.view` | 5% |
+| `warehouse` | Thủ kho | `stock.* purchase.* supplier.view product.view report.view` | 0 |
+| `accountant` | Kế toán | `invoice.view invoice.print invoice.einvoice report.* product.view product.view_cost supplier.view einvoice.config` | 0 |
+| `viewer` | Chỉ xem | `product.view stock.view invoice.view supplier.view report.view` | 0 |
+
+\* `maxDiscount` đã khai báo nhưng **chưa được kiểm tra ở server** (⏳).
+
+**Danh mục mã quyền:**
 ```
-plans(id, code, name, price, billing_cycle, limits_json, features_json, active)
-tenants(id, code UNIQUE, name, status, plan_id, trial_ends_at, created_at)
-subscriptions(id, tenant_id, plan_id, status, started_at, current_period_end)
-platform_users(id, username UNIQUE, password_hash, full_name, role, active, last_login)
-platform_audit_logs(id, platform_user_id, action, entity, entity_id, before_json, after_json, ip, created_at)
+pos.sell pos.hold pos.discount pos.change_price pos.return pos.misc
+invoice.view invoice.print invoice.cancel invoice.einvoice
+product.view product.create product.edit product.delete product.view_cost
+stock.view stock.adjust purchase.create purchase.receive stockcheck.do
+supplier.view supplier.edit
+report.view report.profit report.supplier report.export
+promo.manage settings.edit user.manage backup.restore einvoice.config vietqr.config
 ```
 
-### 5.2 Bảng nghiệp vụ (tất cả có `tenant_id`)
+### 5.3 Cơ chế kiểm tra ✅
+- `rbac.has(list, code)`: đúng nếu danh sách chứa `*`, đúng mã, hoặc wildcard `nhóm.*`.
+- Middleware `requirePerm('product.edit')` → 401/403.
+- Lọc dữ liệu nhạy cảm:
+  - `cost_price` bị xoá khỏi response sản phẩm nếu thiếu `product.view_cost`.
+  - `profit` bị xoá khỏi `/reports/summary` và `/reports/products` nếu thiếu `report.profit`.
+- 🟡 Nhiều mã quyền mới khai báo, chưa gắn vào route (xem [§17.2](#172-khoảng-trống-đã-biết)).
+
+### 5.4 Phiên & đăng nhập ✅
+- Token ngẫu nhiên 32 byte, **chỉ lưu SHA-256** trong `sessions.token_hash`.
+- Cookie `pos_session`: `HttpOnly; SameSite=Lax; Path=/`, thêm `Secure` khi request là HTTPS. TTL **12 giờ**.
+- Đăng xuất xoá bản ghi phiên. Tài khoản bị khoá (`active=0`) mất hiệu lực ngay ở request kế tiếp.
+- Giới hạn đăng nhập sai: **10 lần / 15 phút / IP**, lưu trong bộ nhớ tiến trình (`trust proxy = 1`).
+- PIN (`users.pin_hash`) được lưu bằng scrypt; luồng đăng nhập bằng PIN/khoá màn hình ⏳.
+
+### 5.5 Nhật ký kiểm toán 🟡
+`control.audit_logs(tenant_id, user_id, username, action, entity, entity_id, detail, ip, created_at)`.
+Đang ghi: `login`, `login_failed`, `change_password`, `user.create|update|disable`, `tenant.create|update`. Chưa ghi: hủy hóa đơn, sửa giá, điều chỉnh kho, sao lưu/phục hồi (⏳).
+
+---
+
+## 6. Mô hình dữ liệu
+
+### 6.1 Quy ước
+- Tiền là **số nguyên VND** (`INTEGER`), làm tròn bằng `Math.round`.
+- Số lượng là `REAL` (hỗ trợ hàng cân). Tồn kho luôn theo **đơn vị cơ bản**: `base_qty = qty × conversion`.
+- Thời gian lưu chuỗi `datetime('now')` (UTC).
+- Xoá sản phẩm/nhà cung cấp/người dùng là **xoá mềm** (`active = 0`).
+- Mã chứng từ: `<PREFIX><YYYYMMDD>-<NNNN>` (ví dụ `HD20260928-0001`), đánh số theo ngày; an toàn nhờ Node đơn luồng và thao tác đồng bộ.
+
+### 6.2 `control.db` (dùng chung)
 ```
-users(id, tenant_id, username, password_hash, full_name, phone, email, role_id, pin_hash, active, last_login)
-roles(id, tenant_id NULL, name, is_system, max_discount_percent, max_discount_amount)
-permissions(code PK, group_name, description)
-role_permissions(role_id, permission_code)
-user_permissions(user_id, permission_code, allow)
-sessions(id, tenant_id, user_id, token_hash, ip, user_agent, expires_at, revoked_at)
-audit_logs(id, tenant_id, user_id, action, entity, entity_id, before_json, after_json, ip, created_at)
+tenants(id, code UNIQUE, name, status, plan, note, expires_at, created_at)
+plans(id, code UNIQUE, name, price, cycle, max_users, max_products, features, active)
+users(id, tenant_id NULL→platform, username UNIQUE, password_hash, full_name, phone, email,
+      role, pin_hash, active, last_login, created_at)
+sessions(token_hash PK, user_id, tenant_id, created_at, expires_at, ip, user_agent)
+audit_logs(id, tenant_id, user_id, username, action, entity, entity_id, detail, ip, created_at)
+platform_settings(key PK, value)         -- cấu hình VietQR dùng chung cho các shop chưa tự cấu hình
+control_seqs(key PK, value)              -- bộ đếm toàn cục (mã thanh toán duy nhất liên tenant)
+qr_orders(order_id PK, tenant_code, invoice_id, amount, content, bank_account, created_at)
+```
 
-settings(tenant_id, key, value, PRIMARY KEY(tenant_id, key))
+### 6.3 `pos.db` (mỗi tenant)
+```mermaid
+erDiagram
+  categories ||--o{ products : ""
+  products ||--o{ product_units : ""
+  price_lists ||--o{ price_list_items : ""
+  product_units ||--o{ price_list_items : ""
+  invoices ||--o{ invoice_items : ""
+  invoices ||--o{ invoice_payments : ""
+  invoices ||--o{ invoice_tax_lines : ""
+  invoices ||--o| invoices : "parent_id (trả hàng)"
+  suppliers ||--o{ purchases : ""
+  purchases ||--o{ purchase_items : ""
+  suppliers ||--o{ supplier_payments : ""
+  stock_checks ||--o{ stock_check_items : ""
+  products ||--o{ stock_moves : ""
+```
 
-categories(id, tenant_id, name, description, sort_order)
-products(id, tenant_id, barcode, sku, name, category_id, unit, cost_price, sell_price,
-         stock, min_stock, max_stock, location, product_type, is_weighted, allow_negative,
+```
+categories(id, name UNIQUE, description, sort_order)
+products(id, barcode UNIQUE, sku, name, category_id, unit, cost_price, sell_price, stock,
+         min_stock, max_stock, location, product_type, is_weighted, allow_negative,
          warranty_months, weight, description, image, vat_rate, active, created_at, updated_at)
-product_units(id, tenant_id, product_id, name, conversion, sell_price, barcode, is_base, sort_order)
-price_lists(id, tenant_id, name, note, is_default, sort_order)
-price_list_items(id, tenant_id, price_list_id, unit_id, price, UNIQUE(price_list_id, unit_id))
-promotions(id, tenant_id, name, kind, discount_type, discount_value, target_type, target_id,
-           min_subtotal, min_qty, start_date, end_date, priority, active, note)
+product_units(id, product_id, name, conversion, sell_price, barcode, is_base, sort_order)
+price_lists(id, name UNIQUE, note, is_default, sort_order)
+price_list_items(id, price_list_id, unit_id, price, UNIQUE(price_list_id, unit_id))
+promotions(id, name, kind[order|item], discount_type[percent|amount], discount_value,
+           target_type[all|category|product], target_id, min_subtotal, min_qty,
+           start_date, end_date, priority, active, note, created_at)
 
-suppliers(id, tenant_id, name, tax_code, contact_name, phone, address, email, note,
-          payment_terms_days, active, created_at)
-supplier_price_items(id, tenant_id, supplier_id, product_id, unit_id, price, updated_at)
-supplier_payments(id, tenant_id, supplier_id, amount, method, note, paid_at, created_at)
+invoices(id, code UNIQUE, type[sale|return], parent_id, subtotal, item_discount, order_discount,
+         discount, net_amount, vat_amount, total, payment_method, paid_amount, change_amount,
+         price_list_id, promo_order_id, payment_ref, payment_content, customer_name,
+         customer_phone, note, status[paid|pending|cancelled], created_at)
+invoice_items(id, invoice_id, product_id, name, barcode, unit_id, unit_name, conversion, qty,
+              base_qty, price, cost_price, discount, promo_id, promo_name, line_total, note)
+invoice_payments(id, invoice_id, method, amount, note, created_at)
+invoice_tax_lines(id, invoice_id, rate, taxable_amount, tax_amount)
+held_orders(id, code UNIQUE, label, cart_json, customer_name, customer_phone, note, total,
+            item_count, created_at)
 
-purchases(id, tenant_id, code, supplier_id, supplier_name, note, total, status, created_at, received_at)
-purchase_items(id, tenant_id, purchase_id, product_id, name, unit_id, unit_name, conversion,
-               qty, base_qty, cost_price, line_total, vat_rate)
-purchase_returns(id, tenant_id, code, purchase_id, supplier_id, total, note, created_at)
-purchase_return_items(..., purchase_return_id, product_id, unit_id, qty, base_qty, cost_price, line_total)
+suppliers(id, name, tax_code, contact_name, phone, address, email, note, payment_terms_days,
+          active, created_at)
+supplier_payments(id, supplier_id, amount, method, note, paid_at, created_at)
+purchases(id, code UNIQUE, supplier_id, supplier_name, note, total,
+          status[draft|received|cancelled], created_at, received_at)
+purchase_items(id, purchase_id, product_id, name, unit_id, unit_name, conversion, qty,
+               base_qty, cost_price, line_total, vat_rate)
 
-stock_checks(id, tenant_id, code, note, scope, category_id, status, diff_value, created_at, completed_at)
-stock_check_items(id, tenant_id, check_id, product_id, name, unit_name, system_qty, counted_qty, diff, cost_price, note)
-stock_moves(id, tenant_id, product_id, qty, type, ref_type, ref, unit_id, unit_name,
-            conversion, stock_after, note, created_at)
+stock_checks(id, code UNIQUE, note, scope[all|category], category_id, status[draft|completed],
+             diff_value, created_at, completed_at)
+stock_check_items(id, check_id, product_id, name, unit_name, system_qty, counted_qty, diff,
+                  cost_price, note)
+stock_moves(id, product_id, qty(±), type[init|import|adjust|sale|return|purchase|cancel|check],
+            ref_type, ref, unit_id, unit_name, conversion, stock_after, note, created_at)
 
-invoices(id, tenant_id, code, type, parent_id, subtotal, item_discount, order_discount, discount,
-         net_amount, vat_amount, gross_amount, vat_mode, total, payment_method, paid_amount,
-         change_amount, price_list_id, promo_order_id, payment_ref, customer_id,
-         customer_name, customer_phone, customer_tax_code, customer_address, note, status,
-         einvoice_status, created_at)
-invoice_items(id, tenant_id, invoice_id, product_id, name, barcode, unit_id, unit_name, conversion,
-              qty, base_qty, price, cost_price, discount, promo_id, promo_name,
-              vat_rate, vat_amount, line_total, note)
-invoice_tax_lines(id, tenant_id, invoice_id, rate, taxable_amount, tax_amount)
-invoice_payments(id, tenant_id, invoice_id, method, amount, note, created_at)
-held_orders(id, tenant_id, code, label, cart_json, customer_name, customer_phone, note, total, item_count, created_at)
-
-customers(id, tenant_id, name, phone, email, address, tax_code, price_list_id, debt_limit,
-          balance, loyalty_points, note, active)      -- dùng cho công nợ khách về sau
-customer_payments(id, tenant_id, customer_id, invoice_id, amount, method, note, paid_at)
-
-einvoices(id, tenant_id, invoice_id, provider, status, provider_invoice_no, tax_code,
-          lookup_code, template_code, serial, xml_path, pdf_path, issued_at, error, attempt_count)
-vietqr_transactions(id, tenant_id, transactionid UNIQUE, invoice_id, bank_account, amount,
-                    content, order_id, trans_type, matched, raw_json, created_at)
-
-backup_meta(id, tenant_id, name, size, location, created_at)   -- nếu sao lưu theo tenant
+vietqr_transactions(id, transactionid, invoice_id, bank_account, amount, content, order_id,
+                    trans_type[C|D], matched, note, raw_json, created_at)
+settings(key PK, value)
 ```
 
-### 5.3 Quy ước tiền & làm tròn
-- Tiền lưu **số nguyên VND** (`BIGINT`).
-- `net_amount` (chưa thuế), `vat_amount`, `gross_amount`/`total` (đã thuế).
-- Làm tròn theo quy tắc kế toán chốt: mặc định làm tròn **theo dòng** rồi cộng; cấu hình `round_scope = line | invoice`.
-- `base_qty = qty × conversion` (tồn luôn tính theo đơn vị cơ bản).
+### 6.4 Migration ✅
+Không có bảng phiên bản. Mỗi lần mở kết nối tenant, `ensureSchema` chạy:
+1. `CREATE TABLE/INDEX IF NOT EXISTS` cho toàn bộ bảng.
+2. `ensureColumn` / `ensureColumnWithDefault`: đọc `PRAGMA table_info`, `ALTER TABLE ADD COLUMN` nếu thiếu, backfill khi cần.
+3. Seed nếu trống: cài đặt mặc định, 6 danh mục, 2 bảng giá (lẻ/buôn), đơn vị cơ bản cho mọi sản phẩm. Sản phẩm & khuyến mãi mẫu chỉ cho tenant `default`.
+
+`control.db` dùng cùng cách (cộng dồn cột). Quy tắc: **chỉ thêm, không đổi tên/xoá cột**.
 
 ---
 
-## 6. VAT
+## 7. Nghiệp vụ bán hàng
 
-- `products.vat_rate` ∈ {0, 5, 8, 10} (cấu hình được).
-- **Thuế suất có hiệu lực theo thời gian:** bảng `vat_rates(rate, effective_from, effective_to)` để 8% tự về 10% sau khi hết hiệu lực.
-  - Tham chiếu hiện hành: 8% là mức giảm tạm thời, áp dụng đến hết **31/12/2026** (Nghị quyết 204/2025/QH15; Nghị định 174/2025/NĐ-CP). *Cần kế toán xác nhận.*
-- **Chế độ giá:** `vat_mode = inclusive` (giá đã gồm VAT) hoặc `exclusive`; đặt mặc định theo tenant, ghi đè theo sản phẩm.
-- Tính toán:
-  - inclusive: `net = round(gross / (1 + rate/100))`, `vat = gross − net`.
-  - exclusive: `vat = round(net × rate/100)`, `gross = net + vat`.
-- `invoice_tax_lines` tách theo từng mức thuế (bắt buộc khi hóa đơn nhiều mức).
-- Báo cáo: bảng kê **mua vào / bán ra** theo thuế suất, tổng VAT đầu vào/đầu ra, đối chiếu, phụ lục giảm thuế.
-- Hóa đơn in/hóa đơn điện tử hiển thị cột: Thành tiền (chưa thuế) – Thuế suất – Tiền thuế – Tổng.
-
----
-
-## 7. Hóa đơn điện tử
-
-### 7.1 Nguyên tắc pháp lý
-Phần mềm **không tự phát hành** hóa đơn; phải qua **nhà cung cấp được cấp phép** + **chữ ký số** + **đăng ký mẫu/ký hiệu** với cơ quan thuế. Loại áp dụng cho POS: **hóa đơn điện tử khởi tạo từ máy tính tiền**.
-> Tham chiếu: **Thông tư 91/2026/TT-BTC**, **Nghị định 254/2026/NĐ-CP**, ký hiệu hóa đơn theo **Thông tư 32/2025/TT-BTC**. *Cần kế toán/nhà cung cấp xác nhận.*
-
-### 7.2 Adapter
-```js
-// src/einvoice/index.js
-interface EInvoiceProvider {
-  issue(invoice): { providerInvoiceNo, taxCode, lookupCode, xml, pdf }
-  adjust(original, adjustment): {...}
-  replace(original, replacement): {...}
-  cancel(einvoice, reason): {...}
-  getStatus(einvoice): { status, ... }
-  downloadFiles(einvoice): { xml, pdf }
-}
-```
-```
-src/einvoice/
-  index.js            # chọn provider theo cấu hình tenant
-  providers/misa.js
-  providers/viettel.js
-  providers/vnpt.js
-  providers/bkav.js
+### 7.1 Luồng POS (F1) ✅
+```mermaid
+sequenceDiagram
+  participant U as Thu ngân
+  participant P as POS (pos.js)
+  participant A as API
+  U->>P: Quét mã / gõ tên (Enter)
+  P->>A: GET /products/barcode/:code
+  P->>A: POST /checkout/preview (giỏ hàng)
+  A-->>P: giá, khuyến mãi, VAT, cảnh báo tồn
+  U->>P: Thanh toán (tiền mặt / chuyển khoản / hỗn hợp)
+  P->>A: POST /invoices
+  A-->>P: hóa đơn (paid hoặc pending)
+  alt chuyển khoản
+    P->>A: POST /invoices/:id/vietqr → hiện QR
+    loop mỗi 3s
+      P->>A: GET /invoices/:id/payment-status
+    end
+  end
+  P->>U: In hóa đơn (window.print)
 ```
 
-### 7.3 Cấu hình theo tenant
-`settings`: `einvoice_provider`, `einvoice_env`, `einvoice_tax_code`, `einvoice_username`, `einvoice_password_enc`, `einvoice_template_code`, `einvoice_serial`, `einvoice_sign_mode` (hsm/usb/remote), thông tin ký số.
-Thông tin đăng nhập **mã hóa khi lưu**, giải mã chỉ trong lúc gọi API.
+- **Treo đơn:** `held_orders` lưu nguyên giỏ (`cart_json`) để mở lại.
+- **Tra cứu mã vạch trực tuyến:** nếu không có trong kho, gọi Open Food Facts (bật/tắt bằng `online_lookup`).
+- Máy quét mã vạch dạng bàn phím (kết thúc bằng Enter) nhập vào ô `#scan-input`.
 
-### 7.4 Luồng phát hành
-1. Hoàn tất thanh toán → build payload (người mua, MST, dòng hàng, thuế suất, net/VAT/gross).
-2. Gọi provider → nhận số hóa đơn + mã tra cứu; lưu **XML + PDF**; cập nhật `invoices.einvoice_status`.
-3. Gửi email/khách hàng (tuỳ chọn); in lại khi cần.
-4. **Hàng đợi + retry** khi lỗi mạng; đánh dấu chờ phát hành nếu chưa xong.
+### 7.2 Trạng thái hóa đơn ✅
+```mermaid
+stateDiagram-v2
+  [*] --> paid: bán tiền mặt / mặc định
+  [*] --> pending: chuyển khoản + shop có TK ngân hàng
+  pending --> paid: callback VietQR khớp số tiền / "Đã nhận tiền"
+  paid --> cancelled: hủy (invoice.cancel)
+  pending --> cancelled: hủy
+```
+- **Trừ tồn ngay khi tạo hóa đơn**, kể cả `pending`. Bản ghi `invoice_payments` chỉ tạo khi `paid`.
+- **Hủy** hoàn tồn (hóa đơn bán: cộng lại; phiếu trả: trừ lại), ghi `stock_moves.type = cancel`. Không đảo bút toán thanh toán.
 
-### 7.5 Ca biên
-- Điều chỉnh/thay thế/hủy theo thời hạn luật định; liên kết hóa đơn gốc.
-- **Đổi trả hàng** ⇒ hóa đơn điều chỉnh giảm.
-- Người mua **cá nhân vs doanh nghiệp** (bắt MST/tên/địa chỉ).
-- Mất mạng: hàng đợi; nếu provider không hỗ trợ cấp số offline → cảnh báo rõ.
-- Đối soát định kỳ với provider.
-
----
-
-## 8. Thanh toán VietQR
-
-> VietQR là dịch vụ **thanh toán/biến động số dư**, **khác** hóa đơn điện tử (mục 7).
-
-### 8.1 Chiều ra – tạo QR động (server mình gọi VietQR)
-- `POST {vqr_oauth_base}/vqr/api/token_generate` — `Authorization: Basic base64(username:password)` → `access_token` (hết hạn **300s**) ⇒ **cache + tự refresh**.
-- `POST {vqr_api_base}/vqr/api/qr/generate-customer` — Bearer token. Body: `bankCode, bankAccount, userBankName, content, qrType, amount, orderId, transType, terminalCode, serviceCode, urlLink, sign`.
-- Môi trường: Test `https://dev.vietqr.org`, Prod `https://api.vietqr.org`.
-
-### 8.2 Chiều vào – webhook (mình mở cho VietQR gọi)
-Basepath cấu hình (ví dụ `/vqr`):
-- `POST /vqr/api/token_generate` — **Basic Auth do mình đặt**; trả `{ access_token, token_type:"Bearer", expires_in }` (JWT HS512 ký bằng secret nội bộ).
-- `POST /vqr/bank/api/transaction-sync` — `Authorization: Bearer <token>`; body:
-  `bankaccount, amount, transType, content, transactionid, transactiontime(ms), referencenumber, orderId, terminalCode, subTerminalCode, serviceCode, urlLink, sign`.
-  Trả `{ error:false, errorReason:null, toastMessage:"...", object:{ reftransactionid } }` (hoặc 400 khi lỗi).
-
-### 8.3 Ánh xạ & đối soát
-- `invoices.payment_ref`: **mã ngắn ≤13 ký tự** dùng làm `orderId`; `content` ≤23 ký tự, không dấu.
-- Callback → tìm `vietqr_transactions.transactionid` (idempotent) → khớp `orderId` → hóa đơn.
-- Kiểm tra `amount` = `total`; lệch → **không tự xác nhận**, đánh dấu cần kiểm tra.
-- Đúng → thêm `invoice_payments`, chuyển hóa đơn sang `paid`.
-
-### 8.4 Luồng POS
-1. Chọn "Chuyển khoản" → tạo QR động → hiển thị QR + số tiền + chờ.
-2. POS polling trạng thái (hoặc WebSocket) mỗi ~2–3s.
-3. Callback xác nhận → POS tự hiện hóa đơn. Vẫn có nút "Đã nhận tiền" thủ công dự phòng.
-4. Ghép HĐĐT: sau khi nhận tiền → tự phát hành hóa đơn điện tử (nếu bật).
-
-### 8.5 Ràng buộc đã biết
-| Ràng buộc | Xử lý |
-|---|---|
-| `content` ≤ 23 ký tự, không dấu/đặc biệt | Sinh `payment_ref` an toàn |
-| `orderId` ≤ 13 ký tự, không dấu | `payment_ref` ≤13 |
-| Token 300s | Cache + refresh |
-| Chỉ hỗ trợ MB/BIDV | Chốt ngân hàng |
-| Callback có thể trùng | `transactionid UNIQUE` + idempotent |
-| Cần URL public | Deploy public (SaaS) |
-
-### 8.6 Mô hình nhiều cửa hàng (cần chốt với VietQR)
-- **(A) Mỗi shop là merchant riêng:** tiền về TK từng shop; mỗi shop cấu hình credentials riêng; callback định tuyến theo `bankaccount` → tenant.
-- **(B) Master merchant (tổng đại lý) + điểm bán:** dùng bộ API đồng bộ tổng đại lý/điểm bán; quản lý tập trung nhưng **tiền về TK bên bạn** ⇒ cần lưu ý pháp lý trung gian thanh toán.
-
-### 8.7 Mock để kiểm thử
-Module `src/payments/vietqr/mock.js` mô phỏng `token_generate`, `generate-customer`, `transaction-callback` để test toàn bộ luồng không cần internet/credentials.
+### 7.3 Trả hàng ✅
+- Phiếu trả là một `invoices` với `type = 'return'`, `parent_id` trỏ hóa đơn gốc; dùng cùng engine giá, cộng lại tồn.
+- `invoice_payments.amount` ghi **số âm** để báo cáo theo phương thức thanh toán tự cân.
+- `GET /invoices/:id/returnable` tính số lượng còn được trả. ⚠️ Server chưa chặn trả vượt số lượng (⏳).
 
 ---
 
-## 9. Nhà cung cấp, mua hàng & công nợ
+## 8. Kho, nhà cung cấp & mua hàng
 
-- **Hồ sơ NCC:** tên, MST, người liên hệ, địa chỉ, email, điều khoản thanh toán.
-- **Bảng giá nhập** theo NCC (`supplier_price_items`) + **lịch sử giá** (từ `purchase_items`).
-- **Phiếu nhập:** nháp → nhận hàng (cập nhật tồn, giá vốn bình quân/gần nhất), hủy có hoàn tác.
-- **Trả hàng NCC** (`purchase_returns`).
-- **Công nợ NCC:** `nợ = Σ purchases.received − Σ supplier_payments`; phiếu chi; báo cáo công nợ.
-- Thống kê NCC: chi tiêu, giá nhập tăng/giảm, tỷ lệ trả hàng.
+### 8.1 Sổ kho ✅
+Mọi biến động tồn ghi `stock_moves` với `qty` có dấu, loại, chứng từ tham chiếu và `stock_after`. Tồn không được âm trừ khi `allow_negative_stock` (cài đặt) hoặc `products.allow_negative`.
 
----
+### 8.2 Giá vốn ✅
+**Giá nhập gần nhất (ghi đè), không phải bình quân gia quyền.**
+- Nhận phiếu nhập: `cost_price = round(giá nhập / conversion)` theo đơn vị cơ bản.
+- Nhập kho thủ công có kèm giá: ghi đè `cost_price`.
+- Khi bán, `cost_price` hiện hành được chụp vào `invoice_items.cost_price` để tính lợi nhuận: `line_total − cost_price × base_qty`.
 
-## 10. Thống kê & phân tích
+### 8.3 Phiếu nhập ✅
+`draft` → `received` (cộng tồn, cập nhật giá vốn) → `cancelled` (nếu đã nhận thì trừ lại tồn). Chỉ sửa/xoá khi còn `draft`.
 
-### 10.1 Dashboard theo vai trò
-- **Thu ngân:** doanh thu ca, số đơn, đơn treo, hàng bán chạy trong ca. Ẩn lợi nhuận.
-- **Quản lý:** doanh thu, tồn kho, cảnh báo, hiệu suất nhân viên, công nợ.
-- **Chủ:** lợi nhuận/biên, dòng tiền, VAT, theo SP/danh mục/NCC, đa điểm bán.
-- **Nền tảng:** số tenant, doanh thu theo gói, mức dùng, tenant hoạt động/ngưng.
+### 8.4 Kiểm kho ✅
+Tạo phiếu (toàn bộ hoặc theo danh mục) chụp `system_qty` → nhập `counted_qty` → hoàn tất: đặt tồn bằng số đếm, ghi `stock_moves.type = check`, `diff_value = Σ chênh lệch × giá vốn`.
 
-### 10.2 Phân tích
-- **ABC/Pareto**, **hàng chết/tồn lâu**, **sell-through**.
-- **Gợi ý điểm đặt hàng lại** + **dự báo nhu cầu** (moving average/mùa vụ).
-- **Phát hiện bất thường:** giảm giá bất thường, hủy HĐ nhiều, chênh lệch kiểm kho.
-- **Phân tích giỏ hàng** (mua kèm).
-- **Hiệu suất NCC**.
-
-### 10.3 Kỹ thuật
-- Bảng tổng hợp `daily_metrics` / materialized view theo tenant; cập nhật theo lịch hoặc sau mỗi hóa đơn.
-- Truy vấn báo cáo đọc bảng tổng hợp để nhanh; số liệu chi tiết tính on-demand.
-- Mọi chỉ số nhạy cảm lọc theo quyền (`report.profit`, `product.view_cost`).
+### 8.5 Nhà cung cấp & công nợ ✅
+- Hồ sơ NCC (MST, người liên hệ, điều khoản thanh toán).
+- Công nợ: `Σ purchases.total (received) − Σ supplier_payments` (`GET /suppliers/payables`).
+- ⏳ Trả hàng NCC, bảng giá nhập theo NCC.
 
 ---
 
-## 11. Bề mặt API
+## 9. Giá, khuyến mãi & VAT
 
-Giữ chữ ký hiện có để tương thích, thêm nhóm mới. Tiền tố `/api`.
+Engine `src/lib/pricing.js → priceCart()` dùng chung cho xem trước, bán và trả hàng.
 
-- **Auth:** `POST /auth/login`, `/auth/logout`, `GET /auth/me`, `POST /auth/pin`, `POST /auth/change-password`.
-- **Platform (super admin):** `/platform/tenants`, `/platform/plans`, `/platform/stats`.
-- **Users/Roles:** `/users`, `/roles`, `/permissions`, `PUT /users/:id/permissions`.
-- **Catalog:** (đã có) `/categories`, `/products`, `/products/barcode/:code`, `/barcodes/next`, `/products/barcodes/generate`, `/barcode-lookup/:code`, `/price-lists`, `/promotions`, `/units/:id`.
-- **Sales:** (đã có) `/checkout/preview`, `/held-orders`, `/invoices`, `/invoices/:id/confirm|cancel|returnable`.
-- **Inventory:** (đã có + mở rộng) `/suppliers`, `/purchases`, `/purchases/:id/receive|cancel`, `/purchase-returns`, `/stock-checks`, `/stock/moves`, `/stock/summary`.
-- **VAT/E-invoice:** `/einvoices/:invoiceId/issue|adjust|replace|cancel|download`, `/einvoice/config`.
-- **VietQR:** `GET /vietqr/config`; webhook tách basepath: `/vqr/api/token_generate`, `/vqr/bank/api/transaction-sync`; `GET /invoices/:id/payment-status`.
-- **Reports:** (đã có + mở rộng) `/reports/summary|products|categories|inventory|slow-moving|purchases|vat`.
-- **Admin:** `/settings`, `/info`, `/backups`, `/backup/now`, `/backups/:name/download|restore`.
+### 9.1 Giá dòng
+Thứ tự ưu tiên: giá nhập tay trên dòng → giá theo **bảng giá** (`price_list_items`, theo đơn vị) → `sell_price` của đơn vị. `gross = round(price × qty)`.
 
----
+### 9.2 Khuyến mãi
+- Chỉ lấy khuyến mãi `active = 1` trong khoảng ngày, sắp theo `priority DESC`.
+- **Theo mặt hàng** (`kind = item`): phạm vi tất cả/danh mục/sản phẩm, điều kiện `min_qty`; chọn khuyến mãi có `discount_value` lớn nhất (hoà thì theo `priority`). Phần trăm trên `gross` hoặc số tiền × số lượng; kẹp trong `[0, gross]`.
+- **Theo đơn** (`kind = order`): điều kiện `min_subtotal`; chọn mức giảm thực tế lớn nhất.
+- Giảm giá tay trên dòng thay thế khuyến mãi mặt hàng; giảm giá tay trên đơn cộng với khuyến mãi đơn, tổng không vượt tạm tính.
 
-## 12. Kiến trúc frontend
-
-- Giữ ES modules, không build. Bổ sung: `js/auth.js`, `js/views/users.js`, `js/views/suppliers.js`, `js/views/einvoice-config.js`, `js/views/platform.js`.
-- **Điều hướng theo quyền:** ẩn/hiện menu & nút dựa trên danh sách quyền trả từ `/auth/me`; nhưng **server vẫn là nơi quyết định**.
-- POS chuyển khoản: hiển thị QR động + trạng thái chờ + tự cập nhật khi callback.
-- Màn hình cấu hình: tài khoản/ký số HĐĐT, VietQR, gói dịch vụ.
+### 9.3 VAT ✅
+- Cài đặt tenant: `vat_mode` = `inclusive` (mặc định, giá đã gồm thuế) | `exclusive`; `vat_default_rate`. Sản phẩm ghi đè bằng `products.vat_rate`.
+- Chiết khấu đơn được phân bổ theo tỷ lệ về từng dòng trước khi tính thuế.
+- inclusive: `net = round(gross / (1 + r/100))`, `vat = gross − net`.
+- exclusive: `vat = round(net × r/100)`, `total = net + vat`.
+- Kết quả tách theo thuế suất vào `invoice_tax_lines`. VAT đầu vào lấy từ `purchase_items.vat_rate`.
+- Tham chiếu: 8% là mức giảm tạm thời đến hết **31/12/2026** (NQ 204/2025/QH15; NĐ 174/2025/NĐ-CP) — *cần kế toán xác nhận*. ⏳ Bảng thuế suất có hiệu lực theo thời gian.
 
 ---
 
-## 13. Triển khai & vận hành
+## 10. Thanh toán VietQR
+
+> VietQR là dịch vụ **thanh toán / biến động số dư**, khác hóa đơn điện tử.
+
+### 10.1 Mô hình nhiều cửa hàng ✅ (đã chốt)
+**Mỗi cửa hàng là một merchant VietQR riêng**, tiền về thẳng tài khoản MB/BIDV của cửa hàng. Tất cả cửa hàng dùng **chung một URL webhook**; mỗi cửa hàng có cặp Basic Auth riêng và số tài khoản riêng để nhận diện. Cửa hàng chưa tự cấu hình thì kế thừa cấu hình VietQR của nền tảng (`platform_settings`).
+
+### 10.2 Chiều ra — tạo QR động ✅
+`src/payments/vietqr.js`:
+- `getToken`: Basic Auth tới `{base}/vqr/api/token_generate`, **cache theo tenant** (hết hạn 300s, trừ 5s dự phòng).
+- `generateQR`: Bearer tới `/vqr/api/qr/generate-customer` với `amount, orderId, content, bankCode, bankAccount, terminalCode…`.
+- Môi trường: `mock` (tự sinh QR NAPAS cục bộ, không gọi mạng) | `dev` (`https://dev.vietqr.org`) | `prod` (`https://api.vietqr.org`; bắt buộc khi `NODE_ENV=production`).
+- `payment_ref` (mã ngắn ≤13 ký tự, dạng `P##########`, duy nhất liên tenant nhờ `control_seqs`) làm `orderId`; `content` ≤23 ký tự không dấu. Ánh xạ `orderId → tenant, invoice` lưu ở `control.qr_orders`.
+
+### 10.3 Chiều vào — webhook ✅
+Mount tại `/vqr`, công khai, không dùng phiên:
+
+| Endpoint | Xác thực | Xử lý |
+|---|---|---|
+| `POST /vqr/api/token_generate` | Basic Auth (cặp của từng shop hoặc `VQR_EXPOSED_USER/PASS`) | Trả `{access_token, token_type:"Bearer", expires_in:300}`; token = `base64url(payload).HMAC-SHA256` ký bằng `VQR_SECRET` |
+| `POST /vqr/bank/api/transaction-sync` | Bearer | Xác định tenant → `processPayment` → `{error, errorReason, toastMessage, object:{reftransactionid}}` |
+
+Xác định tenant theo thứ tự: `qr_orders[orderId].tenant_code` → quét tenant có `bank_account` trùng → tenant trong token.
+
+### 10.4 Đối soát (`processPayment`) ✅
+1. Đã có `vietqr_transactions.transactionid` ⇒ trả kết quả cũ (**idempotent**).
+2. Tìm hóa đơn bán: `payment_ref = orderId` → `payment_ref = content` → regex `P\d{10}` trong `orderId + content`.
+3. `amount ≠ total` ⇒ **không tự xác nhận**, lưu `matched = 0` với ghi chú "Số tiền không khớp".
+4. Khớp ⇒ hóa đơn `paid`, thêm `invoice_payments` (nếu chưa có), lưu `vietqr_transactions` kèm `raw_json`.
+
+### 10.5 Module "Giao dịch VietQR" ✅
+Gộp `qr_orders` (QR đã tạo) và `vietqr_transactions` (callback thực) thành một bảng đối soát với trạng thái `success | pending | unmatched | refund` (`trans_type = D`). Lọc theo tài khoản, trạng thái, mã tham chiếu/mã đơn/nội dung, khoảng ngày; 4 thẻ thống kê; xuất Excel. Mặc định chọn tài khoản ngân hàng của cửa hàng.
+
+### 10.6 Kiểm thử không cần VietQR ✅
+- `POST /api/vietqr/simulate`: gọi thẳng `processPayment` (mock).
+- `POST /api/vietqr/simulate-dev`: gọi Test Callback thật của VietQR (chỉ `vqr_env = dev`).
+- Cả hai bị chặn khi `NODE_ENV=production`. Postman collection trong `postman/`.
+
+---
+
+## 11. Hóa đơn điện tử
+
+**Trạng thái: ⏳ chưa có mã.** Chỉ có mã quyền `invoice.einvoice`, `einvoice.config` và chuỗi tính năng trong `plans.features`. Đánh giá tích hợp chi tiết (gap G1–G10, hạng mục T1–T10, ước lượng 12–14,5 ngày công) xem [`BAO-CAO-TICH-HOP-HOADON-DIENTU.md`](./BAO-CAO-TICH-HOP-HOADON-DIENTU.md).
+
+### 11.1 Nguyên tắc pháp lý
+Phần mềm **không tự phát hành** hóa đơn; phải qua nhà cung cấp được cấp phép + chữ ký số + đăng ký mẫu/ký hiệu. Loại áp dụng: **hóa đơn điện tử khởi tạo từ máy tính tiền** (TT 91/2026/TT-BTC, NĐ 254/2026/NĐ-CP, ký hiệu theo TT 32/2025/TT-BTC — *cần kế toán xác nhận*).
+
+### 11.2 Thiết kế dự kiến
+- **Adapter** `src/einvoice/` với interface `issue / adjust / replace / cancel / getStatus / downloadFiles`; chọn provider theo cài đặt tenant. Ứng viên đầu tiên: Tingo Pay/VietQR (tái sử dụng hạ tầng `token_generate` + webhook sẵn có, thêm `invoice-sync`).
+- Dữ liệu cần thêm: bảng `einvoices(invoice_id, provider, status, provider_invoice_no, lookup_code, template_code, serial, xml_path, pdf_path, issued_at, error, attempt_count)`; cột `invoices.einvoice_status`; thông tin người mua (MST, địa chỉ).
+- Luồng: thanh toán xong → dựng payload (người mua, dòng hàng, thuế suất, net/VAT/gross) → gọi provider → lưu số HĐ, mã tra cứu, XML/PDF → **hàng đợi + retry** khi lỗi mạng.
+- Ca biên: điều chỉnh/thay thế/hủy liên kết hóa đơn gốc; trả hàng ⇒ hóa đơn điều chỉnh giảm; người mua cá nhân vs doanh nghiệp.
+- Thông tin đăng nhập provider **mã hoá khi lưu**.
+
+---
+
+## 12. Báo cáo & phân tích
+
+| Báo cáo | Endpoint | Nội dung |
+|---|---|---|
+| Tổng quan | `/reports/summary` | Doanh thu, số đơn, lợi nhuận*, theo ngày/giờ/phương thức, top SP, theo danh mục |
+| Sản phẩm | `/reports/products` | Số lượng, doanh thu, lợi nhuận* theo SP |
+| Tồn kho | `/reports/inventory`, `/reports/slow-moving` | Giá trị tồn, hàng sắp hết, hàng chậm bán |
+| Mua hàng | `/reports/purchases` | Theo NCC |
+| VAT | `/reports/vat` | Thuế đầu ra (`invoice_tax_lines`) và đầu vào (`purchase_items`) theo thuế suất |
+| Phân tích | `/reports/analytics` | ABC/Pareto, gợi ý đặt hàng lại, phân tích giỏ (mua kèm), giảm giá bất thường, số HĐ hủy |
+| VietQR | `/reports/vietqr`, `/reconcile/export` | Doanh thu chuyển khoản, đối soát |
+| Xuất Excel | `/reports/export?type=sales|products|inventory` | `.xlsx` |
+
+\* Chỉ hiển thị khi có `report.profit`. Phiếu trả được tính âm trong mọi tổng hợp.
+
+Tính toán trực tiếp bằng SQL trên DB tenant (chưa có bảng tổng hợp). Nền tảng có `/api/platform/reports` tổng hợp mọi tenant qua `db.runWith`.
+
+---
+
+## 13. Sao lưu & phục hồi
+
+- **Sao lưu:** `VACUUM INTO` (ảnh chụp nhất quán, không dừng ghi) vào `tenants/<code>/backups/pos-YYYYMMDD-HHMMSS.db`.
+- **Lịch:** 4 giây sau khởi động rồi **mỗi 6 giờ**, cho từng tenant có `backup_enabled ≠ 0`; giữ `backup_keep` bản gần nhất (mặc định 30). Tắt toàn bộ bằng `NO_BACKUP=1`.
+- **Thủ công:** tạo, tải, xoá, phục hồi qua `/api/backups…`.
+- **Phục hồi theo lịch:** kiểm tra tên file hợp lệ + header `SQLite format 3`, chép thành `restore.pending`; lần mở DB kế tiếp (sau khởi động lại) đổi `pos.db` cũ thành `pos.db.before-restore-<stamp>` rồi đưa bản phục hồi vào.
+- Mức hạ tầng: sao lưu volume Docker `/data` (xem `deploy/VPS.md`). ⏳ Sao lưu offsite tự động.
+
+---
+
+## 14. Bề mặt API
+
+Tiền tố `/api`, JSON `{ok:true, data}` hoặc `{ok:false, error}`. Cột "Quyền" để trống nghĩa là chỉ cần đăng nhập vào cửa hàng.
+
+**Công khai:** `GET /health`; `/auth`: `POST login` (giới hạn tần suất), `POST logout`, `GET me`, `POST change-password`.
+
+**Nền tảng** (`/platform`, chỉ `role=platform`): `GET plans`, `GET|POST tenants`, `PUT tenants/:id`, `GET users`, `GET stats`, `GET reports`, `GET|PUT vietqr`.
+
+| Nhóm | Endpoint | Quyền |
+|---|---|---|
+| Người dùng | `GET /roles`, `GET|POST /users`, `PUT|DELETE /users/:id` | `user.manage` |
+| Cài đặt | `GET /settings` · `PUT /settings` | — · `settings.edit` |
+| Hệ thống | `GET /info`, `/info/qr`, `/qr` | — |
+| Khuyến mãi | `GET /promotions` · `POST`, `PUT|DELETE /:id` | — · `promo.manage` |
+| Danh mục | `GET /categories` · `POST`, `PUT|DELETE /:id` | — · `product.edit` |
+| Sản phẩm | `GET /products`, `/products/:id`, `/products/barcode/:code`, `/products/:id/moves`, `/products/:id/units` | — |
+| | `POST /products` · `PUT /products/:id`, `POST /:id/restore` · `DELETE /:id` | `product.create` · `product.edit` · `product.delete` |
+| | `POST /products/:id/stock` | `stock.adjust` |
+| | `POST /products/:id/units`, `PUT|DELETE /units/:id`, `POST /products/barcodes/generate` | `product.edit` |
+| Mã vạch | `GET /barcodes/next`, `GET /barcode-lookup/:code` | — |
+| Bảng giá | `GET /price-lists`, `/price-lists/:id/items` · `POST`, `PUT|DELETE /:id`, `PUT /:id/items` | — · `settings.edit` |
+| Bán hàng | `POST /checkout/preview`, `GET|POST /held-orders`, `GET|DELETE /held-orders/:id` | — |
+| | `POST /invoices` | `pos.sell` |
+| | `GET /invoices`, `/invoices/:id`, `/invoices/:id/returnable`, `POST /invoices/:id/confirm` | — |
+| | `POST /invoices/:id/cancel` | `invoice.cancel` |
+| NCC | `GET|POST /suppliers`, `GET /suppliers/payables`, `PUT|DELETE /suppliers/:id`, `GET|POST /suppliers/:id/payments`, `DELETE /supplier-payments/:id` | — ⚠️ |
+| Nhập hàng | `GET|POST /purchases`, `GET|PUT|DELETE /purchases/:id`, `POST /purchases/:id/receive|cancel` | — ⚠️ |
+| Kiểm kho | `GET|POST /stock-checks`, `GET|PUT|DELETE /stock-checks/:id`, `POST /stock-checks/:id/complete` | — ⚠️ |
+| Sổ kho | `GET /stock/moves`, `/stock/summary` | — |
+| Báo cáo | `GET /reports/summary|products|inventory|slow-moving|purchases|vat|export` | — (lọc lợi nhuận theo `report.profit`) |
+| | `GET /reports/analytics`, `/reports/vietqr` | `report.view` |
+| | `GET /reports/vietqr/export`, `/reports/vietqr/reconcile/export` | `report.export` |
+| Sao lưu | `GET /backups`, `POST /backup/now`, `GET /backups/:name/download`, `DELETE /backups/:name`, `POST /backups/:name/restore` | — ⚠️ |
+| VietQR | `GET /vietqr/config` | — |
+| | `POST /invoices/:id/vietqr`, `GET /invoices/:id/payment-status` | `invoice.view` |
+| | `POST /vietqr/test` | `settings.edit` |
+| | `POST /vietqr/simulate`, `/vietqr/simulate-dev` (không chạy ở production) | `pos.sell` |
+| | `GET /vietqr/transactions` · `/vietqr/transactions/export` | `report.view` · `report.export` |
+
+⚠️ = thiếu kiểm tra quyền, nằm trong kế hoạch gia cố ([§17.2](#172-khoảng-trống-đã-biết)).
+
+**Webhook** (ngoài `/api`): `POST /vqr/api/token_generate`, `POST /vqr/bank/api/transaction-sync`.
+
+---
+
+## 15. Kiến trúc frontend
+
+- **SPA không build:** `index.html` nạp `js/app.js` (`type="module"`). Khung gồm màn hình đăng nhập, sidebar, topbar mobile, vùng `main`, `#modal`, `#toast`, `#print-area`.
+- **Điều hướng:** mảng `VIEWS` trong `app.js`, mỗi mục có `perm`; menu chỉ hiện mục người dùng có quyền (server vẫn là nơi quyết định). View được mount lười ở lần mở đầu. Báo cáo là submenu: Tổng quan, Sản phẩm, Thuế VAT, Phân tích thông minh, Giao dịch VietQR.
+- **Phím tắt:** F1 Bán hàng, F2 Sản phẩm, F3 Kho, F4 Hóa đơn, F5 Báo cáo, F6 Khuyến mãi; view có thể chặn phím qua `onKey`.
+- **Tầng dữ liệu:** `api.js` (bọc `fetch`, phát sự kiện `auth:required` khi 401), `store.js` (trạng thái chung: cài đặt, danh mục, bảng giá, khuyến mãi), `auth.js` (`can(perm)` hỗ trợ wildcard).
+- **View chính:** `pos`, `products` (+ `product-form`, `price-lists`, `labels`), `inventory`, `invoices`, `reports`, `vietqr`, `promotions`, `users`, `settings`, `platform` (chỉ quản trị nền tảng), `lan` (địa chỉ LAN + QR).
+- **In ấn:** `receipt.js` dựng HTML hóa đơn nhiệt (khổ `receipt_width`), `printHTML` chèn vào `#print-area` và gọi `window.print()`; CSS `@media print` chỉ hiện vùng in. Tem mã vạch vẽ SVG (EAN-13/Code128) bằng `js/barcode.js`.
+- **Giao diện:** CSS thuần với biến `:root`, responsive desktop + mobile.
+
+---
+
+## 16. Triển khai & vận hành
 
 ```
-Internet ── Nginx (SSL, rate limit) ── Node/Express ── PostgreSQL
-                                        └─ Redis (cache/queue)
+Internet ── Caddy (HTTPS tự động, gzip) ── app:3000 (Node) ── volume /data (SQLite)
 ```
-- **Docker Compose:** `app`, `db`, `nginx`, `redis`.
-- **Biến môi trường:** `DATABASE_URL`, `SESSION_SECRET`, `ENCRYPTION_KEY`, `VQR_*`, `EINVOICE_*`, `PUBLIC_URL`.
-- **Backup:** `pg_dump` hằng ngày + lưu offsite; PITR bật WAL archive. Diễn tập restore định kỳ.
-- **Monitoring:** health check, log (xoay vòng/Pino), error tracking (Sentry), cảnh báo.
-- **Scale:** Node stateless (session trong DB/Redis) → chạy nhiều instance sau Nginx; Postgres read-replica khi cần.
-- **Cập nhật:** blue-green/rolling; migration có version; backup trước deploy.
+
+| Chế độ | File | Ghi chú |
+|---|---|---|
+| LAN / dev | `start.sh`, `docker-compose.yml` | Cổng 3000, không cần internet |
+| VPS + Caddy | `docker-compose.prod.yml`, `deploy/Caddyfile` | Cổng 80/443, SSL tự động |
+| VPS + Nginx sẵn có | `docker-compose.vps.yml`, `deploy/nginx-add-site.sh` | App bind `127.0.0.1:3005` |
+| Cài một lệnh | `deploy/oneclick.sh` | Sinh `.env` với secret ngẫu nhiên, chờ `/api/health`, in URL webhook VietQR |
+
+**Biến môi trường:** `PORT`, `HOST`, `DATA_DIR`, `NODE_ENV`, `NO_BACKUP`, `SHOP_NAME`, `ADMIN_PASS`, `ROOT_PASS`, `VQR_SECRET`, `VQR_EXPOSED_USER`, `VQR_EXPOSED_PASS`.
+
+**Vận hành:**
+- Health check: `GET /api/health` (chưa khai báo `HEALTHCHECK` trong Docker — ⏳).
+- Log: stdout của container.
+- Scale: **một tiến trình** (cache kết nối SQLite, rate limit và token cache nằm trong bộ nhớ). Mở rộng theo chiều dọc; muốn nhiều instance cần chuyển DB/phiên ra ngoài (xem §19).
+- Cập nhật: build lại image, migration tự chạy khi mở DB; nên sao lưu volume trước khi cập nhật.
 
 ---
 
-## 14. Bảo mật
+## 17. Bảo mật
 
+### 17.1 Kiểm soát hiện có
 | Nguy cơ | Kiểm soát |
 |---|---|
-| Rò rỉ dữ liệu tenant | `tenant_id` + RLS + repository + test cách ly |
-| Leo thang quyền | RBAC ở server; kiểm tra quyền mọi endpoint; audit |
-| Lộ credentials HĐĐT/VietQR | Mã hóa khi lưu; không log; tách theo tenant |
-| Callback giả mạo | Basic + Bearer token + chữ ký `sign` + IP allowlist; idempotent |
-| CSRF/XSS | Cookie `SameSite`, CSRF token, escape output |
-| Brute force | Rate limit đăng nhập, khóa tạm, 2FA admin |
-| Mất dữ liệu | Backup + PITR + diễn tập restore |
-| SQL injection | Tham số hoá truy vấn, không nối chuỗi |
+| Rò rỉ dữ liệu giữa cửa hàng | DB riêng từng tenant + `AsyncLocalStorage`; chuẩn hoá `code` khi ghép đường dẫn |
+| Đánh cắp phiên | Cookie `HttpOnly`, `SameSite=Lax`, `Secure` trên HTTPS; chỉ lưu hash token; TTL 12h |
+| Lộ mật khẩu | scrypt + salt, so sánh thời gian hằng |
+| Brute force | 10 lần sai / 15 phút / IP |
+| Callback giả mạo | Basic Auth → token HMAC 300s; idempotent theo `transactionid`; lệch số tiền không tự xác nhận |
+| Path traversal khi backup | Lọc tên file, resolve trong thư mục backups, kiểm tra header SQLite |
+| SQL injection | Luôn dùng tham số hoá |
+| Lộ giá vốn/lợi nhuận | Lọc ở server theo quyền |
+
+### 17.2 Khoảng trống đã biết
+Theo [`PLAN-HARDENING.md`](./PLAN-HARDENING.md) (điểm bảo mật hiện 4/10, mục tiêu 8/10):
+- Route `inventory` và `backup` chưa có `requirePerm`; nhiều quyền (`purchase.*`, `stockcheck.do`, `supplier.edit`, `backup.restore`, `pos.return`, `pos.change_price`) chưa gắn; `POST /invoices/:id/confirm` không cần quyền.
+- Hạn mức giảm giá theo vai trò chưa kiểm tra ở server; trả hàng chưa chặn vượt số lượng đã bán.
+- `invoice_items.cost_price` vẫn trả về trong chi tiết hóa đơn dù thiếu `product.view_cost`.
+- Secret mặc định (`VQR_SECRET`, `ROOT_PASS`, `ADMIN_PASS`) không bị chặn ở production.
+- Mật khẩu VietQR lưu dạng rõ trong `settings`.
+- Chưa có CSRF token (dựa vào `SameSite=Lax`), chưa có 2FA cho tài khoản nền tảng.
+- `tenants.expires_at` chỉ kiểm tra lúc đăng nhập; bảng `sessions` không dọn bản ghi hết hạn.
+- Nhận diện tenant cho webhook quét toàn bộ tenant (O(n)).
+- Một số chỗ gọi `fail()` không `return` (nguy cơ gửi response hai lần).
 
 ---
 
-## 15. Kiểm thử
+## 18. Kiểm thử
 
-- **API test:** giữ & mở rộng (hiện 94). Bổ sung: cách ly tenant, phân quyền, VAT, HĐĐT (mock provider), VietQR (mock), công nợ NCC.
-- **UI test (Playwright):** giữ & mở rộng (hiện 63) cho luồng đăng nhập, quyền, POS chuyển khoản chờ, cấu hình.
-- **Test cách ly tenant là bắt buộc** trong CI.
-- **Mock dịch vụ ngoài** (HĐĐT, VietQR) để test tất định, không phụ thuộc mạng.
-- **Diễn tập backup/restore** định kỳ.
-
----
-
-## 16. Chuyển đổi từ bản hiện tại
-
-1. **Viết lại lớp DB** sang PostgreSQL, giữ nguyên hình dạng API để test cũ tái sử dụng.
-2. **Thêm `tenant_id`** mọi bảng; dữ liệu đơn tenant hiện tại gán vào "tenant nền tảng" hoặc tenant mẫu.
-3. **Chuẩn hoá `settings`** thành `settings(tenant_id, key, value)`.
-4. **Bọc mọi truy vấn** qua repository chèn tenant.
-5. **Giữ tương thích endpoint** trong giai đoạn chuyển tiếp.
-6. **Backup** bản SQLite trước khi chuyển; viết script import dữ liệu cũ nếu cần.
+- `npm test` → `test/run.sh`: khởi động server ở cổng 3111 với `DATA_DIR` tạm, chạy test API rồi test UI trên dữ liệu sạch.
+- `test/api.test.js`: bộ test tự viết bằng `fetch`, cookie riêng theo vai trò — **147 assertion** (xác thực, phân quyền, cách ly tenant, bán/trả/hủy, kho, VAT, VietQR mock…).
+- `test/ui.test.js`: Playwright Chromium — **78 assertion** (luồng POS, menu theo quyền, module VietQR, viewport mobile).
+- Dịch vụ ngoài được mock (VietQR `env=mock`, `simulate`) để test tất định, không cần mạng.
 
 ---
 
-## 17. Phụ lục
+## 19. Hạn chế đã biết & hướng phát triển
 
-### 17.1 Khoá cấu hình (settings) tiêu biểu
-`shop_name, shop_address, shop_phone, shop_tax_code, invoice_prefix, return_prefix, purchase_prefix, stockcheck_prefix, currency, default_price_list_id, allow_negative_stock, low_stock_alert, print_after_pay, label_*, online_lookup, lookup_url, backup_enabled, backup_keep,`
-`vat_mode, vat_rate_default, round_scope,`
-`einvoice_provider, einvoice_env, einvoice_tax_code, einvoice_username, einvoice_password_enc, einvoice_template_code, einvoice_serial, einvoice_sign_mode,`
-`vqr_env, vqr_api_base, vqr_oauth_base, vqr_username, vqr_password, vqr_bank_code, vqr_bank_account, vqr_account_holder, vqr_terminal_code, vqr_exposed_username, vqr_exposed_password_hash, vqr_secret_key`.
+| Hạng mục | Hiện trạng | Hướng xử lý |
+|---|---|---|
+| CSDL | SQLite mỗi tenant, một tiến trình | Giữ khi số tenant/lượng ghi còn nhỏ. Khi cần nhiều instance: PostgreSQL (shared schema + `tenant_id` + RLS) hoặc giữ DB-per-tenant và tách tiến trình theo nhóm tenant |
+| Trạng thái trong bộ nhớ | Rate limit, token VietQR, cache kết nối | Redis nếu chạy nhiều instance |
+| Giá vốn | Giá nhập gần nhất | Tuỳ chọn bình quân gia quyền |
+| Gói dịch vụ | Giới hạn user/SP | Bật/tắt tính năng theo `features`, thanh toán thuê bao |
+| Hóa đơn điện tử | Chưa có | Theo [§11](#11-hóa-đơn-điện-tử) |
+| Khách hàng & công nợ khách | Chỉ lưu tên/SĐT trên hóa đơn | Bảng `customers`, `customer_payments`, tích điểm |
+| Báo cáo | Tính trực tiếp | Bảng tổng hợp theo ngày khi dữ liệu lớn |
+| Offline | Online-only (LAN hoặc internet) | Hàng đợi offline phía client nếu có nhu cầu |
+| Bảo mật | Xem §17.2 | Thực hiện `PLAN-HARDENING.md` |
 
-### 17.2 Thuật ngữ
+---
+
+## 20. Phụ lục
+
+### 20.1 Khoá cài đặt tenant (`settings`)
+```
+shop_name shop_address shop_phone shop_tax_code
+bank_bin bank_name bank_account account_holder
+invoice_footer invoice_prefix(HD) return_prefix(TH) purchase_prefix(PN) stockcheck_prefix(KK)
+currency(₫) default_price_list_id allow_negative_stock low_stock_alert round_total print_after_pay
+receipt_width(80) label_width(40) label_height(30) label_show_name|price|barcode|shop
+internal_barcode_seq online_lookup lookup_url backup_enabled backup_keep(30)
+vat_rate vat_mode(inclusive) vat_default_rate
+payment_ref_seq vqr_enabled vqr_env(mock) vqr_bank_code vqr_username vqr_password
+vqr_terminal_code vqr_exposed_username vqr_exposed_password vqr_secret_key vqr_mock_autopay
+```
+
+### 20.2 Mã vạch nội bộ
+EAN-13 tiền tố `2` (dùng nội bộ): `'2' + seq 11 chữ số + check digit`; bộ đếm `internal_barcode_seq`, bỏ qua mã đã tồn tại ở `products` hoặc `product_units`.
+
+### 20.3 Thuật ngữ
 - **Tenant:** một cửa hàng (đơn vị dữ liệu độc lập).
 - **RBAC:** phân quyền theo vai trò.
-- **RLS:** Row-Level Security của PostgreSQL.
 - **HĐĐT:** hóa đơn điện tử.
 - **BĐSD:** biến động số dư.
+- **Đơn vị cơ bản:** đơn vị tính tồn kho; đơn vị khác quy đổi qua `conversion`.
 
-### 17.3 Tham chiếu pháp lý (cần kế toán xác nhận)
-- VAT 2026: các mức 0/5/8/10%; 8% áp dụng đến hết **31/12/2026** (Nghị quyết 204/2025/QH15; Nghị định 174/2025/NĐ-CP).
-- Hóa đơn điện tử từ máy tính tiền: **Thông tư 91/2026/TT-BTC**, **Nghị định 254/2026/NĐ-CP**.
-- Ký hiệu hóa đơn: **Thông tư 32/2025/TT-BTC**.
+### 20.4 Tham chiếu pháp lý (cần kế toán xác nhận)
+- VAT 2026: 0/5/8/10%; 8% đến hết **31/12/2026** (NQ 204/2025/QH15; NĐ 174/2025/NĐ-CP).
+- HĐĐT từ máy tính tiền: TT 91/2026/TT-BTC, NĐ 254/2026/NĐ-CP. Ký hiệu hóa đơn: TT 32/2025/TT-BTC.
 
-### 17.4 Tham chiếu VietQR
-- Tài liệu: `https://api.vietqr.vn/vi/...` (bản markdown thêm `.md`); khai báo merchant: `https://vietqr.vn/merchant/request`.
-- Endpoint Test: `https://dev.vietqr.org`; Prod: `https://api.vietqr.org`.
-- Hỗ trợ liên kết ngân hàng hiện tại: **MB, BIDV**.
+### 20.5 Tham chiếu VietQR
+- Tài liệu API: `https://api.vietqr.vn/vi/...`; đăng ký merchant: `https://vietqr.vn/merchant/request`.
+- Test: `https://dev.vietqr.org`; Prod: `https://api.vietqr.org`. Ngân hàng hỗ trợ: **MB, BIDV**.
+- Hướng dẫn nội bộ: [`VIETQR-REGISTER.md`](./VIETQR-REGISTER.md), [`VIETQR-MANUAL.md`](./VIETQR-MANUAL.md), [`VIETQR-MANUAL-DEV.md`](./VIETQR-MANUAL-DEV.md), [`VIETQR-POSTMAN.md`](./VIETQR-POSTMAN.md).
