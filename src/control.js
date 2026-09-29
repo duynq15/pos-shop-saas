@@ -135,9 +135,17 @@ if (!controlColumns('tenants').includes('community_id')) control.exec('ALTER TAB
 for (const [col, def] of [['contact_name', 'TEXT'], ['contact_phone', 'TEXT'], ['note', 'TEXT'], ['settings', "TEXT NOT NULL DEFAULT '{}'"]]) {
   if (!controlColumns('communities').includes(col)) control.exec(`ALTER TABLE communities ADD COLUMN ${col} ${def}`);
 }
+// Loại mẫu chỉ nạp cho DB mới; root thêm / sửa / xóa loại ở màn Nền tảng
 if (!control.prepare('SELECT COUNT(*) c FROM community_types').get().c) {
-  control.prepare('INSERT INTO community_types(code,name,approver_label,leader_label,sort_order) VALUES (?,?,?,?,?)')
-    .run('village', 'Thôn', 'Trưởng thôn', 'Ban lãnh đạo thôn', 1);
+  const ins = control.prepare('INSERT INTO community_types(code,name,approver_label,leader_label,sort_order) VALUES (?,?,?,?,?)');
+  [
+    ['village', 'Thôn', 'Trưởng thôn', 'Ban lãnh đạo thôn'],
+    ['residential-group', 'Tổ dân phố', 'Tổ trưởng', 'Ban điều hành tổ dân phố'],
+    ['parish', 'Giáo xứ', 'Cha xứ', 'Hội đồng giáo xứ'],
+    ['pagoda', 'Chùa', 'Trụ trì', 'Ban hộ tự'],
+    ['market', 'Chợ', 'Trưởng ban quản lý chợ', 'Ban quản lý chợ'],
+    ['association', 'Hội nhóm', 'Chủ nhiệm', 'Ban chấp hành'],
+  ].forEach((t, i) => ins.run(...t, i + 1));
 }
 for (const [col, def] of [['amount', 'INTEGER'], ['content', 'TEXT'], ['bank_account', 'TEXT']]) {
   if (!controlColumns('qr_orders').includes(col)) control.exec(`ALTER TABLE qr_orders ADD COLUMN ${col} ${def}`);

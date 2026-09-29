@@ -308,7 +308,7 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     const root = await loginAs('root', 'root123', '#pc-body');
     const rapi = (url, body) => root.pg.evaluate(async ([u, b]) => (await fetch(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) })).json(), [url, body]);
     ok('Root sees community card', await root.pg.locator('#pc-card').isVisible());
-    const cm = await rapi('/api/platform/communities', { code: 'ui-thon', name: 'Thôn UI', area: 'Xã UI' });
+    const cm = await rapi('/api/platform/communities', { code: 'ui-thon', name: 'Thôn UI', type: 'village', area: 'Xã UI' });
     const qt = await rapi('/api/platform/tenants', { code: 'ui-quy', name: 'Quỹ thôn UI', kind: 'community', community_id: cm.data.id, owner_username: 'uiquy', owner_password: 'uiquy123' });
     await root.pg.evaluate(() => window.showView('platform')); await root.pg.waitForTimeout(200);
     await root.pg.reload(); await root.pg.waitForSelector('#pc-body tr[data-id]'); await root.pg.waitForTimeout(500);

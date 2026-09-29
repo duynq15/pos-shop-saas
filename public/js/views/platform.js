@@ -7,7 +7,7 @@ let plans = [];
 let communities = [];
 let communityTypes = [];
 
-// Nhãn theo loại (GĐ1.5, NFR-05). Thôn là một loại cộng đồng (quyết định 0.9).
+// Nhãn theo loại tenant (GĐ1.5). Loại cộng đồng lấy từ /community-types (GĐ1.6)
 const KIND_LABEL = { shop: 'Cửa hàng', seller: 'Người bán', community: 'Sổ quỹ cộng đồng' };
 const statusBadge = (s) => (s === 'active' ? '<span class="badge paid">Hoạt động</span>' : '<span class="badge cancelled">Tạm ngưng</span>');
 const communityName = (id) => communities.find((c) => c.id === id)?.name || '';
@@ -55,7 +55,7 @@ export default {
   </tr></thead><tbody id="ct-body"></tbody></table></div>
 </div>
 <div class="card" style="margin-bottom:14px" id="pc-card"><div class="toolbar"><h3 style="margin:0">Cộng đồng</h3><span class="spacer"></span><button class="btn primary" id="pc-new">+ Thêm cộng đồng</button></div>
-  <p class="muted">Cộng đồng (thôn…) gom người bán và sổ quỹ. Gán cửa hàng vào cộng đồng ở form Sửa cửa hàng. Tài khoản thủ quỹ, trưởng thôn, ban lãnh đạo do chủ tenant sổ quỹ tạo trong màn Người dùng.</p>
+  <p class="muted">Cộng đồng (thôn, tổ dân phố, giáo xứ, chợ…) gom người bán và sổ quỹ. Gán cửa hàng vào cộng đồng ở form Sửa cửa hàng. Tài khoản thủ quỹ, người duyệt chi, ban lãnh đạo (nhãn theo loại cộng đồng) do chủ tenant sổ quỹ tạo trong màn Người dùng.</p>
   <div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr>
     <th>Mã</th><th>Tên</th><th>Loại</th><th>Địa bàn</th><th class="r">Số tenant</th><th>Trạng thái</th><th></th>
   </tr></thead><tbody id="pc-body"></tbody></table></div>

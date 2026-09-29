@@ -71,7 +71,7 @@ const ROLES = {
     maxDiscount: 0,
   },
   approver: {
-    name: 'Trưởng thôn / người duyệt',
+    name: 'Người duyệt chi',
     kinds: COMMUNITY_KINDS,
     perms: ['fund.view', 'fund.manage', 'fund.approve', 'community.categories', 'community.report'],
     maxDiscount: 0,

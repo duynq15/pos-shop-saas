@@ -347,10 +347,10 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
 
   // ---------- Cộng đồng (GĐ1.1–1.2, NFR-05) + chặn tài khoản chung (GĐ0.2 — BR-02, FR-05, SEC-01) ----------
   const rootJ = async (u, o) => (await req('root', u, o)).json();
-  const com = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Thôn A', area: 'Xã X' } });
+  const com = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Thôn A', type: 'village', area: 'Xã X' } });
   ok('community create (type village)', com.ok && com.data.type === 'village' && com.data.status === 'active');
-  ok('community dup code rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Trùng' } })).ok);
-  ok('community bad type rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'cho-b', name: 'Chợ B', type: 'market' } })).ok);
+  ok('community dup code rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Trùng', type: 'village' } })).ok);
+  ok('community bad type rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'cho-b', name: 'Chợ B', type: 'no-such-type' } })).ok);
   ok('community update', (await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { name: 'Thôn A mới' } })).data.name === 'Thôn A mới');
   ok('tenant bad kind rejected', !(await rootJ('/platform/tenants', { method: 'POST', body: { code: 'bad-kind', name: 'x', owner_username: 'badkind', owner_password: '123456', kind: 'xyz' } })).ok);
   ok('seller without community rejected', !(await rootJ('/platform/tenants', { method: 'POST', body: { code: 'no-com', name: 'x', owner_username: 'nocom', owner_password: '123456', kind: 'seller' } })).ok);
@@ -408,7 +408,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   // ---------- Phạm vi cộng đồng (GĐ1.4 — BR-07, BR-09, ERR-08) ----------
   const day = new Date().toISOString().slice(0, 10);
   // Cộng đồng B với người bán riêng: số của B không được lẫn vào A
-  const comB = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-b', name: 'Thôn B' } });
+  const comB = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-b', name: 'Thôn B', type: 'village' } });
   await rootJ('/platform/tenants', { method: 'POST', body: { code: 'seller-b', name: 'Người bán B', owner_username: 'sellerb', owner_password: '123456', kind: 'seller', community_id: comB.data.id } });
   await req('selb', '/auth/login', { method: 'POST', body: { username: 'sellerb', password: '123456' } });
   await req('selb', '/invoices', { method: 'POST', body: { items: [{ name: 'Gạo', price: 777000, qty: 1 }], payment_method: 'cash', paid_amount: 777000 } });
@@ -433,6 +433,8 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   // ---------- Cấu hình loại cộng đồng + CRUD cộng đồng (GĐ1.6 — NFR-05, US-13, FR-02) ----------
   const types0 = await rootJ('/platform/community-types');
   ok('community types seeded with village', types0.ok && types0.data.some((t) => t.code === 'village' && t.name === 'Thôn' && t.approver_label === 'Trưởng thôn'));
+  ok('preset community types seeded', ['village', 'residential-group', 'parish', 'pagoda', 'market', 'association'].every((c) => types0.data.some((t) => t.code === c)));
+  ok('community without type rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'no-type', name: 'Không loại' } })).ok);
   ok('non-root cannot list community types', (await req('admin', '/platform/community-types')).status === 403);
   ok('non-root cannot create community type', (await req('admin', '/platform/community-types', { method: 'POST', body: { code: 'x-type', name: 'X' } })).status === 403);
   const gx = await rootJ('/platform/community-types', { method: 'POST', body: { code: 'giao-xu', name: 'Giáo xứ', approver_label: 'Cha xứ', leader_label: 'Hội đồng giáo xứ', sort_order: 2 } });
@@ -485,7 +487,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
     && (await rootJ('/platform/tenants')).data.find((t) => t.code === 'shop-gx').community_id === null);
   const selId = members.data.find((t) => t.code === 'seller-a').id;
   ok('cannot remove seller from community', !(await rootJ('/platform/communities/' + com.data.id + '/remove-tenant', { method: 'POST', body: { tenant_id: selId } })).ok);
-  const emptyC = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-rong', name: 'Thôn rỗng' } });
+  const emptyC = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-rong', name: 'Thôn rỗng', type: 'village' } });
   ok('delete empty community', (await rootJ('/platform/communities/' + emptyC.data.id, { method: 'DELETE' })).ok
     && !(await rootJ('/platform/communities')).data.some((c) => c.code === 'thon-rong'));
   ok('non-root cannot delete community', (await req('admin', '/platform/communities/' + com.data.id, { method: 'DELETE' })).status === 403);

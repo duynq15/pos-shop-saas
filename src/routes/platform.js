@@ -102,10 +102,11 @@ router.get('/communities', wrap((req, res) => {
 router.post('/communities', wrap((req, res) => {
   const code = str(req.body.code, 30).toLowerCase();
   const name = str(req.body.name, 160);
-  const type = str(req.body.type, 30) || 'village';
+  const type = str(req.body.type, 30);
   if (!codeOk(code)) return fail(res, 'Mã cộng đồng chỉ gồm a-z, 0-9, _ , - (2–30 ký tự)');
   if (!name) return fail(res, 'Nhập tên cộng đồng');
   const ct = communityType(type);
+  if (!type) return fail(res, 'Chọn loại cộng đồng');
   if (!ct || ct.status !== 'active') return fail(res, 'Loại cộng đồng không hợp lệ hoặc đang tạm ngưng');
   if (control.prepare('SELECT id FROM communities WHERE code=?').get(code)) return fail(res, 'Mã cộng đồng đã tồn tại');
   const st = validateCommunitySettings(req.body.settings === undefined ? {} : req.body.settings, '{}');
