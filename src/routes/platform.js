@@ -125,7 +125,7 @@ router.get('/users', wrap((req, res) => {
   const rows = tid
     ? control.prepare('SELECT * FROM users WHERE tenant_id=? ORDER BY id').all(tid)
     : control.prepare('SELECT * FROM users ORDER BY tenant_id, id').all();
-  ok(res, rows.map((u) => ({ id: u.id, tenant_id: u.tenant_id, username: u.username, full_name: u.full_name, role: u.role, active: u.active, last_login: u.last_login })));
+  ok(res, rows.map((u) => ({ id: u.id, tenant_id: u.tenant_id, username: u.username, full_name: u.full_name, role: u.role, role_name: rbac.roleName(u.role), active: u.active, last_login: u.last_login })));
 }));
 
 router.get('/stats', wrap((req, res) => {

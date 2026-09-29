@@ -11,16 +11,19 @@ import promotions from './views/promotions.js';
 import usersView from './views/users.js';
 import settings from './views/settings.js';
 import platformView from './views/platform.js';
+import communityView from './views/community.js';
 
 const reportOverview = makeReportView('overview');
 const reportProducts = makeReportView('products');
 const reportVat = makeReportView('vat');
 const reportAnalytics = makeReportView('analytics');
 
+// kinds: loại tenant được thấy mục này; bỏ trống = mọi loại (GĐ1.5, NFR-05).
+const POS_KINDS = ['shop', 'seller'];
 const VIEWS = [
-  { mod: pos, perm: 'pos.sell' },
-  { mod: products, perm: 'product.view' },
-  { mod: inventory, perm: 'stock.view' },
+  { mod: pos, perm: 'pos.sell', kinds: POS_KINDS },
+  { mod: products, perm: 'product.view', kinds: POS_KINDS },
+  { mod: inventory, perm: 'stock.view', kinds: POS_KINDS },
   { mod: invoices, perm: 'invoice.view' },
   {
     mod: reportOverview, perm: 'report.view',
@@ -36,7 +39,8 @@ const VIEWS = [
   { mod: reportVat, perm: 'report.view', subOnly: true },
   { mod: reportAnalytics, perm: 'report.view', subOnly: true },
   { mod: vietqr, perm: 'report.view', subOnly: true },
-  { mod: promotions, perm: 'promo.manage' },
+  { mod: promotions, perm: 'promo.manage', kinds: POS_KINDS },
+  { mod: communityView, perm: 'community.report', kinds: ['community'] },
   { mod: usersView, perm: 'user.manage' },
   { mod: settings, perm: 'settings.edit' },
   { mod: platformView, perm: 'platform' },
@@ -52,7 +56,8 @@ const allowed = (perm) => {
   return can(perm);
 };
 
-const permFor = (id) => (VIEWS.find((v) => v.mod.id === id) || {}).perm;
+const kindOk = (kinds) => !kinds || kinds.includes(auth.tenant?.kind || 'shop');
+const entryFor = (id) => VIEWS.find((v) => v.mod.id === id) || {};
 const collapsed = new Set();
 
 function setGroup(id, open) {
@@ -70,8 +75,8 @@ function build() {
   const navList = $('#nav-list');
   navList.innerHTML = '';
   for (const entry of VIEWS) {
-    const { mod, perm, subs, subOnly } = entry;
-    if (!allowed(perm)) continue;
+    const { mod, perm, subs, subOnly, kinds } = entry;
+    if (!allowed(perm) || !kindOk(kinds)) continue;
     let sec = document.getElementById('view-' + mod.id);
     if (!sec) {
       sec = document.createElement('section');
@@ -99,7 +104,8 @@ function build() {
       wrap.className = 'nav-subs';
       wrap.id = 'subs-' + mod.id;
       for (const s of subs) {
-        if (!allowed(permFor(s.view))) continue;
+        const se = entryFor(s.view);
+        if (!allowed(se.perm) || !kindOk(se.kinds)) continue;
         const sb = document.createElement('button');
         sb.className = 'nav-sub';
         sb.dataset.subview = s.view;

@@ -4,6 +4,13 @@ import { isProd } from '../auth.js';
 
 let tenants = [];
 let plans = [];
+let communities = [];
+
+// Nhãn theo loại (GĐ1.5, NFR-05). Thôn là một loại cộng đồng (quyết định 0.9).
+const KIND_LABEL = { shop: 'Cửa hàng', seller: 'Người bán', community: 'Sổ quỹ cộng đồng' };
+const COMMUNITY_TYPE_LABEL = { village: 'Thôn' };
+const statusBadge = (s) => (s === 'active' ? '<span class="badge paid">Hoạt động</span>' : '<span class="badge cancelled">Tạm ngưng</span>');
+const communityName = (id) => communities.find((c) => c.id === id)?.name || '';
 
 export default {
   id: 'platform',
@@ -41,8 +48,14 @@ export default {
   </div>
   <div class="muted" id="pp-status" style="margin-top:6px"></div>
 </div>
+<div class="card" style="margin-bottom:14px" id="pc-card"><div class="toolbar"><h3 style="margin:0">Cộng đồng</h3><span class="spacer"></span><button class="btn primary" id="pc-new">+ Thêm cộng đồng</button></div>
+  <p class="muted">Cộng đồng (thôn…) gom người bán và sổ quỹ. Gán cửa hàng vào cộng đồng ở form Sửa cửa hàng. Tài khoản thủ quỹ, trưởng thôn, ban lãnh đạo do chủ tenant sổ quỹ tạo trong màn Người dùng.</p>
+  <div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr>
+    <th>Mã</th><th>Tên</th><th>Loại</th><th>Địa bàn</th><th class="r">Số tenant</th><th>Trạng thái</th><th></th>
+  </tr></thead><tbody id="pc-body"></tbody></table></div>
+</div>
 <div class="tbl-wrap"><table class="grid"><thead><tr>
-  <th>Mã</th><th>Tên đối tác</th><th>Khu vực</th><th>Gói</th><th class="r">Người dùng</th><th>Hết hạn</th><th>Trạng thái</th><th></th>
+  <th>Mã</th><th>Tên đối tác</th><th>Loại</th><th>Cộng đồng</th><th>Khu vực</th><th>Gói</th><th class="r">Người dùng</th><th>Hết hạn</th><th>Trạng thái</th><th></th>
 </tr></thead><tbody id="pf-body"></tbody></table></div>`;
     $('#pf-new').onclick = () => openForm(null);
     $('#pr-view').onclick = loadReport;
@@ -51,6 +64,19 @@ export default {
     $('#pp-rotate').onclick = rotatePublicReport;
     $('#pp-open').onclick = () => { const u = $('#pp-url').value; if (u) window.open(u, '_blank', 'noopener'); };
     $('#pp-copy').onclick = copyPublicLink;
+    $('#pc-new').onclick = () => openCommunity(null);
+    $('#pc-body').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-act]'); if (!btn) return;
+      const c = communities.find((x) => x.id === Number(btn.closest('tr').dataset.id));
+      if (btn.dataset.act === 'edit') openCommunity(c);
+      if (btn.dataset.act === 'toggle') {
+        const status = c.status === 'active' ? 'suspended' : 'active';
+        try {
+          await api('/api/platform/communities/' + c.id, { method: 'PUT', body: { status } });
+          toast(status === 'active' ? 'Đã mở lại' : 'Đã tạm ngưng'); load();
+        } catch (err) { toast(err.message, true); }
+      }
+    });
     $('#pf-body').addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-act]'); if (!btn) return;
       const t = tenants.find((x) => x.id === Number(btn.closest('tr').dataset.id));
@@ -156,11 +182,13 @@ async function loadReport() {
 const expired = (t) => t.expires_at && t.expires_at < new Date().toISOString().slice(0, 19).replace('T', ' ');
 
 async function load() {
-  [tenants, plans] = await Promise.all([api('/api/platform/tenants'), api('/api/platform/plans')]);
+  [tenants, plans, communities] = await Promise.all([api('/api/platform/tenants'), api('/api/platform/plans'), api('/api/platform/communities')]);
   const stats = await api('/api/platform/stats');
   $('#pf-stats').textContent = `${stats.tenants} cửa hàng · ${stats.users} người dùng · ${plans.length} gói`;
   $('#pf-body').innerHTML = tenants.map((t) => `<tr data-id="${t.id}">
     <td><code>${esc(t.code)}</code></td><td><b>${esc(t.name)}</b></td>
+    <td>${esc(KIND_LABEL[t.kind || 'shop'] || t.kind)}</td>
+    <td>${t.community_id ? esc(communityName(t.community_id)) : '<span class="muted">—</span>'}</td>
     <td>${t.area ? esc(t.area) : '<span class="muted">Ngoài khu vực</span>'}</td>
     <td>${esc(plans.find((p) => p.code === t.plan)?.name || t.plan)}</td>
     <td class="r">${t.user_count}</td>
@@ -169,7 +197,38 @@ async function load() {
     <td class="r"><button class="btn sm" data-act="users">Người dùng</button>
       <button class="btn sm" data-act="edit">Sửa</button>
       <button class="btn sm" data-act="toggle">${t.status === 'active' ? 'Tạm ngưng' : 'Mở lại'}</button></td>
-  </tr>`).join('') || '<tr><td colspan="8" class="empty">Chưa có đối tác</td></tr>';
+  </tr>`).join('') || '<tr><td colspan="10" class="empty">Chưa có đối tác</td></tr>';
+  $('#pc-body').innerHTML = communities.map((c) => `<tr data-id="${c.id}">
+    <td><code>${esc(c.code)}</code></td><td><b>${esc(c.name)}</b></td>
+    <td>${esc(COMMUNITY_TYPE_LABEL[c.type] || c.type)}</td>
+    <td>${c.area ? esc(c.area) : '<span class="muted">—</span>'}</td>
+    <td class="r">${num(c.tenant_count)}</td>
+    <td>${statusBadge(c.status)}</td>
+    <td class="r"><button class="btn sm" data-act="edit">Sửa</button>
+      <button class="btn sm" data-act="toggle">${c.status === 'active' ? 'Tạm ngưng' : 'Mở lại'}</button></td>
+  </tr>`).join('') || '<tr><td colspan="7" class="empty">Chưa có cộng đồng</td></tr>';
+}
+
+function openCommunity(c) {
+  const isNew = !c;
+  const d = c || { type: 'village' };
+  modal(`<h2>${isNew ? 'Thêm cộng đồng' : 'Sửa cộng đồng: ' + esc(d.name)}</h2>
+    <div class="form-grid">
+      ${isNew ? `<label class="fld">Mã cộng đồng *<input class="field" id="cf-code" placeholder="vd: thon-a" autocapitalize="none"></label>
+        <label class="fld">Loại<select class="field" id="cf-type">${Object.entries(COMMUNITY_TYPE_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>` : ''}
+      <label class="fld">Tên *<input class="field" id="cf-name" value="${esc(d.name || '')}"></label>
+      <label class="fld">Địa bàn<input class="field" id="cf-area" value="${esc(d.area || '')}"></label>
+    </div>
+    <div class="modal-actions"><button class="btn primary" id="cf-save">Lưu</button><button class="btn" id="cf-close">Đóng</button></div>`);
+  $('#cf-close').onclick = closeModal;
+  $('#cf-save').onclick = async () => {
+    const body = { name: $('#cf-name').value.trim(), area: $('#cf-area').value.trim() };
+    if (isNew) Object.assign(body, { code: $('#cf-code').value.trim(), type: $('#cf-type').value });
+    try {
+      await api(isNew ? '/api/platform/communities' : '/api/platform/communities/' + c.id, { method: isNew ? 'POST' : 'PUT', body });
+      toast('Đã lưu'); closeModal(); load();
+    } catch (e) { toast(e.message, true); }
+  };
 }
 
 const planOptions = (sel) => plans.map((p) => `<option value="${p.code}" ${p.code === sel ? 'selected' : ''}>${esc(p.name)} · ${p.max_users} user · ${p.max_products} SP</option>`).join('');
@@ -186,17 +245,20 @@ function openForm(t) {
         <label class="fld">Tên chủ cửa hàng<input class="field" id="tf-owner-name"></label>` : ''}
       <label class="fld">Tên đối tác *<input class="field" id="tf-name" value="${esc(d.name || '')}"></label>
       <label class="fld">Khu vực<input class="field" id="tf-area" placeholder="VD: Thôn A (để trống = ngoài khu vực)" value="${esc(d.area || '')}"></label>
+      <label class="fld">Loại<select class="field" id="tf-kind">${Object.entries(KIND_LABEL).map(([k, v]) => `<option value="${k}" ${k === (d.kind || 'shop') ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      <label class="fld">Cộng đồng<select class="field" id="tf-community"><option value="">— Không thuộc cộng đồng —</option>${communities.map((c) => `<option value="${c.id}" ${c.id === d.community_id ? 'selected' : ''}>${esc(c.name)} (${esc(c.code)})</option>`).join('')}</select></label>
       <label class="fld">Gói dịch vụ<select class="field" id="tf-plan">${planOptions(d.plan)}</select></label>
       <label class="fld">Hết hạn (để trống = không giới hạn)<input class="field" id="tf-exp" type="date" value="${d.expires_at ? esc(d.expires_at.slice(0, 10)) : ''}"></label>
       ${isNew ? '' : '<label class="fld">Trạng thái<select class="field" id="tf-status"><option value="active" ' + (d.status === 'active' ? 'selected' : '') + '>Hoạt động</option><option value="suspended" ' + (d.status !== 'active' ? 'selected' : '') + '>Tạm ngưng</option></select></label>'}
     </div>
-    <p class="muted">Mã cửa hàng chỉ gồm a-z, 0-9, gạch dưới, gạch ngang.</p>
+    <p class="muted">Người bán và sổ quỹ cộng đồng phải thuộc một cộng đồng, và phải dùng tài khoản nhận tiền riêng (BR-02). Mã cửa hàng chỉ gồm a-z, 0-9, gạch dưới, gạch ngang.</p>
     <div class="modal-actions"><button class="btn primary" id="tf-save">Lưu</button><button class="btn" id="tf-close">Đóng</button></div>`);
   $('#tf-close').onclick = closeModal;
   $('#tf-save').onclick = async () => {
     const body = {
       name: $('#tf-name').value.trim(), area: $('#tf-area').value.trim(), plan: $('#tf-plan').value,
       expires_at: $('#tf-exp').value || null,
+      kind: $('#tf-kind').value, community_id: $('#tf-community').value ? Number($('#tf-community').value) : null,
     };
     if (isNew) Object.assign(body, {
       code: $('#tf-code').value.trim(), owner_username: $('#tf-owner').value.trim(),
@@ -214,7 +276,7 @@ async function openUsers(t) {
   const rows = await api('/api/platform/users?tenant_id=' + t.id);
   modal(`<h2>Người dùng – ${esc(t.name)}</h2>
     <div class="scroll-x"><table class="line-items"><thead><tr><th>Tài khoản</th><th>Họ tên</th><th>Vai trò</th><th>Trạng thái</th></tr></thead>
-      <tbody>${rows.map((u) => `<tr><td>${esc(u.username)}</td><td>${esc(u.full_name || '')}</td><td>${esc(u.role)}</td>
+      <tbody>${rows.map((u) => `<tr><td>${esc(u.username)}</td><td>${esc(u.full_name || '')}</td><td>${esc(u.role_name || u.role)}</td>
       <td>${u.active ? 'Hoạt động' : 'Đã khóa'}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Chưa có</td></tr>'}</tbody></table></div>
     <div class="modal-actions"><button class="btn" id="pu-close">Đóng</button></div>`);
   $('#pu-close').onclick = closeModal;

@@ -291,6 +291,38 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await view('pos'); await wait(400);
     ok('No horizontal overflow 400px', !(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
     ok('Mobile topbar visible', await page.locator('.mobile-topbar').isVisible());
+
+    // ================= CỘNG ĐỒNG (GĐ1.5, NFR-05, FR-02) =================
+    const loginAs = async (user, pass, sel) => {
+      const c = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+      const pg = await c.newPage();
+      pg.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+      await pg.goto(BASE);
+      await pg.waitForSelector('#login-screen:not(.hidden)');
+      await pg.locator('#login-user').fill(user);
+      await pg.locator('#login-pass').fill(pass);
+      await pg.locator('#login-submit').click();
+      await pg.waitForSelector(sel); await pg.waitForTimeout(500);
+      return { c, pg };
+    };
+    const root = await loginAs('root', 'root123', '#pc-body');
+    const rapi = (url, body) => root.pg.evaluate(async ([u, b]) => (await fetch(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) })).json(), [url, body]);
+    ok('Root sees community card', await root.pg.locator('#pc-card').isVisible());
+    const cm = await rapi('/api/platform/communities', { code: 'ui-thon', name: 'Thôn UI', area: 'Xã UI' });
+    const qt = await rapi('/api/platform/tenants', { code: 'ui-quy', name: 'Quỹ thôn UI', kind: 'community', community_id: cm.data.id, owner_username: 'uiquy', owner_password: 'uiquy123' });
+    await root.pg.evaluate(() => window.showView('platform')); await root.pg.waitForTimeout(200);
+    await root.pg.reload(); await root.pg.waitForSelector('#pc-body tr[data-id]'); await root.pg.waitForTimeout(500);
+    ok('Community listed with tenant count', /Thôn UI/.test(await root.pg.locator('#pc-body').innerText()) && /Sổ quỹ cộng đồng/.test(await root.pg.locator('#pf-body').innerText()), qt.error || '');
+    await root.pg.locator('#pf-new').click(); await root.pg.waitForTimeout(300);
+    ok('Tenant form has kind + community selects', (await root.pg.locator('#tf-kind option').count()) === 3 && (await root.pg.locator('#tf-community option').count()) >= 2);
+    await root.c.close();
+    const quy = await loginAs('uiquy', 'uiquy123', '.nav-item[data-view]');
+    const navs = await quy.pg.locator('.nav-item[data-view]').evaluateAll((els) => els.map((x) => x.dataset.view));
+    ok('Community tenant has no POS menu', !['pos', 'products', 'inventory', 'promotions'].some((v) => navs.includes(v)), navs.join(','));
+    ok('Community tenant has community menu', navs.includes('community'));
+    await quy.pg.evaluate(() => window.showView('community')); await quy.pg.waitForTimeout(700);
+    ok('Community summary renders', (await quy.pg.locator('#cm-stats .stat').count()) === 4);
+    await quy.c.close();
   } catch (e) { R.push('EXCEPTION: ' + e.message.split('\n')[0]); }
   R.push('--- JS errors: ' + (errors.length ? errors.join(' || ') : 'none'));
   console.log(R.join('\n'));
