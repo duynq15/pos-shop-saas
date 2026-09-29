@@ -124,6 +124,25 @@ const STORES = [
 
 const DAYS = 180;
 
+// Cộng đồng mẫu (GĐ1): người bán thuộc cộng đồng dùng tài khoản ngân hàng riêng (BR-02).
+const COMMUNITIES = [
+  { code: 'thon-a', name: 'Thôn An Phú', type: 'village', area: 'Thôn A', contact: 'Ông Nguyễn Văn Hải', sellers: ['demo-taphoa'] },
+  { code: 'thon-b', name: 'Thôn Bình Minh', type: 'village', area: 'Thôn B', contact: 'Bà Trần Thị Lựu', sellers: ['demo-sieuthi', 'demo-mypham'] },
+  { code: 'cho-c', name: 'Chợ Phước Hòa', type: 'market', area: 'Thôn C', contact: 'Ông Lê Văn Tâm', sellers: ['demo-thucpham'] }
+];
+const SUPPLIERS = [
+  ['Công ty CP Hàng tiêu dùng Masan', 'Chị Thảo', 30], ['NPP Nước giải khát Suntory PepsiCo', 'Anh Khoa', 15],
+  ['Đại lý Unilever Miền Nam', 'Anh Phúc', 30], ['Kho sỉ Bình Tây', 'Cô Sáu', 0],
+  ['Công ty TNHH Gia dụng Sunhouse', 'Anh Long', 45], ['NPP Bánh kẹo Kinh Đô', 'Chị Ngân', 15]
+];
+const pw = hashPassword('demo1234');
+function addUser(tenantId, username, fullName, role) {
+  const u = control.prepare('SELECT id FROM users WHERE username=?').get(username);
+  if (u) return u.id;
+  return Number(control.prepare('INSERT INTO users(tenant_id,username,password_hash,full_name,phone,role) VALUES (?,?,?,?,?,?)')
+    .run(tenantId, username, pw, fullName, '09' + pad(hash(username) % 1e8, 8), role).lastInsertRowid);
+}
+
 /* ===================== Nạp một cửa hàng ===================== */
 function seedStore(store) {
   const exists = control.prepare('SELECT id FROM tenants WHERE code=?').get(store.code);
@@ -149,6 +168,15 @@ function seedStore(store) {
   conn.prepare('UPDATE settings SET value=? WHERE key=?').run('0900' + pad(1000000 + (hash(store.code) % 8999999), 7), 'shop_phone');
   conn.prepare('UPDATE settings SET value=? WHERE key=?').run('inclusive', 'vat_mode');
   conn.prepare('UPDATE settings SET value=? WHERE key=?').run('8', 'vat_default_rate');
+
+  // Mỗi cửa hàng một tài khoản nhận tiền riêng (BR-02), VietQR chạy chế độ mock
+  const holder = ('Chu ' + store.name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[Đđ]/g, 'D').toUpperCase();
+  for (const [k, v] of [['bank_account', '1' + pad(hash('acc' + store.code) % 1e11, 11)], ['account_holder', holder], ['vqr_enabled', '1'], ['vqr_env', 'mock']]) {
+    conn.prepare('UPDATE settings SET value=? WHERE key=?').run(v, k);
+  }
+  for (const [suffix, name, role] of [['quanly', 'Quản lý', 'manager'], ['thungan', 'Thu ngân', 'cashier'], ['thungan2', 'Thu ngân ca tối', 'cashier'], ['kho', 'Thủ kho', 'warehouse'], ['ketoan', 'Kế toán', 'accountant']]) {
+    addUser(tenantId, `${store.code}-${suffix}`, `${name} ${store.name}`, role);
+  }
 
   const existing = conn.prepare("SELECT COUNT(*) c FROM invoices").get().c;
   if (existing > 0) return { code: store.code, skipped: true, invoices: existing };
@@ -288,7 +316,141 @@ function seedStore(store) {
   }
   conn.exec('COMMIT');
 
-  return { code: store.code, name: store.name, products: pool.length, invoices: invoiceCount, returns: returnCount, items: itemCount, revenue: grossRevenue, skipped: false };
+  const extra = seedExtras(conn, pool, catIds, rnd, between, now);
+  return { ...extra, code: store.code, name: store.name, products: pool.length, invoices: invoiceCount, returns: returnCount, items: itemCount, revenue: grossRevenue, skipped: false };
+}
+
+/* ===================== NCC, nhập hàng, khuyến mãi, kiểm kho, VietQR ===================== */
+function seedExtras(conn, pool, catIds, rnd, between, now) {
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+  const daysAgo = (d) => { const t = new Date(now.getTime() - d * 86400000); t.setHours(8 + Math.floor(rnd() * 9), Math.floor(rnd() * 60), 0, 0); return t; };
+  const codeOf = (prefix, table, t) => {
+    const ymd = fmtDate(t).slice(0, 10).replace(/-/g, '');
+    return `${prefix}${ymd}-${pad(conn.prepare(`SELECT COUNT(*) c FROM ${table} WHERE code LIKE ?`).get(prefix + ymd + '%').c + 1, 4)}`;
+  };
+  conn.exec('BEGIN');
+
+  // Nhà cung cấp
+  const sups = SUPPLIERS.filter(() => rnd() < 0.8).map(([name, contact, terms]) => {
+    const r = conn.prepare('INSERT INTO suppliers(name,contact_name,phone,address,tax_code,payment_terms_days,created_at) VALUES (?,?,?,?,?,?,?)')
+      .run(name, contact, '028' + pad(hash(name) % 1e7, 7), 'KCN Tân Bình, TP.HCM', '03' + pad(hash(name) % 1e8, 8), terms, fmtDate(daysAgo(200)));
+    return { id: Number(r.lastInsertRowid), name, bought: 0 };
+  });
+
+  // Phiếu nhập: khoảng mỗi 6–11 ngày một phiếu đã nhập kho, thêm 2 phiếu nháp gần đây
+  const insPur = conn.prepare('INSERT INTO purchases(code,supplier_id,supplier_name,note,total,status,created_at,received_at) VALUES (?,?,?,?,?,?,?,?)');
+  const insPurItem = conn.prepare('INSERT INTO purchase_items(purchase_id,product_id,name,unit_name,conversion,qty,base_qty,cost_price,line_total,vat_rate) VALUES (?,?,?,?,?,?,?,?,?,?)');
+  const insMove = conn.prepare('INSERT INTO stock_moves(product_id,qty,type,ref_type,ref,unit_name,conversion,note,created_at) VALUES (?,?,?,?,?,?,?,?,?)');
+  let purchases = 0;
+  const purchase = (t, status) => {
+    const sup = pick(sups);
+    const lines = [...pool].sort(() => rnd() - 0.5).slice(0, 4 + Math.floor(rnd() * 7))
+      .map((p) => ({ p, qty: 12 * (1 + Math.floor(rnd() * 5)) }));
+    const code = codeOf('PN', 'purchases', t);
+    const total = lines.reduce((a, l) => a + l.p.cost * l.qty, 0);
+    const at = fmtDate(t);
+    const id = Number(insPur.run(code, sup.id, sup.name, status === 'draft' ? 'Chờ hàng về' : null, total, status, at, status === 'received' ? at : null).lastInsertRowid);
+    for (const { p, qty } of lines) {
+      insPurItem.run(id, p.id, p.name, p.unit, 1, qty, qty, p.cost, p.cost * qty, p.vat);
+      if (status === 'received') insMove.run(p.id, qty, 'purchase', 'purchase', code, p.unit, 1, sup.name, at);
+    }
+    if (status === 'received') sup.bought += total;
+    purchases++;
+  };
+  if (sups.length) {
+    for (let d = DAYS - 5; d > 3; d -= 6 + Math.floor(rnd() * 6)) purchase(daysAgo(d), 'received');
+    purchase(daysAgo(1), 'draft');
+    purchase(daysAgo(0), 'draft');
+    // Trả NCC 70–90% công nợ, chia 2–4 đợt; phần còn lại là công nợ phải trả
+    for (const s of sups) {
+      let left = Math.round(s.bought * between(0.7, 0.9) / 1000) * 1000;
+      const n = 2 + Math.floor(rnd() * 3);
+      for (let i = 0; i < n && left > 0; i++) {
+        const amt = i === n - 1 ? left : Math.round(left / (n - i) / 1000) * 1000;
+        const at = fmtDate(daysAgo(Math.round(DAYS - (i + 1) * DAYS / (n + 1))));
+        conn.prepare('INSERT INTO supplier_payments(supplier_id,amount,method,note,paid_at,created_at) VALUES (?,?,?,?,?,?)')
+          .run(s.id, amt, rnd() < 0.6 ? 'transfer' : 'cash', 'Thanh toán đợt ' + (i + 1), at, at);
+        left -= amt;
+      }
+    }
+  }
+
+  // Điều chỉnh tồn thủ công
+  for (let i = 0; i < 6; i++) {
+    const p = pick(pool);
+    insMove.run(p.id, -(1 + Math.floor(rnd() * 3)), 'adjust', 'adjust', null, p.unit, 1,
+      pick(['Hàng vỡ', 'Hết hạn sử dụng', 'Hao hụt', 'Bao bì hỏng']), fmtDate(daysAgo(Math.floor(rnd() * 90))));
+  }
+
+  // Khuyến mãi: 2 đang chạy, 1 sắp tới, 1 đã kết thúc
+  const day = (d) => fmtDate(new Date(now.getTime() + d * 86400000)).slice(0, 10);
+  const [cname, cid] = pick(Object.entries(catIds));
+  const star = pool.reduce((a, p) => (p.weight > a.weight ? p : a), pool[0]);
+  const insPromo = conn.prepare('INSERT INTO promotions(name,kind,discount_type,discount_value,target_type,target_id,min_subtotal,min_qty,start_date,end_date,priority,active,note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
+  insPromo.run('Giảm 5% hóa đơn từ 300.000 ₫', 'order', 'percent', 5, 'all', null, 300000, 0, day(-20), day(40), 1, 1, null);
+  insPromo.run(`Giảm 10% nhóm ${cname}`, 'item', 'percent', 10, 'category', cid, 0, 0, day(-5), day(25), 2, 1, null);
+  insPromo.run(`Mua từ 6 ${star.unit} ${star.name} giảm 2.000 ₫`, 'item', 'amount', 2000, 'product', star.id, 0, 6, day(3), day(33), 3, 1, 'Sắp diễn ra');
+  insPromo.run('Tết Nguyên Đán giảm 30.000 ₫', 'order', 'amount', 30000, 'all', null, 500000, 0, day(-150), day(-130), 0, 0, 'Đã kết thúc');
+
+  // Kiểm kho: 1 phiếu đã chốt, 1 phiếu nháp đang đếm dở
+  const insCheck = conn.prepare('INSERT INTO stock_checks(code,note,scope,status,created_at,completed_at) VALUES (?,?,?,?,?,?)');
+  const insCheckItem = conn.prepare('INSERT INTO stock_check_items(check_id,product_id,name,unit_name,system_qty,counted_qty,diff,cost_price,note) VALUES (?,?,?,?,?,?,?,?,?)');
+  for (const [age, status] of [[30, 'completed'], [0, 'draft']]) {
+    const t = daysAgo(age);
+    const id = Number(insCheck.run(codeOf('KK', 'stock_checks', t), status === 'draft' ? 'Kiểm kho cuối tháng' : 'Kiểm kho định kỳ', 'all', status, fmtDate(t), status === 'completed' ? fmtDate(t) : null).lastInsertRowid);
+    let diffValue = 0;
+    for (const p of pool.slice(0, 15)) {
+      const sys = conn.prepare('SELECT stock FROM products WHERE id=?').get(p.id).stock;
+      const counted = status === 'draft' && rnd() < 0.4 ? null : Math.max(0, sys - (rnd() < 0.25 ? 1 + Math.floor(rnd() * 3) : 0));
+      const diff = counted == null ? 0 : counted - sys;
+      diffValue += diff * p.cost;
+      insCheckItem.run(id, p.id, p.name, p.unit, sys, counted, diff, p.cost, diff ? 'Lệch khi đếm' : null);
+    }
+    conn.prepare('UPDATE stock_checks SET diff_value=? WHERE id=?').run(diffValue, id);
+  }
+
+  // Giao dịch VietQR 60 ngày gần nhất: khớp hóa đơn chuyển khoản, vài giao dịch không khớp và hoàn tiền
+  const account = conn.prepare("SELECT value FROM settings WHERE key='bank_account'").get().value;
+  const insTx = conn.prepare('INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)');
+  let txSeq = hash(account) % 1e6, txns = 0;
+  const tx = (...a) => { insTx.run('FT' + pad(txSeq++, 10), ...a); txns++; };
+  for (const inv of conn.prepare("SELECT id,total,payment_ref,created_at FROM invoices WHERE type='sale' AND status='paid' AND payment_method='transfer' AND created_at>=?").all(fmtDate(daysAgo(60)))) {
+    tx(inv.id, account, inv.total, `${inv.payment_ref} thanh toan hoa don`, inv.payment_ref, 'C', 1, null, inv.created_at);
+    if (rnd() < 0.04) tx(null, account, Math.round(inv.total * between(0.2, 1) / 1000) * 1000, 'CK chuyen tien', null, 'C', 0, 'Không tìm thấy hóa đơn', inv.created_at);
+    if (rnd() < 0.01) tx(inv.id, account, inv.total, `Hoan tien ${inv.payment_ref}`, inv.payment_ref, 'D', 1, 'Hoàn tiền cho khách', inv.created_at);
+  }
+  conn.exec('COMMIT');
+  return { suppliers: sups.length, purchases, txns };
+}
+
+/* ===================== Cộng đồng và nhân sự nền tảng ===================== */
+function seedCommunities() {
+  for (const c of COMMUNITIES) {
+    let row = control.prepare('SELECT id FROM communities WHERE code=?').get(c.code);
+    if (!row) {
+      const settings = JSON.stringify({ public_donations: c.type === 'village', unclassified_alert_days: 3 });
+      row = { id: Number(control.prepare('INSERT INTO communities(code,name,type,area,contact_name,contact_phone,note,settings) VALUES (?,?,?,?,?,?,?,?)')
+        .run(c.code, c.name, c.type, c.area, c.contact, '09' + pad(hash(c.code) % 1e8, 8), 'Dữ liệu mẫu', settings).lastInsertRowid) };
+    }
+    for (const s of c.sellers) control.prepare("UPDATE tenants SET kind='seller', community_id=? WHERE code=?").run(row.id, s);
+    // Sổ quỹ cộng đồng với 3 vai trò: thủ quỹ nhập, người duyệt, trưởng cộng đồng xem tổng hợp
+    const fundCode = 'quy-' + c.code;
+    let t = control.prepare('SELECT id FROM tenants WHERE code=?').get(fundCode);
+    if (!t) t = { id: Number(control.prepare("INSERT INTO tenants(code,name,plan,status,area,kind,community_id) VALUES (?,?,'standard','active',?,'community',?)")
+      .run(fundCode, 'Sổ quỹ ' + c.name, c.area, row.id).lastInsertRowid) };
+    db.getTenantDb(fundCode).prepare('UPDATE settings SET value=? WHERE key=?').run('Sổ quỹ ' + c.name, 'shop_name');
+    const lb = control.prepare('SELECT approver_label, leader_label FROM community_types WHERE code=?').get(c.type) || {};
+    addUser(t.id, `${c.code}-thuquy`, 'Thủ quỹ ' + c.name, 'treasurer');
+    addUser(t.id, `${c.code}-duyet`, `${lb.approver_label || 'Người duyệt'} ${c.name}`, 'approver');
+    addUser(t.id, `${c.code}-truong`, `${lb.leader_label || 'Trưởng'} ${c.name}`, 'community_leader');
+  }
+  for (const [u, name, role] of [['vanhanh', 'Nhân viên vận hành', 'platform_ops'], ['hotro', 'Nhân viên hỗ trợ', 'platform_support'],
+    ['kythuat', 'Kỹ sư VietQR', 'platform_tech'], ['ql-thon-a', 'Cán bộ phụ trách Thôn An Phú', 'platform_community']]) addUser(null, u, name, role);
+  control.prepare('INSERT OR IGNORE INTO platform_user_communities(user_id,community_id) VALUES (?,?)')
+    .run(control.prepare('SELECT id FROM users WHERE username=?').get('ql-thon-a').id, control.prepare('SELECT id FROM communities WHERE code=?').get('thon-a').id);
+  const { getPlatformSettings, setPlatformSettings } = require('../src/control');
+  if (!getPlatformSettings().public_report_token) setPlatformSettings({ public_report_enabled: '1', public_report_token: require('crypto').randomBytes(16).toString('hex') });
+  return getPlatformSettings().public_report_token;
 }
 
 /* ===================== Chạy ===================== */
@@ -298,15 +460,18 @@ console.log('  DATA_DIR: ' + DATA_DIR + '\n');
 
 const results = [];
 for (const s of STORES) results.push(seedStore(s));
+const reportToken = seedCommunities();
 
 let tProducts = 0, tInvoices = 0, tRevenue = 0, tReturns = 0;
 for (const r of results) {
   if (r.skipped) { console.log(`  • ${r.code.padEnd(18)} bỏ qua (đã có ${r.invoices} hóa đơn)`); continue; }
   tProducts += r.products; tInvoices += r.invoices; tRevenue += r.revenue; tReturns += r.returns;
-  console.log(`  • ${r.code.padEnd(18)} ${String(r.products).padStart(3)} SP · ${String(r.invoices).padStart(5)} HĐ · ${String(r.returns).padStart(4)} trả · ${money(Math.round(r.revenue)).padStart(15)}`);
+  console.log(`  • ${r.code.padEnd(18)} ${String(r.products).padStart(3)} SP · ${String(r.invoices).padStart(5)} HĐ · ${String(r.returns).padStart(4)} trả · ${String(r.purchases).padStart(3)} PN · ${String(r.txns).padStart(4)} GD QR · ${money(Math.round(r.revenue)).padStart(15)}`);
 }
 console.log('\n  ------------------------------');
 console.log(`  Tổng: ${results.filter((r) => !r.skipped).length} cửa hàng mới · ${tProducts} sản phẩm · ${tInvoices} hóa đơn · ${tReturns} phiếu trả`);
 console.log(`  Doanh thu mẫu: ${money(Math.round(tRevenue))}`);
 console.log('\n  Chạy:  DATA_DIR="' + DATA_DIR + '" npm start');
-console.log('  Rồi bật báo cáo thống kê giao dịch trong Quản trị nền tảng (tài khoản root).\n');
+console.log('  Báo cáo công khai: /r/' + reportToken);
+console.log('  Tài khoản (mật khẩu demo1234): <mã-cửa-hàng>-owner|quanly|thungan|kho|ketoan,');
+console.log('    thon-a-thuquy|duyet|truong (tương tự thon-b, cho-c), vanhanh, hotro, kythuat, ql-thon-a.\n');
