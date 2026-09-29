@@ -30,7 +30,11 @@ router.post('/backup/now', wrap((req, res) => {
 router.get('/backups/:name/download', wrap((req, res) => {
   const file = resolveBackup(db.DATA_DIR, req.params.name);
   if (!file) return fail(res, 'Không tìm thấy bản sao lưu', 404);
-  res.download(file, req.params.name);
+  // dotfiles: 'allow' — DATA_DIR có thể nằm dưới thư mục chấm (vd ~/.pos-shop);
+  // resolveBackup đã chặn tên file lạ và buộc file nằm trong backups/.
+  res.download(file, req.params.name, { dotfiles: 'allow' }, err => {
+    if (err && !res.headersSent) fail(res, 'Không tìm thấy bản sao lưu', 404);
+  });
 }));
 
 router.delete('/backups/:name', wrap((req, res) => {
