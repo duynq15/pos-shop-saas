@@ -16,6 +16,7 @@ Trạng thái:
 | 0.2 | Tenant thuộc thôn không được dùng chế độ tài khoản VietQR chung cho nhiều shop; phải có tài khoản nhận riêng. Cửa hàng thường (`kind=shop`) giữ hành vi cũ | BR-02, FR-05, SEC-01 | Chốt |
 | 0.4 | Người nhận dùng ngân hàng ngoài MB / BIDV: dùng QR chuyển khoản thường, người nhận xác nhận thủ công. Giao dịch ghi `source='manual'`, báo cáo đánh dấu riêng | FR-07, ADR-0001 | Chốt |
 | 0.5 | Code tiếp phần webhook. Tài khoản cá nhân chỉ bật nhận webhook thật khi đã lưu sự đồng ý của chủ tài khoản (ai, lúc nào). Tài khoản quỹ không cần bước này. Pháp chế xác minh song song | SEC-06 | Chốt; cần xác minh pháp lý |
+| 0.9 | Mô hình dữ liệu dùng khái niệm **cộng đồng** tổng quát, thôn là một loại (`communities.type='village'`). Bảng `communities`, cột `tenants.community_id`, `tenants.kind` gồm `shop` / `seller` / `community`, vai trò `community_leader`, quyền `community.*`. Giao diện hiện nhãn theo loại ("Thôn"). Tài liệu nghiệp vụ vẫn dùng chữ "thôn". Mục đích: nhân rộng sang tổ dân phố, giáo xứ, chùa, chợ, hội nhóm không đổi schema | NFR-05, US-13 | Chốt |
 
 ## 2. Quỹ và công đức
 
@@ -74,3 +75,5 @@ Chỉ tiêu thí điểm (kế hoạch mục 6.5), **Đề xuất**, thay bằng
 - [ ] Quy mô thôn thí điểm (số hộ, người bán, quỹ) — cần để đổi chỉ tiêu sang số tuyệt đối.
 - [ ] FR-11: một giao dịch gắn một hay nhiều hạng mục. Tạm thiết kế một hạng mục / giao dịch.
 - [ ] FR-01, SEC-03: cách đăng ký và xác thực. Tạm dùng đăng nhập hiện có của POS Shop.
+- [ ] 0.9: một tenant thuộc nhiều cộng đồng (ví dụ người bán vừa ở thôn vừa ở chợ) [NEED DECISION]. MVP: tối đa một cộng đồng / tenant.
+- [ ] 0.9: cấp cha – con giữa cộng đồng (xã → thôn → xóm). MVP chưa làm; thêm sau bằng cột `parent_id` cho phép rỗng.

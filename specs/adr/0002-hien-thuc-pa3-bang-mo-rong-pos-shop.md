@@ -2,7 +2,7 @@
 
 - **Trạng thái:** Proposed — chờ sếp duyệt
 - **Ngày:** 2026-09-29
-- **Liên quan:** ADR-0001, NFR-01, NFR-05, FR-03, FR-04, FR-05, FR-07, BR-02, SEC-01, SEC-06
+- **Liên quan:** ADR-0001, NFR-01, NFR-05, US-13, FR-03, FR-04, FR-05, FR-07, BR-02, SEC-01, SEC-06
 - **Thay thế một phần:** ADR-0001, chỉ ở ý "ứng dụng độc lập". Quyết định chọn PA3 và FR-07 phương án A (ghi nhận tự động) giữ nguyên.
 
 ## Bối cảnh
@@ -23,8 +23,8 @@ Các phương án đã xét:
 
 Chọn phương án 2: hiện thực PA3 bằng cách mở rộng POS Shop.
 
-- Thêm cấp **thôn** giữa nền tảng và cửa hàng. Mỗi tenant có `kind`: `shop` (POS đầy đủ, giữ nguyên hành vi hiện tại), `seller` (người bán nhỏ), `village` (chứa sổ quỹ của thôn).
-- Tenant thuộc thôn **không được** dùng chế độ "một tài khoản VietQR nhận tiền cho nhiều shop". Tiền phải vào thẳng tài khoản người bán / quỹ (BR-02, FR-05, SEC-01). Chặn ở mức code, có test.
+- Thêm cấp **cộng đồng** giữa nền tảng và cửa hàng; thôn là một loại cộng đồng (`communities.type='village'`), để sau này nhân rộng sang tổ dân phố, giáo xứ, chợ… không đổi schema (quyết định 0.9). Mỗi tenant có `kind`: `shop` (POS đầy đủ, giữ nguyên hành vi hiện tại), `seller` (người bán nhỏ), `community` (chứa sổ quỹ của cộng đồng).
+- Tenant thuộc cộng đồng **không được** dùng chế độ "một tài khoản VietQR nhận tiền cho nhiều shop". Tiền phải vào thẳng tài khoản người bán / quỹ (BR-02, FR-05, SEC-01). Chặn ở mức code, có test.
 - Tenant `kind=shop` giữ nguyên mọi tính năng hiện tại; toàn bộ test hiện có phải tiếp tục qua.
 
 ## Hệ quả
@@ -33,7 +33,7 @@ Tích cực:
 
 - Dùng lại QR, webhook, đối soát, phân quyền, nhật ký đang chạy; ra MVP nhanh hơn viết mới.
 - Một nền tảng cho cả cửa hàng thường và thôn; SKHG vận hành một hệ thống.
-- Cấu hình theo thôn qua bảng `villages`, không viết cứng cho thôn thí điểm (NFR-05).
+- Cấu hình theo cộng đồng qua bảng `communities`, không viết cứng cho thôn thí điểm (NFR-05).
 
 Phải chấp nhận:
 

@@ -22,22 +22,23 @@ Quy ước: mọi hạng mục ghi ID requirement trong SRS. Kích thước côn
 | 0.6 | Ai duyệt khoản chi; khoản chi có được vượt tồn quỹ không | BR-05, FR-14 | Thôn |
 | 0.7 | Định nghĩa "người bán đã chuyển đổi số"; ban lãnh đạo xem chi tiết từng người bán hay chỉ tổng hợp | BR-07, BR-09 | Sếp + thôn |
 | 0.8 | Kỳ báo cáo và ngày chốt sổ quỹ; có công khai danh sách công đức không | BR-12, SEC-02 | Thôn |
+| 0.9 | Mô hình dữ liệu: "thôn" hay "cộng đồng" tổng quát | NFR-05, US-13 | Dev + chủ dự án |
 
 Đầu ra: ADR-0002 + danh sách câu trả lời, cập nhật vào SRS mục 8.
 
 ---
 
-## Giai đoạn 1 — Nền "Thôn" (NFR-05, FR-01, FR-02)
+## Giai đoạn 1 — Nền "Cộng đồng" (NFR-05, FR-01, FR-02)
 
-Hiện tại chỉ có hai cấp: nền tảng → cửa hàng. Cần thêm cấp thôn ở giữa.
+Hiện tại chỉ có hai cấp: nền tảng → cửa hàng. Cần thêm cấp cộng đồng ở giữa. Thôn là một loại cộng đồng (`type='village'`); sau này thêm tổ dân phố, giáo xứ, chùa, chợ, hội nhóm mà không đổi schema (quyết định 0.9). Giao diện hiện nhãn theo `type` ("Thôn" với thôn thí điểm).
 
 | # | Việc | Chi tiết | Cỡ |
 | --- | --- | --- | --- |
-| 1.1 | Bảng `villages` trong `control.db` | mã, tên, địa bàn, trạng thái | S |
-| 1.2 | Gắn `tenants.village_id` và `tenants.kind` | `kind`: `shop` (POS đầy đủ), `seller` (người bán nhỏ), `village` (tenant chứa sổ quỹ của thôn) | S |
-| 1.3 | Vai trò mới trong `src/lib/rbac.js` | `treasurer` (thủ quỹ), `approver` (trưởng thôn / người được ủy quyền: duyệt chi, tạo quỹ, quản lý danh mục hạng mục), `village_leader` (ban lãnh đạo) + nhóm quyền `fund.*`, `village.report`, `village.categories` | M |
-| 1.4 | Phạm vi truy cập theo thôn | `village_leader` chỉ đọc số liệu **tổng hợp** của tenant cùng `village_id`, không xem doanh thu từng người bán (BR-09); không dùng quyền `root` | M |
-| 1.5 | Màn hình quản trị thôn cho `root` | tạo thôn, gán cửa hàng / người bán vào thôn, tạo tài khoản ban lãnh đạo, thủ quỹ | M |
+| 1.1 | Bảng `communities` trong `control.db` | mã, tên, `type` (MVP chỉ `village`), địa bàn, trạng thái | S |
+| 1.2 | Gắn `tenants.community_id` và `tenants.kind` | `kind`: `shop` (POS đầy đủ), `seller` (người bán nhỏ), `community` (tenant chứa sổ quỹ của cộng đồng). Mỗi tenant thuộc tối đa một cộng đồng | S |
+| 1.3 | Vai trò mới trong `src/lib/rbac.js` | `treasurer` (thủ quỹ), `approver` (trưởng thôn / người được ủy quyền: duyệt chi, tạo quỹ, quản lý danh mục hạng mục), `community_leader` (ban lãnh đạo) + nhóm quyền `fund.*`, `community.report`, `community.categories` | M |
+| 1.4 | Phạm vi truy cập theo cộng đồng | `community_leader` chỉ đọc số liệu **tổng hợp** của tenant cùng `community_id`, không xem doanh thu từng người bán (BR-09); không dùng quyền `root` | M |
+| 1.5 | Màn hình quản trị cộng đồng cho `root` | tạo cộng đồng, gán cửa hàng / người bán vào cộng đồng, tạo tài khoản ban lãnh đạo, thủ quỹ | M |
 
 Kiểm thử: AC-03-3 (người bán A không thấy dữ liệu B), ERR-08 (truy cập ngoài quyền bị chặn).
 
@@ -45,7 +46,7 @@ Kiểm thử: AC-03-3 (người bán A không thấy dữ liệu B), ERR-08 (tru
 
 ## Giai đoạn 2 — Sổ quỹ và công đức (FR-04, FR-12 → FR-15, FR-17)
 
-Ưu tiên cao nhất theo Brief: thủ quỹ là một người, dễ đào tạo, lợi ích rõ. Dữ liệu nằm trong DB của tenant `kind=village`.
+Ưu tiên cao nhất theo Brief: thủ quỹ là một người, dễ đào tạo, lợi ích rõ. Dữ liệu nằm trong DB của tenant `kind=community`.
 
 | # | Việc | Chi tiết | Cỡ |
 | --- | --- | --- | --- |
@@ -87,7 +88,7 @@ POS hiện tại theo hóa đơn / sản phẩm / tồn kho, quá nặng với h
 | --- | --- | --- | --- |
 | 4.1 | Màn hình "Nhận tiền nhanh" | nhập số tiền → chọn hạng mục → hiện QR; báo "đã nhận tiền" khi webhook về | M |
 | 4.2 | QR tĩnh của người bán | in dán quầy; giao dịch về được gắn hạng mục sau (FR-11) | S |
-| 4.3 | Danh mục hạng mục dùng chung của thôn | trưởng thôn quản lý ở cấp thôn, đồng bộ xuống tenant người bán; người bán chỉ chọn, không thêm (BR-11) | M |
+| 4.3 | Danh mục hạng mục dùng chung của cộng đồng | trưởng thôn quản lý ở cấp cộng đồng, đồng bộ xuống tenant người bán; người bán chỉ chọn, không thêm (BR-11) | M |
 | 4.4 | Giao diện tối giản cho điện thoại | chữ to, ít bước; cài như PWA | M |
 | 4.5 | Báo cáo người bán | doanh thu theo ngày / tháng / hạng mục; dòng "Chưa gắn hạng mục" (ERR-04) | S |
 
@@ -99,8 +100,8 @@ Kiểm thử: AC-01-1, AC-01-3, AC-02-1, AC-02-2, AC-03-1, AC-03-2, ERR-04, ERR-
 
 | # | Việc | Chi tiết | Cỡ |
 | --- | --- | --- | --- |
-| 5.1 | Tổng hợp theo thôn | số người bán đã chuyển đổi (có giao dịch đầu tiên, BR-07), tổng số giao dịch, tổng tiền; tách theo loại mua bán / quỹ / công đức | M |
-| 5.2 | Mức chi tiết theo BR-09 | chỉ tổng hợp; API không trả doanh thu từng người bán cho `village_leader`, có test | S |
+| 5.1 | Tổng hợp theo cộng đồng | số người bán đã chuyển đổi (có giao dịch đầu tiên, BR-07), tổng số giao dịch, tổng tiền; tách theo loại mua bán / quỹ / công đức | M |
+| 5.2 | Mức chi tiết theo BR-09 | chỉ tổng hợp; API không trả doanh thu từng người bán cho `community_leader`, có test | S |
 | 5.3 | Trang công khai cho truyền thông | tái dùng link báo cáo công khai theo token; chỉ số liệu tổng hợp | S |
 
 Kiểm thử: AC-10-1.
@@ -137,13 +138,13 @@ Mốc đề xuất: sau GĐ1 + GĐ2 có thể cho thủ quỹ dùng thử sớm,
 
 | Rủi ro | Hướng xử lý |
 | --- | --- |
-| Chế độ tài khoản chung bị bật cho tenant thôn, khiến hệ thống thành trung gian thanh toán | GĐ0.2: chặn ở mức code, có test |
+| Chế độ tài khoản chung bị bật cho tenant thuộc cộng đồng, khiến hệ thống thành trung gian thanh toán | GĐ0.2: chặn ở mức code, có test |
 | VietQR chỉ hỗ trợ MB / BIDV, người bán dùng ngân hàng khác | GĐ0.4: chốt chính sách trước khi thí điểm |
 | Pháp lý chưa xong khi đã code xong | Code GĐ1–GĐ3 không phụ thuộc pháp lý; chỉ bật webhook thật cho tài khoản cá nhân khi 0.5 xong |
-| Thêm cấp thôn làm hỏng tính năng POS hiện có | Chạy lại toàn bộ `npm test` sau mỗi giai đoạn; tenant `kind=shop` giữ nguyên hành vi |
+| Thêm cấp cộng đồng làm hỏng tính năng POS hiện có | Chạy lại toàn bộ `npm test` sau mỗi giai đoạn; tenant `kind=shop` giữ nguyên hành vi |
 | Người bán ngại minh bạch doanh thu | Quyết định 0.7 (BR-09) và truyền thông trước khi thí điểm |
 
 ## Việc đầu tiên nên làm
 
 1. Gửi sếp ADR-0002 để duyệt; gửi pháp chế danh sách `quyet-dinh-gd0.md` mục 5.
-2. Làm GĐ0.2 (chặn tài khoản chung cho tenant thôn) cùng GĐ1.1–1.2 (bảng `villages`, `tenants.kind`), vì cần có `kind` mới chặn được.
+2. Làm GĐ0.2 (chặn tài khoản chung cho tenant thuộc cộng đồng) cùng GĐ1.1–1.2 (bảng `communities`, `tenants.community_id`, `tenants.kind`), vì cần có hai cột này mới chặn được.
