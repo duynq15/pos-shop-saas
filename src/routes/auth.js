@@ -32,8 +32,8 @@ function createSession(user, req) {
 }
 
 const payload = (user, tenant) => ({
-  user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role, tenant_id: user.tenant_id },
-  tenant: tenant ? { code: tenant.code, name: tenant.name, status: tenant.status } : null,
+  user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role, role_name: rbac.roleName(user.role), tenant_id: user.tenant_id },
+  tenant: tenant ? { code: tenant.code, name: tenant.name, status: tenant.status, kind: tenant.kind || 'shop', community_id: tenant.community_id ?? null } : null,
   permissions: user.role === 'platform' ? ['*'] : rbac.permsFor(user.role),
   app_env: process.env.NODE_ENV || 'development',
 });

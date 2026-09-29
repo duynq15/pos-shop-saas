@@ -378,6 +378,33 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('community lists tenant count', (await rootJ('/platform/communities')).data.find((c) => c.id === com.data.id).tenant_count === 2);
   ok('tenant cannot manage communities', (await req('admin', '/platform/communities')).status === 403);
 
+  // ---------- Vai trò cộng đồng (GĐ1.3 — FR-02, BR-05, SEC-04, BR-09, BR-11) ----------
+  await rootJ('/platform/tenants', { method: 'POST', body: { code: 'quy-a', name: 'Quỹ thôn A', owner_username: 'quyaadmin', owner_password: '123456', kind: 'community', community_id: com.data.id } });
+  const cLogin = await (await req('cadm', '/auth/login', { method: 'POST', body: { username: 'quyaadmin', password: '123456' } })).json();
+  ok('login payload has tenant kind + community', cLogin.data.tenant.kind === 'community' && cLogin.data.tenant.community_id === com.data.id);
+  ok('me has tenant kind', (await (await req('cadm', '/auth/me')).json()).data.tenant.kind === 'community');
+  const cRoles = (await (await req('cadm', '/roles')).json()).data.map((r) => r.code);
+  ok('FR-02: community roles list', ['owner', 'treasurer', 'approver', 'community_leader'].every((r) => cRoles.includes(r)) && !cRoles.includes('cashier'));
+  const sRoles = (await api('/roles')).data.map((r) => r.code);
+  ok('FR-02: shop roles list excludes community roles', sRoles.includes('cashier') && !sRoles.includes('treasurer'));
+  ok('FR-02: shop cannot create treasurer', !(await api('/users', { method: 'POST', body: { username: 'bad-treas', password: '123456', role: 'treasurer' } })).ok);
+  ok('FR-02: community cannot create cashier', !(await (await req('cadm', '/users', { method: 'POST', body: { username: 'bad-cash', password: '123456', role: 'cashier' } })).json()).ok);
+  const perms = {};
+  for (const role of ['treasurer', 'approver', 'community_leader']) {
+    const u = await (await req('cadm', '/users', { method: 'POST', body: { username: 'qa-' + role, password: '123456', role } })).json();
+    ok('create ' + role, u.ok && u.data.role === role && !!u.data.role_name);
+    const l = await (await req('c-' + role, '/auth/login', { method: 'POST', body: { username: 'qa-' + role, password: '123456' } })).json();
+    perms[role] = l.data.permissions;
+  }
+  ok('SEC-04: treasurer cannot approve', perms.treasurer.includes('fund.entry') && !perms.treasurer.includes('fund.approve'));
+  ok('BR-05: approver approves, does not enter', perms.approver.includes('fund.approve') && !perms.approver.includes('fund.entry'));
+  ok('BR-11: approver manages categories', perms.approver.includes('community.categories'));
+  ok('BR-09: leader only aggregate + fund view', perms.community_leader.includes('community.report') && perms.community_leader.includes('fund.view')
+    && !['pos.sell', 'report.view', 'fund.entry'].some((p) => perms.community_leader.includes(p)));
+  ok('community role cannot sell', (await (await req('c-community_leader', '/invoices', { method: 'POST', body: { items: [{ name: 'x', price: 1000, qty: 1 }] } })).json()).ok === false);
+  const leaderId = (await (await req('cadm', '/users')).json()).data.find((u) => u.username === 'qa-community_leader').id;
+  ok('FR-02: cannot switch community user to POS role', !(await (await req('cadm', '/users/' + leaderId, { method: 'PUT', body: { role: 'manager' } })).json()).ok);
+
   for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg', '/report.html', '/report.css', '/js/report.js']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);
   console.log(R.join('\n'));
   const pass = R.filter((x) => x.startsWith('PASS')).length;

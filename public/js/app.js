@@ -159,7 +159,7 @@ function renderUser() {
   if (!el) return;
   const u = auth.user;
   if (!u) { el.innerHTML = ''; return; }
-  const roleName = { owner: 'Chủ cửa hàng', manager: 'Quản lý', cashier: 'Thu ngân', sales: 'NV bán hàng', warehouse: 'Thủ kho', accountant: 'Kế toán', viewer: 'Chỉ xem', platform: 'Quản trị nền tảng' }[u.role] || u.role;
+  const roleName = u.role_name || u.role;
   el.innerHTML = `<div class="su-name">${esc(u.full_name || u.username)}</div>
     <div class="su-meta">${esc(roleName)}${auth.tenant ? ' · ' + esc(auth.tenant.name) : ''}</div>
     <button class="btn sm" id="btn-logout">Đăng xuất</button>`;

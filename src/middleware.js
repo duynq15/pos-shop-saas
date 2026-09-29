@@ -15,13 +15,15 @@ function attachSession(req, res, next) {
   const token = parseCookies(req.headers.cookie)[COOKIE];
   if (token) {
     const row = control.prepare(`SELECT s.expires_at, u.id, u.username, u.full_name, u.role, u.tenant_id, u.active,
-        t.code AS tenant_code, t.name AS tenant_name, t.status AS tenant_status
+        t.code AS tenant_code, t.name AS tenant_name, t.status AS tenant_status,
+        t.kind AS tenant_kind, t.community_id AS tenant_community_id
       FROM sessions s JOIN users u ON u.id = s.user_id
       LEFT JOIN tenants t ON t.id = u.tenant_id
       WHERE s.token_hash = ?`).get(tokenHash(token));
     if (row && row.active && row.expires_at > nowUtc()) {
-      req.user = { id: row.id, username: row.username, full_name: row.full_name, role: row.role, tenant_id: row.tenant_id };
-      req.tenant = row.tenant_id ? { code: row.tenant_code, name: row.tenant_name, status: row.tenant_status } : null;
+      req.user = { id: row.id, username: row.username, full_name: row.full_name, role: row.role, role_name: rbac.roleName(row.role), tenant_id: row.tenant_id };
+      req.tenant = row.tenant_id ? { code: row.tenant_code, name: row.tenant_name, status: row.tenant_status,
+        kind: row.tenant_kind || 'shop', community_id: row.tenant_community_id ?? null } : null;
       req.permissions = row.role === 'platform' ? ['*'] : rbac.permsFor(row.role);
     }
   }
