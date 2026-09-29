@@ -41,6 +41,18 @@ CREATE TABLE IF NOT EXISTS communities (
   created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
+-- Loại cộng đồng cấu hình được (GĐ1.6, NFR-05, US-13). Nhãn vai trò hiển thị theo loại
+CREATE TABLE IF NOT EXISTS community_types (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  approver_label TEXT,
+  leader_label TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
 CREATE TABLE IF NOT EXISTS plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   code TEXT UNIQUE NOT NULL,
@@ -119,6 +131,14 @@ if (!controlColumns('tenants').includes('area')) control.exec('ALTER TABLE tenan
 // GĐ1.2: loại tenant và cộng đồng. Tenant cũ nhận kind='shop', không thuộc cộng đồng (ADR-0002)
 if (!controlColumns('tenants').includes('kind')) control.exec("ALTER TABLE tenants ADD COLUMN kind TEXT NOT NULL DEFAULT 'shop'");
 if (!controlColumns('tenants').includes('community_id')) control.exec('ALTER TABLE tenants ADD COLUMN community_id INTEGER REFERENCES communities(id)');
+// GĐ1.6: thông tin liên hệ và cấu hình riêng từng cộng đồng
+for (const [col, def] of [['contact_name', 'TEXT'], ['contact_phone', 'TEXT'], ['note', 'TEXT'], ['settings', "TEXT NOT NULL DEFAULT '{}'"]]) {
+  if (!controlColumns('communities').includes(col)) control.exec(`ALTER TABLE communities ADD COLUMN ${col} ${def}`);
+}
+if (!control.prepare('SELECT COUNT(*) c FROM community_types').get().c) {
+  control.prepare('INSERT INTO community_types(code,name,approver_label,leader_label,sort_order) VALUES (?,?,?,?,?)')
+    .run('village', 'Thôn', 'Trưởng thôn', 'Ban lãnh đạo thôn', 1);
+}
 for (const [col, def] of [['amount', 'INTEGER'], ['content', 'TEXT'], ['bank_account', 'TEXT']]) {
   if (!controlColumns('qr_orders').includes(col)) control.exec(`ALTER TABLE qr_orders ADD COLUMN ${col} ${def}`);
 }
@@ -245,5 +265,38 @@ function sharedAccountConflict(tenantCode, account, readAccount, communityId) {
   return null;
 }
 
+// ---------- Cấu hình cộng đồng (GĐ1.6) ----------
+// Chỉ nhận các khóa đã biết; giá trị mặc định dùng khi cộng đồng chưa cấu hình.
+const COMMUNITY_SETTINGS = {
+  public_donations: { def: false, parse: (v) => (typeof v === 'boolean' ? v : undefined) },
+  unclassified_alert_days: { def: 3, parse: (v) => (Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 90 && v !== '' && v !== null ? Number(v) : undefined) },
+};
+function communitySettings(raw) {
+  let obj = {};
+  try { obj = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {}); } catch { obj = {}; }
+  const out = {};
+  for (const [k, spec] of Object.entries(COMMUNITY_SETTINGS)) out[k] = obj[k] === undefined ? spec.def : obj[k];
+  return out;
+}
+// Kiểm tra settings gửi lên. Trả { error } hoặc { value } đã gộp với giá trị hiện tại.
+function validateCommunitySettings(input, current) {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return { error: 'Cấu hình cộng đồng không hợp lệ' };
+  const value = communitySettings(current);
+  for (const [k, v] of Object.entries(input)) {
+    const spec = COMMUNITY_SETTINGS[k];
+    if (!spec) return { error: `Khóa cấu hình không hợp lệ: ${k}` };
+    const parsed = spec.parse(v);
+    if (parsed === undefined) return { error: `Giá trị cấu hình không hợp lệ: ${k}` };
+    value[k] = parsed;
+  }
+  return { value };
+}
+// Nhãn vai trò theo loại cộng đồng của tenant; null khi tenant không thuộc cộng đồng.
+function communityRoleLabels(communityId) {
+  if (!communityId) return null;
+  return control.prepare(`SELECT ct.approver_label, ct.leader_label FROM communities c
+    JOIN community_types ct ON ct.code = c.type WHERE c.id=?`).get(communityId) || null;
+}
+
 module.exports = { control, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired, getPlatformSettings, setPlatformSettings, nextGlobalSeq, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders,
-  TENANT_KINDS, tenantByCode, sharedAccountConflict };
+  TENANT_KINDS, tenantByCode, sharedAccountConflict, COMMUNITY_SETTINGS, communitySettings, validateCommunitySettings, communityRoleLabels };

@@ -315,6 +315,17 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('Community listed with tenant count', /Thôn UI/.test(await root.pg.locator('#pc-body').innerText()) && /Sổ quỹ cộng đồng/.test(await root.pg.locator('#pf-body').innerText()), qt.error || '');
     await root.pg.locator('#pf-new').click(); await root.pg.waitForTimeout(300);
     ok('Tenant form has kind + community selects', (await root.pg.locator('#tf-kind option').count()) === 3 && (await root.pg.locator('#tf-community option').count()) >= 2);
+    await root.pg.locator('#tf-close').click(); await root.pg.waitForTimeout(200);
+    // GĐ1.6: configurable community types + community config
+    await rapi('/api/platform/community-types', { code: 'ui-xu', name: 'Giáo xứ UI', approver_label: 'Cha xứ' });
+    await root.pg.reload(); await root.pg.waitForSelector('#ct-body tr[data-id]'); await root.pg.waitForTimeout(300);
+    ok('Community type card lists types', /Thôn/.test(await root.pg.locator('#ct-body').innerText()) && /Giáo xứ UI/.test(await root.pg.locator('#ct-body').innerText()));
+    await root.pg.locator('#pc-new').click(); await root.pg.waitForTimeout(300);
+    ok('New type in community type select', (await root.pg.locator('#cf-type option').allInnerTexts()).includes('Giáo xứ UI'));
+    ok('Community form has config fields', await root.pg.locator('#cf-contact').isVisible() && await root.pg.locator('#cf-public').count() === 1 && await root.pg.locator('#cf-alert-days').inputValue() === '3');
+    await root.pg.locator('#cf-close').click(); await root.pg.waitForTimeout(200);
+    await root.pg.locator('#pc-body tr', { hasText: 'Thôn UI' }).locator('[data-act="members"]').click(); await root.pg.waitForTimeout(400);
+    ok('Members modal lists community tenants', /ui-quy/.test(await root.pg.locator('#cm-body').innerText()));
     await root.c.close();
     const quy = await loginAs('uiquy', 'uiquy123', '.nav-item[data-view]');
     const navs = await quy.pg.locator('.nav-item[data-view]').evaluateAll((els) => els.map((x) => x.dataset.view));

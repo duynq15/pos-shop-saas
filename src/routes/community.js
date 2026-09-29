@@ -34,6 +34,8 @@ function sellerStats(code, from, to) {
 router.get('/community/summary', requirePerm('community.report'), wrap((req, res) => {
   const codes = communityScope(req);
   if (!codes) return fail(res, 'Chỉ tài khoản của cộng đồng mới xem được báo cáo cộng đồng', 403);
+  const cm = control.prepare('SELECT status FROM communities WHERE id=?').get(req.tenant.community_id);
+  if (!cm || cm.status !== 'active') return fail(res, 'Cộng đồng đang tạm ngưng', 403);
   const today = new Date().toISOString().slice(0, 10);
   const from = DAY.test(req.query.from || '') ? req.query.from : today;
   const to = DAY.test(req.query.to || '') ? req.query.to : from;

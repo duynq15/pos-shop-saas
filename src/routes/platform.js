@@ -2,7 +2,7 @@
 
 const express = require('express');
 const crypto = require('crypto');
-const { control, audit, getPlatformSettings, setPlatformSettings, TENANT_KINDS } = require('../control');
+const { control, audit, getPlatformSettings, setPlatformSettings, TENANT_KINDS, communitySettings, validateCommunitySettings, communityRoleLabels } = require('../control');
 const { bankAccountOf, accountConflict, CONFLICT_MSG } = require('../lib/community');
 const db = require('../db');
 const { ok, fail, wrap, str } = require('../lib/util');
@@ -24,44 +24,156 @@ function tenantCommunity(body, current = {}) {
   if (!TENANT_KINDS.includes(kind)) return { error: 'Loại cửa hàng không hợp lệ (shop / seller / community)' };
   let communityId = body.community_id === undefined ? (current.community_id ?? null) : (body.community_id ? Number(body.community_id) : null);
   if (communityId != null) {
-    const c = control.prepare('SELECT id FROM communities WHERE id=?').get(communityId);
+    const c = control.prepare('SELECT id, status FROM communities WHERE id=?').get(communityId);
     if (!c) return { error: 'Không tìm thấy cộng đồng' };
+    // GĐ1.6: không gán mới vào cộng đồng tạm ngưng; tenant đang ở trong thì giữ nguyên
+    if (c.status !== 'active' && communityId !== (current.community_id ?? null)) return { error: 'Cộng đồng đang tạm ngưng, không gán thêm được' };
   }
   if (kind !== 'shop' && communityId == null) return { error: 'Người bán / sổ quỹ cộng đồng phải thuộc một cộng đồng' };
   return { kind, communityId };
 }
 
-// ---------- Cộng đồng (GĐ1.1, NFR-05) ----------
-const COMMUNITY_TYPES = ['village'];
+// ---------- Loại cộng đồng (GĐ1.6, NFR-05, US-13) ----------
+const communityType = (code) => control.prepare('SELECT * FROM community_types WHERE code=?').get(code);
+const typeUsage = (code) => control.prepare('SELECT COUNT(*) c FROM communities WHERE type=?').get(code).c;
+const typeLabels = (body, cur = {}) => ({
+  name: str(body.name, 80) || cur.name,
+  approver_label: body.approver_label === undefined ? cur.approver_label : (str(body.approver_label, 80) || null),
+  leader_label: body.leader_label === undefined ? cur.leader_label : (str(body.leader_label, 80) || null),
+  sort_order: body.sort_order === undefined || body.sort_order === '' ? (cur.sort_order ?? 0) : Number(body.sort_order),
+});
+
+router.get('/community-types', wrap((req, res) => {
+  ok(res, control.prepare(`SELECT ct.*, (SELECT COUNT(*) FROM communities c WHERE c.type=ct.code) AS community_count
+    FROM community_types ct ORDER BY ct.sort_order, ct.id`).all());
+}));
+
+router.post('/community-types', wrap((req, res) => {
+  const code = str(req.body.code, 30).toLowerCase();
+  const v = typeLabels(req.body);
+  if (!codeOk(code)) return fail(res, 'Mã loại chỉ gồm a-z, 0-9, _ , - (2–30 ký tự)');
+  if (!v.name) return fail(res, 'Nhập tên loại cộng đồng');
+  if (!Number.isInteger(v.sort_order)) return fail(res, 'Thứ tự không hợp lệ');
+  if (communityType(code)) return fail(res, 'Mã loại đã tồn tại');
+  const r = control.prepare('INSERT INTO community_types(code,name,approver_label,leader_label,sort_order) VALUES (?,?,?,?,?)')
+    .run(code, v.name, v.approver_label || null, v.leader_label || null, v.sort_order);
+  const id = Number(r.lastInsertRowid);
+  audit({ userId: req.user.id, username: req.user.username, action: 'community_type.create', entity: 'community_type', entityId: id, detail: code, ip: req.ip });
+  ok(res, control.prepare('SELECT * FROM community_types WHERE id=?').get(id));
+}));
+
+// Không đổi mã; tạm ngưng chỉ chặn tạo cộng đồng mới thuộc loại này
+router.put('/community-types/:id', wrap((req, res) => {
+  const id = Number(req.params.id);
+  const t = control.prepare('SELECT * FROM community_types WHERE id=?').get(id);
+  if (!t) return fail(res, 'Không tìm thấy loại cộng đồng', 404);
+  if (req.body.code !== undefined && str(req.body.code, 30).toLowerCase() !== t.code) return fail(res, 'Không được đổi mã loại cộng đồng');
+  const v = typeLabels(req.body, t);
+  if (!Number.isInteger(v.sort_order)) return fail(res, 'Thứ tự không hợp lệ');
+  const status = str(req.body.status, 20) || t.status;
+  if (!['active', 'suspended'].includes(status)) return fail(res, 'Trạng thái không hợp lệ');
+  control.prepare('UPDATE community_types SET name=?, approver_label=?, leader_label=?, sort_order=?, status=? WHERE id=?')
+    .run(v.name, v.approver_label, v.leader_label, v.sort_order, status, id);
+  audit({ userId: req.user.id, username: req.user.username, action: 'community_type.update', entity: 'community_type', entityId: id, detail: t.code, ip: req.ip });
+  ok(res, control.prepare('SELECT * FROM community_types WHERE id=?').get(id));
+}));
+
+router.delete('/community-types/:id', wrap((req, res) => {
+  const id = Number(req.params.id);
+  const t = control.prepare('SELECT * FROM community_types WHERE id=?').get(id);
+  if (!t) return fail(res, 'Không tìm thấy loại cộng đồng', 404);
+  const n = typeUsage(t.code);
+  if (n) return fail(res, `Loại cộng đồng đang dùng cho ${n} cộng đồng, không xóa được`);
+  control.prepare('DELETE FROM community_types WHERE id=?').run(id);
+  audit({ userId: req.user.id, username: req.user.username, action: 'community_type.delete', entity: 'community_type', entityId: id, detail: t.code, ip: req.ip });
+  ok(res, { id });
+}));
+
+// ---------- Cộng đồng (GĐ1.1, GĐ1.6, NFR-05) ----------
+const communityOut = (c) => (c ? { ...c, settings: communitySettings(c.settings) } : c);
+const communityById = (id) => control.prepare('SELECT * FROM communities WHERE id=?').get(id);
+const communityTenantCount = (id) => control.prepare('SELECT COUNT(*) c FROM tenants WHERE community_id=?').get(id).c;
+
 router.get('/communities', wrap((req, res) => {
-  ok(res, control.prepare(`SELECT c.*, (SELECT COUNT(*) FROM tenants t WHERE t.community_id=c.id) AS tenant_count
-    FROM communities c ORDER BY c.id`).all());
+  ok(res, control.prepare(`SELECT c.*, ct.name AS type_name, (SELECT COUNT(*) FROM tenants t WHERE t.community_id=c.id) AS tenant_count
+    FROM communities c LEFT JOIN community_types ct ON ct.code = c.type ORDER BY c.id`).all().map(communityOut));
 }));
 
 router.post('/communities', wrap((req, res) => {
   const code = str(req.body.code, 30).toLowerCase();
   const name = str(req.body.name, 160);
-  const type = str(req.body.type, 20) || 'village';
+  const type = str(req.body.type, 30) || 'village';
   if (!codeOk(code)) return fail(res, 'Mã cộng đồng chỉ gồm a-z, 0-9, _ , - (2–30 ký tự)');
   if (!name) return fail(res, 'Nhập tên cộng đồng');
-  if (!COMMUNITY_TYPES.includes(type)) return fail(res, 'Loại cộng đồng không hợp lệ');
+  const ct = communityType(type);
+  if (!ct || ct.status !== 'active') return fail(res, 'Loại cộng đồng không hợp lệ hoặc đang tạm ngưng');
   if (control.prepare('SELECT id FROM communities WHERE code=?').get(code)) return fail(res, 'Mã cộng đồng đã tồn tại');
-  const r = control.prepare('INSERT INTO communities(code,name,type,area) VALUES (?,?,?,?)').run(code, name, type, str(req.body.area, 120) || null);
+  const st = validateCommunitySettings(req.body.settings === undefined ? {} : req.body.settings, '{}');
+  if (st.error) return fail(res, st.error);
+  const r = control.prepare('INSERT INTO communities(code,name,type,area,contact_name,contact_phone,note,settings) VALUES (?,?,?,?,?,?,?,?)')
+    .run(code, name, type, str(req.body.area, 120) || null, str(req.body.contact_name, 120) || null,
+      str(req.body.contact_phone, 30) || null, str(req.body.note, 500) || null, JSON.stringify(st.value));
   const id = Number(r.lastInsertRowid);
   audit({ userId: req.user.id, username: req.user.username, action: 'community.create', entity: 'community', entityId: id, detail: code, ip: req.ip });
-  ok(res, control.prepare('SELECT * FROM communities WHERE id=?').get(id));
+  ok(res, communityOut(communityById(id)));
 }));
 
 router.put('/communities/:id', wrap((req, res) => {
   const id = Number(req.params.id);
-  const c = control.prepare('SELECT * FROM communities WHERE id=?').get(id);
+  const c = communityById(id);
   if (!c) return fail(res, 'Không tìm thấy cộng đồng', 404);
   const status = str(req.body.status, 20) || c.status;
   if (!['active', 'suspended'].includes(status)) return fail(res, 'Trạng thái không hợp lệ');
-  control.prepare('UPDATE communities SET name=?, area=?, status=? WHERE id=?')
-    .run(str(req.body.name, 160) || c.name, req.body.area === undefined ? c.area : (str(req.body.area, 120) || null), status, id);
-  audit({ userId: req.user.id, username: req.user.username, action: 'community.update', entity: 'community', entityId: id, ip: req.ip });
-  ok(res, control.prepare('SELECT * FROM communities WHERE id=?').get(id));
+  let type = c.type;
+  if (req.body.type !== undefined && str(req.body.type, 30) !== c.type) {
+    type = str(req.body.type, 30);
+    const ct = communityType(type);
+    if (!ct || ct.status !== 'active') return fail(res, 'Loại cộng đồng không hợp lệ hoặc đang tạm ngưng');
+    if (communityTenantCount(id)) return fail(res, 'Chỉ đổi loại khi cộng đồng chưa có cửa hàng / người bán');
+  }
+  let settings = c.settings;
+  if (req.body.settings !== undefined) {
+    const st = validateCommunitySettings(req.body.settings, c.settings);
+    if (st.error) return fail(res, st.error);
+    settings = JSON.stringify(st.value);
+  }
+  const keep = (k, n) => (req.body[k] === undefined ? c[k] : (str(req.body[k], n) || null));
+  control.prepare('UPDATE communities SET name=?, type=?, area=?, status=?, contact_name=?, contact_phone=?, note=?, settings=? WHERE id=?')
+    .run(str(req.body.name, 160) || c.name, type, keep('area', 120), status, keep('contact_name', 120), keep('contact_phone', 30),
+      keep('note', 500), settings, id);
+  audit({ userId: req.user.id, username: req.user.username, action: 'community.update', entity: 'community', entityId: id,
+    detail: status !== c.status ? `status=${status}` : undefined, ip: req.ip });
+  ok(res, communityOut(communityById(id)));
+}));
+
+// Xóa cứng, chỉ khi không còn tenant (sổ quỹ nằm trong tenant nên không mất dữ liệu tài chính)
+router.delete('/communities/:id', wrap((req, res) => {
+  const id = Number(req.params.id);
+  const c = communityById(id);
+  if (!c) return fail(res, 'Không tìm thấy cộng đồng', 404);
+  const n = communityTenantCount(id);
+  if (n) return fail(res, `Cộng đồng còn ${n} cửa hàng / người bán, gỡ hoặc chuyển trước khi xóa`);
+  control.prepare('DELETE FROM communities WHERE id=?').run(id);
+  audit({ userId: req.user.id, username: req.user.username, action: 'community.delete', entity: 'community', entityId: id, detail: c.code, ip: req.ip });
+  ok(res, { id });
+}));
+
+router.get('/communities/:id/tenants', wrap((req, res) => {
+  const id = Number(req.params.id);
+  if (!communityById(id)) return fail(res, 'Không tìm thấy cộng đồng', 404);
+  ok(res, control.prepare('SELECT id, code, name, kind, status FROM tenants WHERE community_id=? ORDER BY kind, code').all(id));
+}));
+
+// Gỡ cửa hàng thường khỏi cộng đồng. Người bán / sổ quỹ bắt buộc thuộc cộng đồng: chuyển bằng sửa tenant
+router.post('/communities/:id/remove-tenant', wrap((req, res) => {
+  const id = Number(req.params.id);
+  const t = control.prepare('SELECT * FROM tenants WHERE id=? AND community_id=?').get(Number(req.body.tenant_id), id);
+  if (!t) return fail(res, 'Cửa hàng không thuộc cộng đồng này', 404);
+  if ((t.kind || 'shop') !== 'shop') return fail(res, 'Người bán / sổ quỹ cộng đồng phải thuộc một cộng đồng; sửa cửa hàng để chuyển sang cộng đồng khác');
+  control.prepare('UPDATE tenants SET community_id=NULL WHERE id=?').run(t.id);
+  audit({ userId: req.user.id, username: req.user.username, action: 'tenant.update', entity: 'tenant', entityId: t.id,
+    detail: `kind=${t.kind || 'shop'} community_id=`, ip: req.ip });
+  ok(res, { id: t.id });
 }));
 
 router.get('/plans', wrap((req, res) => {
@@ -120,12 +232,16 @@ router.put('/tenants/:id', wrap((req, res) => {
   ok(res, control.prepare('SELECT * FROM tenants WHERE id=?').get(id));
 }));
 
+const labelsFor = (tenantId) => {
+  const t = tenantId && control.prepare('SELECT community_id FROM tenants WHERE id=?').get(tenantId);
+  return communityRoleLabels(t && t.community_id);
+};
 router.get('/users', wrap((req, res) => {
   const tid = req.query.tenant_id ? Number(req.query.tenant_id) : null;
   const rows = tid
     ? control.prepare('SELECT * FROM users WHERE tenant_id=? ORDER BY id').all(tid)
     : control.prepare('SELECT * FROM users ORDER BY tenant_id, id').all();
-  ok(res, rows.map((u) => ({ id: u.id, tenant_id: u.tenant_id, username: u.username, full_name: u.full_name, role: u.role, role_name: rbac.roleName(u.role), active: u.active, last_login: u.last_login })));
+  ok(res, rows.map((u) => ({ id: u.id, tenant_id: u.tenant_id, username: u.username, full_name: u.full_name, role: u.role, role_name: rbac.roleName(u.role, labelsFor(u.tenant_id)), active: u.active, last_login: u.last_login })));
 }));
 
 router.get('/stats', wrap((req, res) => {

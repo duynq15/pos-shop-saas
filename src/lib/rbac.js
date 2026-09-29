@@ -105,7 +105,13 @@ function roleAllowed(role, kind) {
 }
 const rolesFor = (kind) => Object.keys(ROLES).filter((code) => roleAllowed(code, kind));
 
-const roleName = (r) => (r === 'platform' ? 'Quản trị nền tảng' : ROLES[r] ? ROLES[r].name : r);
+// labels: nhãn theo loại cộng đồng (GĐ1.6), chỉ đổi tên hiển thị, không đổi quyền
+const LABEL_FIELD = { approver: 'approver_label', community_leader: 'leader_label' };
+const roleName = (r, labels) => {
+  if (r === 'platform') return 'Quản trị nền tảng';
+  if (labels && LABEL_FIELD[r] && labels[LABEL_FIELD[r]]) return labels[LABEL_FIELD[r]];
+  return ROLES[r] ? ROLES[r].name : r;
+};
 const maxDiscount = (r) => (ROLES[r] ? ROLES[r].maxDiscount : 0);
 
 module.exports = { PERMISSIONS, ROLES, permsFor, has, roleName, maxDiscount, roleAllowed, rolesFor };

@@ -1,6 +1,6 @@
 'use strict';
 
-const { control, tokenHash } = require('./control');
+const { control, tokenHash, communityRoleLabels } = require('./control');
 const db = require('./db');
 const { parseCookies, COOKIE } = require('./lib/auth');
 const rbac = require('./lib/rbac');
@@ -21,7 +21,7 @@ function attachSession(req, res, next) {
       LEFT JOIN tenants t ON t.id = u.tenant_id
       WHERE s.token_hash = ?`).get(tokenHash(token));
     if (row && row.active && row.expires_at > nowUtc()) {
-      req.user = { id: row.id, username: row.username, full_name: row.full_name, role: row.role, role_name: rbac.roleName(row.role), tenant_id: row.tenant_id };
+      req.user = { id: row.id, username: row.username, full_name: row.full_name, role: row.role, role_name: rbac.roleName(row.role, communityRoleLabels(row.tenant_community_id)), tenant_id: row.tenant_id };
       req.tenant = row.tenant_id ? { code: row.tenant_code, name: row.tenant_name, status: row.tenant_status,
         kind: row.tenant_kind || 'shop', community_id: row.tenant_community_id ?? null } : null;
       req.permissions = row.role === 'platform' ? ['*'] : rbac.permsFor(row.role);

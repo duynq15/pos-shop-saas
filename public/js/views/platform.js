@@ -1,14 +1,14 @@
-import { $, esc, num, money, today, toast, modal, closeModal } from '../util.js';
+import { $, esc, num, money, today, toast, modal, closeModal, confirmDialog } from '../util.js';
 import { api } from '../store.js';
 import { isProd } from '../auth.js';
 
 let tenants = [];
 let plans = [];
 let communities = [];
+let communityTypes = [];
 
 // Nhãn theo loại (GĐ1.5, NFR-05). Thôn là một loại cộng đồng (quyết định 0.9).
 const KIND_LABEL = { shop: 'Cửa hàng', seller: 'Người bán', community: 'Sổ quỹ cộng đồng' };
-const COMMUNITY_TYPE_LABEL = { village: 'Thôn' };
 const statusBadge = (s) => (s === 'active' ? '<span class="badge paid">Hoạt động</span>' : '<span class="badge cancelled">Tạm ngưng</span>');
 const communityName = (id) => communities.find((c) => c.id === id)?.name || '';
 
@@ -48,6 +48,12 @@ export default {
   </div>
   <div class="muted" id="pp-status" style="margin-top:6px"></div>
 </div>
+<div class="card" style="margin-bottom:14px" id="ct-card"><div class="toolbar"><h3 style="margin:0">Loại cộng đồng</h3><span class="spacer"></span><button class="btn primary" id="ct-new">+ Thêm loại</button></div>
+  <p class="muted">Thôn, giáo xứ, chợ… Nhãn vai trò duyệt chi và ban lãnh đạo hiển thị theo loại; quyền không đổi. Tạm ngưng loại thì không tạo được cộng đồng mới của loại đó.</p>
+  <div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr>
+    <th>Mã</th><th>Tên</th><th>Người duyệt chi</th><th>Ban lãnh đạo</th><th class="r">Số cộng đồng</th><th>Trạng thái</th><th></th>
+  </tr></thead><tbody id="ct-body"></tbody></table></div>
+</div>
 <div class="card" style="margin-bottom:14px" id="pc-card"><div class="toolbar"><h3 style="margin:0">Cộng đồng</h3><span class="spacer"></span><button class="btn primary" id="pc-new">+ Thêm cộng đồng</button></div>
   <p class="muted">Cộng đồng (thôn…) gom người bán và sổ quỹ. Gán cửa hàng vào cộng đồng ở form Sửa cửa hàng. Tài khoản thủ quỹ, trưởng thôn, ban lãnh đạo do chủ tenant sổ quỹ tạo trong màn Người dùng.</p>
   <div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr>
@@ -65,10 +71,29 @@ export default {
     $('#pp-open').onclick = () => { const u = $('#pp-url').value; if (u) window.open(u, '_blank', 'noopener'); };
     $('#pp-copy').onclick = copyPublicLink;
     $('#pc-new').onclick = () => openCommunity(null);
+    $('#ct-new').onclick = () => openType(null);
+    $('#ct-body').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-act]'); if (!btn) return;
+      const t = communityTypes.find((x) => x.id === Number(btn.closest('tr').dataset.id));
+      if (btn.dataset.act === 'edit') return openType(t);
+      try {
+        if (btn.dataset.act === 'toggle') await api('/api/platform/community-types/' + t.id, { method: 'PUT', body: { status: t.status === 'active' ? 'suspended' : 'active' } });
+        if (btn.dataset.act === 'del') {
+          if (!(await confirmDialog(`Xóa loại "${t.name}"?`))) return;
+          await api('/api/platform/community-types/' + t.id, { method: 'DELETE' });
+        }
+        toast('Đã lưu'); load();
+      } catch (err) { toast(err.message, true); }
+    });
     $('#pc-body').addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-act]'); if (!btn) return;
       const c = communities.find((x) => x.id === Number(btn.closest('tr').dataset.id));
       if (btn.dataset.act === 'edit') openCommunity(c);
+      if (btn.dataset.act === 'members') openMembers(c);
+      if (btn.dataset.act === 'del') {
+        if (!(await confirmDialog(`Xóa cộng đồng "${c.name}"?`))) return;
+        try { await api('/api/platform/communities/' + c.id, { method: 'DELETE' }); toast('Đã xóa'); load(); } catch (err) { toast(err.message, true); }
+      }
       if (btn.dataset.act === 'toggle') {
         const status = c.status === 'active' ? 'suspended' : 'active';
         try {
@@ -182,7 +207,7 @@ async function loadReport() {
 const expired = (t) => t.expires_at && t.expires_at < new Date().toISOString().slice(0, 19).replace('T', ' ');
 
 async function load() {
-  [tenants, plans, communities] = await Promise.all([api('/api/platform/tenants'), api('/api/platform/plans'), api('/api/platform/communities')]);
+  [tenants, plans, communities, communityTypes] = await Promise.all([api('/api/platform/tenants'), api('/api/platform/plans'), api('/api/platform/communities'), api('/api/platform/community-types')]);
   const stats = await api('/api/platform/stats');
   $('#pf-stats').textContent = `${stats.tenants} cửa hàng · ${stats.users} người dùng · ${plans.length} gói`;
   $('#pf-body').innerHTML = tenants.map((t) => `<tr data-id="${t.id}">
@@ -200,30 +225,99 @@ async function load() {
   </tr>`).join('') || '<tr><td colspan="10" class="empty">Chưa có đối tác</td></tr>';
   $('#pc-body').innerHTML = communities.map((c) => `<tr data-id="${c.id}">
     <td><code>${esc(c.code)}</code></td><td><b>${esc(c.name)}</b></td>
-    <td>${esc(COMMUNITY_TYPE_LABEL[c.type] || c.type)}</td>
+    <td>${esc(c.type_name || c.type)}</td>
     <td>${c.area ? esc(c.area) : '<span class="muted">—</span>'}</td>
     <td class="r">${num(c.tenant_count)}</td>
     <td>${statusBadge(c.status)}</td>
-    <td class="r"><button class="btn sm" data-act="edit">Sửa</button>
-      <button class="btn sm" data-act="toggle">${c.status === 'active' ? 'Tạm ngưng' : 'Mở lại'}</button></td>
+    <td class="r"><button class="btn sm" data-act="members">Thành viên</button>
+      <button class="btn sm" data-act="edit">Sửa</button>
+      <button class="btn sm" data-act="toggle">${c.status === 'active' ? 'Tạm ngưng' : 'Mở lại'}</button>
+      <button class="btn sm" data-act="del">Xóa</button></td>
   </tr>`).join('') || '<tr><td colspan="7" class="empty">Chưa có cộng đồng</td></tr>';
+  $('#ct-body').innerHTML = communityTypes.map((t) => `<tr data-id="${t.id}">
+    <td><code>${esc(t.code)}</code></td><td><b>${esc(t.name)}</b></td>
+    <td>${esc(t.approver_label)}</td><td>${esc(t.leader_label)}</td>
+    <td class="r">${num(t.community_count)}</td>
+    <td>${statusBadge(t.status)}</td>
+    <td class="r"><button class="btn sm" data-act="edit">Sửa</button>
+      <button class="btn sm" data-act="toggle">${t.status === 'active' ? 'Tạm ngưng' : 'Mở lại'}</button>
+      <button class="btn sm" data-act="del">Xóa</button></td>
+  </tr>`).join('') || '<tr><td colspan="7" class="empty">Chưa có loại cộng đồng</td></tr>';
+}
+
+function openType(t) {
+  const isNew = !t;
+  const d = t || { sort_order: 0 };
+  modal(`<h2>${isNew ? 'Thêm loại cộng đồng' : 'Sửa loại: ' + esc(d.name)}</h2>
+    <div class="form-grid">
+      ${isNew ? '<label class="fld">Mã loại *<input class="field" id="ctf-code" placeholder="vd: giao-xu" autocapitalize="none"></label>' : ''}
+      <label class="fld">Tên *<input class="field" id="ctf-name" placeholder="vd: Giáo xứ" value="${esc(d.name || '')}"></label>
+      <label class="fld">Nhãn người duyệt chi<input class="field" id="ctf-approver" placeholder="vd: Cha xứ" value="${esc(d.approver_label || '')}"></label>
+      <label class="fld">Nhãn ban lãnh đạo<input class="field" id="ctf-leader" placeholder="vd: Hội đồng giáo xứ" value="${esc(d.leader_label || '')}"></label>
+      <label class="fld">Thứ tự<input class="field" id="ctf-sort" type="number" value="${Number(d.sort_order) || 0}"></label>
+    </div>
+    <div class="modal-actions"><button class="btn primary" id="ctf-save">Lưu</button><button class="btn" id="ctf-close">Đóng</button></div>`);
+  $('#ctf-close').onclick = closeModal;
+  $('#ctf-save').onclick = async () => {
+    const body = { name: $('#ctf-name').value.trim(), approver_label: $('#ctf-approver').value.trim(), leader_label: $('#ctf-leader').value.trim(), sort_order: Number($('#ctf-sort').value) || 0 };
+    if (isNew) body.code = $('#ctf-code').value.trim();
+    try {
+      await api(isNew ? '/api/platform/community-types' : '/api/platform/community-types/' + t.id, { method: isNew ? 'POST' : 'PUT', body });
+      toast('Đã lưu'); closeModal(); load();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+async function openMembers(c) {
+  let rows;
+  try { rows = await api('/api/platform/communities/' + c.id + '/tenants'); } catch (e) { return toast(e.message, true); }
+  modal(`<h2>Thành viên – ${esc(c.name)}</h2>
+    <div class="scroll-x"><table class="line-items"><thead><tr><th>Mã</th><th>Tên</th><th>Loại</th><th>Trạng thái</th><th></th></tr></thead>
+      <tbody id="cm-body">${rows.map((t) => `<tr data-id="${t.id}"><td><code>${esc(t.code)}</code></td><td>${esc(t.name)}</td>
+      <td>${esc(KIND_LABEL[t.kind] || t.kind)}</td><td>${statusBadge(t.status)}</td>
+      <td class="r">${t.kind === 'shop' ? '<button class="btn sm" data-act="remove">Gỡ</button>' : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">Chưa có thành viên</td></tr>'}</tbody></table></div>
+    <p class="muted">Chỉ gỡ được cửa hàng thường. Người bán và sổ quỹ bắt buộc thuộc cộng đồng: đổi cộng đồng ở form Sửa cửa hàng.</p>
+    <div class="modal-actions"><button class="btn" id="cm-close">Đóng</button></div>`);
+  $('#cm-close').onclick = closeModal;
+  $('#cm-body').onclick = async (e) => {
+    const btn = e.target.closest('[data-act="remove"]'); if (!btn) return;
+    try {
+      await api('/api/platform/communities/' + c.id + '/remove-tenant', { method: 'POST', body: { tenant_id: Number(btn.closest('tr').dataset.id) } });
+      toast('Đã gỡ'); await load(); openMembers(communities.find((x) => x.id === c.id) || c);
+    } catch (err) { toast(err.message, true); }
+  };
 }
 
 function openCommunity(c) {
   const isNew = !c;
-  const d = c || { type: 'village' };
+  const d = c || { type: communityTypes.find((t) => t.status === 'active')?.code, settings: {} };
+  const st = d.settings || {};
+  // Loại tạm ngưng không chọn được cho cộng đồng mới; giữ loại hiện tại khi sửa
+  const typeOpts = communityTypes.filter((t) => t.status === 'active' || t.code === d.type)
+    .map((t) => `<option value="${esc(t.code)}" ${t.code === d.type ? 'selected' : ''}>${esc(t.name)}</option>`).join('');
   modal(`<h2>${isNew ? 'Thêm cộng đồng' : 'Sửa cộng đồng: ' + esc(d.name)}</h2>
     <div class="form-grid">
-      ${isNew ? `<label class="fld">Mã cộng đồng *<input class="field" id="cf-code" placeholder="vd: thon-a" autocapitalize="none"></label>
-        <label class="fld">Loại<select class="field" id="cf-type">${Object.entries(COMMUNITY_TYPE_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>` : ''}
+      ${isNew ? '<label class="fld">Mã cộng đồng *<input class="field" id="cf-code" placeholder="vd: thon-a" autocapitalize="none"></label>' : ''}
+      <label class="fld">Loại<select class="field" id="cf-type">${typeOpts}</select></label>
       <label class="fld">Tên *<input class="field" id="cf-name" value="${esc(d.name || '')}"></label>
       <label class="fld">Địa bàn<input class="field" id="cf-area" value="${esc(d.area || '')}"></label>
+      <label class="fld">Người liên hệ<input class="field" id="cf-contact" value="${esc(d.contact_name || '')}"></label>
+      <label class="fld">Điện thoại liên hệ<input class="field" id="cf-phone" type="tel" value="${esc(d.contact_phone || '')}"></label>
+      <label class="fld full">Ghi chú<input class="field" id="cf-note" value="${esc(d.note || '')}"></label>
+      <label class="fld">Cảnh báo giao dịch chưa phân loại sau (ngày)<input class="field" id="cf-alert-days" type="number" min="1" max="90" value="${Number(st.unclassified_alert_days) || 3}"></label>
+      <label class="chk"><input type="checkbox" id="cf-public" ${st.public_donations ? 'checked' : ''}> Công khai danh sách công đức</label>
     </div>
+    ${isNew ? '' : '<p class="muted">Chỉ đổi loại được khi cộng đồng chưa có cửa hàng / người bán.</p>'}
     <div class="modal-actions"><button class="btn primary" id="cf-save">Lưu</button><button class="btn" id="cf-close">Đóng</button></div>`);
   $('#cf-close').onclick = closeModal;
   $('#cf-save').onclick = async () => {
-    const body = { name: $('#cf-name').value.trim(), area: $('#cf-area').value.trim() };
-    if (isNew) Object.assign(body, { code: $('#cf-code').value.trim(), type: $('#cf-type').value });
+    const body = {
+      name: $('#cf-name').value.trim(), area: $('#cf-area').value.trim(), type: $('#cf-type').value,
+      contact_name: $('#cf-contact').value.trim(), contact_phone: $('#cf-phone').value.trim(), note: $('#cf-note').value.trim(),
+      settings: { public_donations: $('#cf-public').checked, unclassified_alert_days: Number($('#cf-alert-days').value) },
+    };
+    if (isNew) body.code = $('#cf-code').value.trim();
+    else if (body.type === c.type) delete body.type;
     try {
       await api(isNew ? '/api/platform/communities' : '/api/platform/communities/' + c.id, { method: isNew ? 'POST' : 'PUT', body });
       toast('Đã lưu'); closeModal(); load();

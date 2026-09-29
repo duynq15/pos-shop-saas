@@ -430,6 +430,75 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('ERR-08: leader cannot read POS reports', (await req('c-community_leader', '/reports/summary')).status === 403);
   ok('ERR-08: platform root has no community summary', (await req('root', '/community/summary')).status === 403);
 
+  // ---------- Cấu hình loại cộng đồng + CRUD cộng đồng (GĐ1.6 — NFR-05, US-13, FR-02) ----------
+  const types0 = await rootJ('/platform/community-types');
+  ok('community types seeded with village', types0.ok && types0.data.some((t) => t.code === 'village' && t.name === 'Thôn' && t.approver_label === 'Trưởng thôn'));
+  ok('non-root cannot list community types', (await req('admin', '/platform/community-types')).status === 403);
+  ok('non-root cannot create community type', (await req('admin', '/platform/community-types', { method: 'POST', body: { code: 'x-type', name: 'X' } })).status === 403);
+  const gx = await rootJ('/platform/community-types', { method: 'POST', body: { code: 'giao-xu', name: 'Giáo xứ', approver_label: 'Cha xứ', leader_label: 'Hội đồng giáo xứ', sort_order: 2 } });
+  ok('community type create', gx.ok && gx.data.code === 'giao-xu' && gx.data.status === 'active');
+  ok('community type dup code rejected', !(await rootJ('/platform/community-types', { method: 'POST', body: { code: 'giao-xu', name: 'Trùng' } })).ok);
+  ok('community type code immutable', !(await rootJ('/platform/community-types/' + gx.data.id, { method: 'PUT', body: { code: 'khac' } })).ok);
+  const gxU = await rootJ('/platform/community-types/' + gx.data.id, { method: 'PUT', body: { name: 'Giáo xứ (sửa)', sort_order: 3 } });
+  ok('community type update', gxU.ok && gxU.data.name === 'Giáo xứ (sửa)' && gxU.data.sort_order === 3 && gxU.data.approver_label === 'Cha xứ');
+  const tmpT = await rootJ('/platform/community-types', { method: 'POST', body: { code: 'tmp-type', name: 'Tạm' } });
+  ok('unused community type delete', (await rootJ('/platform/community-types/' + tmpT.data.id, { method: 'DELETE' })).ok
+    && !(await rootJ('/platform/community-types')).data.some((t) => t.code === 'tmp-type'));
+  const vil = types0.data.find((t) => t.code === 'village');
+  const delUsed = await rootJ('/platform/community-types/' + vil.id, { method: 'DELETE' });
+  ok('community type in use cannot be deleted', !delUsed.ok && /đang dùng/.test(delUsed.error || ''));
+  await rootJ('/platform/community-types/' + gx.data.id, { method: 'PUT', body: { status: 'suspended' } });
+  ok('suspended type blocks new community', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'gx-bad', name: 'x', type: 'giao-xu' } })).ok);
+  await rootJ('/platform/community-types/' + gx.data.id, { method: 'PUT', body: { status: 'active' } });
+
+  // Cấu hình từng cộng đồng
+  const gxc = await rootJ('/platform/communities', { method: 'POST', body: { code: 'gx-a', name: 'Giáo xứ A', type: 'giao-xu', contact_name: 'Ông B', contact_phone: '0900000000', note: 'Thí điểm' } });
+  ok('community with contact + default settings', gxc.ok && gxc.data.contact_name === 'Ông B' && gxc.data.settings.public_donations === false && gxc.data.settings.unclassified_alert_days === 3);
+  ok('community settings unknown key rejected', !(await rootJ('/platform/communities/' + gxc.data.id, { method: 'PUT', body: { settings: { foo: 1 } } })).ok);
+  ok('community settings bad value rejected', !(await rootJ('/platform/communities/' + gxc.data.id, { method: 'PUT', body: { settings: { unclassified_alert_days: 0 } } })).ok
+    && !(await rootJ('/platform/communities/' + gxc.data.id, { method: 'PUT', body: { settings: { public_donations: 'yes' } } })).ok);
+  const gxs = await rootJ('/platform/communities/' + gxc.data.id, { method: 'PUT', body: { settings: { unclassified_alert_days: 5 } } });
+  ok('community settings update merges', gxs.ok && gxs.data.settings.unclassified_alert_days === 5 && gxs.data.settings.public_donations === false);
+  ok('change type of empty community', (await rootJ('/platform/communities/' + gxc.data.id, { method: 'PUT', body: { type: 'village' } })).data.type === 'village');
+  await rootJ('/platform/communities/' + gxc.data.id, { method: 'PUT', body: { type: 'giao-xu' } });
+  ok('change type of community with tenants rejected', !(await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { type: 'giao-xu' } })).ok);
+
+  // Nhãn vai trò theo loại cộng đồng (chỉ đổi tên hiển thị)
+  await rootJ('/platform/tenants', { method: 'POST', body: { code: 'quy-gx', name: 'Quỹ giáo xứ', owner_username: 'quygx', owner_password: '123456', kind: 'community', community_id: gxc.data.id } });
+  await req('gxadm', '/auth/login', { method: 'POST', body: { username: 'quygx', password: '123456' } });
+  const gxRoles = (await (await req('gxadm', '/roles')).json()).data;
+  ok('role labels follow community type', gxRoles.find((r) => r.code === 'approver').name === 'Cha xứ' && gxRoles.find((r) => r.code === 'community_leader').name === 'Hội đồng giáo xứ');
+  const gxAp = await (await req('gxadm', '/users', { method: 'POST', body: { username: 'gx-approver', password: '123456', role: 'approver' } })).json();
+  ok('user role_name uses type label', gxAp.ok && gxAp.data.role_name === 'Cha xứ');
+  const gxLogin = await (await req('gxap', '/auth/login', { method: 'POST', body: { username: 'gx-approver', password: '123456' } })).json();
+  ok('login role_name uses type label, same perms', gxLogin.data.user.role_name === 'Cha xứ' && gxLogin.data.permissions.includes('fund.approve'));
+  ok('village labels on village community', (await (await req('cadm', '/roles')).json()).data.find((r) => r.code === 'approver').name === 'Trưởng thôn');
+  ok('platform users list uses type label', (await rootJ('/platform/users')).data.find((u) => u.username === 'gx-approver').role_name === 'Cha xứ');
+
+  // Thành viên, gỡ, xóa
+  const members = await rootJ('/platform/communities/' + com.data.id + '/tenants');
+  ok('community members list', members.ok && members.data.some((t) => t.code === 'seller-a') && members.data.some((t) => t.code === 'quy-a'));
+  const delCom = await rootJ('/platform/communities/' + com.data.id, { method: 'DELETE' });
+  ok('delete community with tenants rejected', !delCom.ok && /còn \d+ cửa hàng/.test(delCom.error || ''));
+  const shopM = await rootJ('/platform/tenants', { method: 'POST', body: { code: 'shop-gx', name: 'Shop GX', owner_username: 'shopgx', owner_password: '123456', kind: 'shop', community_id: gxc.data.id } });
+  ok('remove shop from community', (await rootJ('/platform/communities/' + gxc.data.id + '/remove-tenant', { method: 'POST', body: { tenant_id: shopM.data.id } })).ok
+    && (await rootJ('/platform/tenants')).data.find((t) => t.code === 'shop-gx').community_id === null);
+  const selId = members.data.find((t) => t.code === 'seller-a').id;
+  ok('cannot remove seller from community', !(await rootJ('/platform/communities/' + com.data.id + '/remove-tenant', { method: 'POST', body: { tenant_id: selId } })).ok);
+  const emptyC = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-rong', name: 'Thôn rỗng' } });
+  ok('delete empty community', (await rootJ('/platform/communities/' + emptyC.data.id, { method: 'DELETE' })).ok
+    && !(await rootJ('/platform/communities')).data.some((c) => c.code === 'thon-rong'));
+  ok('non-root cannot delete community', (await req('admin', '/platform/communities/' + com.data.id, { method: 'DELETE' })).status === 403);
+
+  // Tạm ngưng cộng đồng: chặn báo cáo và gán mới, không khóa đăng nhập
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { status: 'suspended' } });
+  ok('suspended community summary 403', (await req('c-community_leader', '/community/summary')).status === 403);
+  ok('suspended community blocks new assignment', !(await rootJ('/platform/tenants/' + shopM.data.id, { method: 'PUT', body: { community_id: com.data.id } })).ok);
+  ok('suspended community keeps logins', (await (await req('c-community_leader', '/auth/me')).json()).ok);
+  ok('suspended community keeps existing tenant editable', (await rootJ('/platform/tenants/' + selId, { method: 'PUT', body: { name: 'Người bán A2' } })).ok);
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { status: 'active' } });
+  ok('reactivated community summary ok', (await req('c-community_leader', '/community/summary')).status === 200);
+
   for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg', '/report.html', '/report.css', '/js/report.js']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);
   console.log(R.join('\n'));
   const pass = R.filter((x) => x.startsWith('PASS')).length;
