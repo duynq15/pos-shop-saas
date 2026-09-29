@@ -3,9 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<meta name="theme-color" content="#0f172a">
+<meta name="theme-color" content="#1E40AF">
 <title>POS Shop – Phần mềm bán hàng chuyên nghiệp</title>
 <link rel="icon" href="favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -13,7 +16,7 @@
 
 <div id="login-screen" class="login-screen hidden">
   <form id="login-form" class="login-card">
-    <div class="login-brand">🛒 <b>POS Shop</b></div>
+    <div class="login-brand"><span class="brand-logo" data-icon="cart"></span><b>POS Shop</b></div>
     <p class="muted" id="login-tenant">Đăng nhập vào cửa hàng của bạn</p>
     <label class="fld">Tài khoản<input class="field" id="login-user" autocomplete="username" autocapitalize="none" autofocus></label>
     <label class="fld">Mật khẩu<input class="field" id="login-pass" type="password" autocomplete="current-password"></label>
@@ -24,21 +27,21 @@
 
 <nav class="sidebar" id="sidebar">
   <div class="brand">
-    <span class="brand-logo">🛒</span>
+    <span class="brand-logo" data-icon="cart"></span>
     <span class="brand-name" id="brand-name">POS Shop</span>
   </div>
   <div class="nav-list" id="nav-list"></div>
   <div class="sidebar-foot">
     <div class="sidebar-user" id="sidebar-user"></div>
-    <button class="nav-item" id="btn-lan"><span class="nav-icon">📶</span><span class="nav-label">Kết nối LAN</span></button>
+    <button class="nav-item" id="btn-lan"><span class="nav-icon" data-icon="wifi"></span><span class="nav-label">Kết nối LAN</span></button>
     <div class="version" id="app-version"></div>
   </div>
 </nav>
 
 <div class="mobile-topbar">
-  <button class="icon-btn" id="btn-menu">☰</button>
+  <button class="icon-btn" id="btn-menu" aria-label="Mở menu" data-icon="menu"></button>
   <span id="mobile-title">Bán hàng</span>
-  <span class="icon-btn" id="mobile-user">🧑‍💼</span>
+  <span class="icon-btn" id="mobile-user" data-icon="user"></span>
 </div>
 
 <main id="main"></main>

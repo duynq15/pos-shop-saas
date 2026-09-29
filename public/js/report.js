@@ -80,17 +80,17 @@ function render(d) {
 
 function kpi(cls, icon, k, v, fmt, s) {
   const numAttr = fmt === 'text' ? '' : ` data-num="${v}"`;
-  return `<div class="rp-kpi ${cls}"><div class="k"><span class="ic">${icon}</span>${esc(k)}</div>`
+  return `<div class="rp-kpi ${cls}"><div class="k">${icon ? `<span class="ic">${icon}</span>` : ''}${esc(k)}</div>`
     + `<div class="v"${numAttr} data-fmt="${fmt}">${fmtValue(v, fmt)}</div>`
     + `${s ? `<div class="s">${esc(s)}</div>` : ''}</div>`;
 }
 
 function renderKpis(t) {
   $('#rp-kpis').innerHTML = [
-    kpi('k1', '💳', 'Tổng giá trị giao dịch', t.value, 'money', `Giá trị TB/giao dịch ${moneyShort(t.partners_avg_txn)}`),
-    kpi('k2', '🧾', 'Tổng số giao dịch', t.txns, 'int', `${num(t.returns)} giao dịch hoàn`),
-    kpi('k3', '🤝', 'Đối tác cung cấp', t.partners, 'int', `Trong khu vực ${num(t.partners_inside)} · Ngoài khu vực ${num(t.partners_outside)}`),
-    kpi('k4', '👥', 'Đối tác thanh toán', t.partners_txn, 'int', `Tỷ lệ thanh toán số ${t.digital_share}%`),
+    kpi('k1', '', 'Tổng giá trị giao dịch', t.value, 'money', `Giá trị TB/giao dịch ${moneyShort(t.partners_avg_txn)}`),
+    kpi('k2', '', 'Tổng số giao dịch', t.txns, 'int', `${num(t.returns)} giao dịch hoàn`),
+    kpi('k3', '', 'Đối tác cung cấp', t.partners, 'int', `Trong khu vực ${num(t.partners_inside)} · Ngoài khu vực ${num(t.partners_outside)}`),
+    kpi('k4', '', 'Đối tác thanh toán', t.partners_txn, 'int', `Tỷ lệ thanh toán số ${t.digital_share}%`),
   ].join('');
 }
 

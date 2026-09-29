@@ -2,6 +2,7 @@ import { $, $$, esc, toast, modal, closeModal, setCurrency, fmtDT } from '../uti
 import { api, state, loadSettings, loadPriceLists } from '../store.js';
 import { showLanInfo } from './lan.js';
 import { isProd } from '../auth.js';
+import { icon } from '../icons.js';
 
 const BANKS = [
   ['970436', 'Vietcombank'], ['970415', 'VietinBank'], ['970418', 'BIDV'], ['970405', 'Agribank'], ['970422', 'MB Bank'], ['970407', 'Techcombank'],
@@ -15,7 +16,7 @@ const BANKS = [
 export default {
   id: 'settings',
   label: 'Cài đặt',
-  icon: '⚙️',
+  icon: icon('settings'),
 
   mount(el) {
     el.innerHTML = `
@@ -99,7 +100,7 @@ export default {
   <div class="card">
     <h3>Kết nối thiết bị khác (LAN)</h3>
     <p class="muted">Điện thoại/máy tính bảng trong cùng Wi-Fi truy cập phần mềm qua địa chỉ máy chủ.</p>
-    <button class="btn" id="btn-lan-settings">📶 Xem địa chỉ &amp; mã QR</button>
+    <button class="btn" id="btn-lan-settings">Xem địa chỉ &amp; mã QR</button>
   </div>
 
   <div class="card">

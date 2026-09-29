@@ -12,6 +12,8 @@ import usersView from './views/users.js';
 import settings from './views/settings.js';
 import { platformViews } from './views/platform.js';
 import communityView from './views/community.js';
+import { icon } from './icons.js';
+document.querySelectorAll('[data-icon]').forEach((el) => { el.innerHTML = icon(el.dataset.icon); });
 
 const reportOverview = makeReportView('overview');
 const reportProducts = makeReportView('products');

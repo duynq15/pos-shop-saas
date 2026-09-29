@@ -1,6 +1,7 @@
 import { $, esc, num, money, today, toast, modal, closeModal, confirmDialog } from '../util.js';
 import { api } from '../store.js';
 import { isProd, can, auth } from '../auth.js';
+import { icon } from '../icons.js';
 
 let tenants = [];
 let plans = [];
@@ -39,7 +40,7 @@ const makeView = (id, label, icon, perms, tab, html, wire) => ({
 });
 
 export const platformViews = [
-  makeView('platform', 'Đối tác', '🏢', ['tenants.view'], 'tenants', `
+  makeView('platform', 'Đối tác', icon('building'), ['tenants.view'], 'tenants', `
 <div class="view-head"><div><h1>Đối tác</h1><div class="sub" id="pf-stats"></div></div>
   <button class="btn primary" id="pf-new">+ Thêm cửa hàng</button></div>
 <div class="tbl-wrap" id="pf-card" style="margin-bottom:14px"><table class="grid"><thead><tr>
@@ -59,7 +60,7 @@ export const platformViews = [
     });
 
   }),
-  makeView('platform-communities', 'Cộng đồng', '🏘️', ['communities.view'], 'communities', `
+  makeView('platform-communities', 'Cộng đồng', icon('home'), ['communities.view'], 'communities', `
 <div class="view-head"><div><h1>Cộng đồng</h1><div class="sub" id=""></div></div></div>
 <div class="card" style="margin-bottom:14px" id="ct-card"><div class="toolbar"><h3 style="margin:0">Loại cộng đồng</h3><span class="spacer"></span><button class="btn primary" id="ct-new">+ Thêm loại</button></div>
   <p class="muted">Thôn, giáo xứ, chợ… Nhãn vai trò duyệt chi và ban lãnh đạo hiển thị theo loại; quyền không đổi. Tạm ngưng loại thì không tạo được cộng đồng mới của loại đó.</p>
@@ -106,7 +107,7 @@ export const platformViews = [
       }
     });
   }),
-  makeView('platform-reports', 'Báo cáo nền tảng', '📊', ['reports.view'], 'reports', `
+  makeView('platform-reports', 'Báo cáo nền tảng', icon('chart'), ['reports.view'], 'reports', `
 <div class="view-head"><div><h1>Báo cáo nền tảng</h1><div class="sub" id=""></div></div></div>
 <div class="card" style="margin-bottom:14px" id="pr-card"><h3>Báo cáo theo cửa hàng</h3>
   <div class="toolbar"><input type="date" class="field" id="pr-from"><input type="date" class="field" id="pr-to"><button class="btn primary" id="pr-view">Xem</button><span class="spacer"></span><span id="pr-total" class="muted"></span></div>
@@ -116,7 +117,7 @@ export const platformViews = [
 </div>`, () => {
     $('#pr-view').onclick = loadReport;
   }),
-  makeView('platform-config', 'Cấu hình nền tảng', '⚙️', ['vietqr.manage', 'public_report.manage'], 'config', `
+  makeView('platform-config', 'Cấu hình nền tảng', icon('settings'), ['vietqr.manage', 'public_report.manage'], 'config', `
 <div class="view-head"><div><h1>Cấu hình nền tảng</h1><div class="sub" id=""></div></div></div>
 <div class="card" style="margin-bottom:14px" id="pv-card"><h3>VietQR dùng chung (nền tảng)</h3>
   <p class="muted">Dùng khi nhiều shop chung một tài khoản VietQR. Shop để trống Username/Password sẽ dùng bộ này; mỗi shop vẫn tự nhập số tài khoản ngân hàng của mình.</p>
@@ -145,7 +146,7 @@ export const platformViews = [
     $('#pp-open').onclick = () => { const u = $('#pp-url').value; if (u) window.open(u, '_blank', 'noopener'); };
     $('#pp-copy').onclick = copyPublicLink;
   }),
-  makeView('platform-staff', 'Nhân sự & vai trò', '👥', ['staff.manage'], 'staff', `
+  makeView('platform-staff', 'Nhân sự & vai trò', icon('users'), ['staff.manage'], 'staff', `
 <div class="view-head"><div><h1>Nhân sự & vai trò</h1><div class="sub" id=""></div></div></div>
 <div class="card" style="margin-bottom:14px" id="rl-card"><div class="toolbar"><h3 style="margin:0">Vai trò nền tảng</h3><span class="spacer"></span><button class="btn primary" id="rl-new">+ Thêm vai trò</button></div>
   <p class="muted">Quyền của nhân sự nền tảng. Phạm vi "Cộng đồng được giao" chỉ thấy cộng đồng và đối tác thuộc cộng đồng gán cho từng người. Quản trị tối cao có toàn quyền, không sửa được.</p>

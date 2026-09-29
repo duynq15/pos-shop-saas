@@ -1,10 +1,11 @@
 import { $, esc, modal, closeModal, toast } from '../util.js';
 import { api, state, loadPromotions, loadCategories } from '../store.js';
+import { icon } from '../icons.js';
 
 export default {
   id: 'promotions',
   label: 'Khuyến mãi',
-  icon: '🎁',
+  icon: icon('gift'),
 
   mount(el) {
     el.innerHTML = `

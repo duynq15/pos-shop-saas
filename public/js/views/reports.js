@@ -1,11 +1,12 @@
 import { $, esc, num, money, today, addDays, monthStart } from '../util.js';
 import { api } from '../store.js';
+import { icon } from '../icons.js';
 
 const CFG = {
-  overview: { label: 'Tổng quan', icon: '📊', desc: 'Doanh thu, lợi nhuận và tình hình bán hàng' },
-  products: { label: 'Báo cáo sản phẩm', icon: '📦', desc: 'Doanh thu, lợi nhuận, số lượng theo từng sản phẩm' },
-  vat: { label: 'Thuế VAT', icon: '🧾', desc: 'Thuế GTGT đầu ra, đầu vào và thuế phải nộp' },
-  analytics: { label: 'Phân tích thông minh', icon: '🧠', desc: 'ABC/Pareto, gợi ý nhập hàng, mua kèm, bất thường' },
+  overview: { label: 'Tổng quan', icon: icon('chart'), desc: 'Doanh thu, lợi nhuận và tình hình bán hàng' },
+  products: { label: 'Báo cáo sản phẩm', icon: icon('package'), desc: 'Doanh thu, lợi nhuận, số lượng theo từng sản phẩm' },
+  vat: { label: 'Thuế VAT', icon: icon('percent'), desc: 'Thuế GTGT đầu ra, đầu vào và thuế phải nộp' },
+  analytics: { label: 'Phân tích thông minh', icon: icon('trend'), desc: 'ABC/Pareto, gợi ý nhập hàng, mua kèm, bất thường' },
 };
 
 const head = (section, extra = '') => `
@@ -26,27 +27,27 @@ const head = (section, extra = '') => `
 const stat = (ic, k, v, cls = '', sub = '') => `<div class="stat ${cls}"><div class="k"><span class="ic">${ic}</span>${k}</div><div class="v">${v}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>`;
 
 function shell(section) {
-  if (section === 'overview') return `${head(section, '<button class="btn" data-export="sales">📥 Xuất Excel</button>')}
+  if (section === 'overview') return `${head(section, '<button class="btn" data-export="sales">Xuất Excel</button>')}
 <div class="stats" id="rp-stats"></div>
 <div class="grid2" style="margin-bottom:14px">
-  <div class="card"><div class="sec-title">📈 Doanh thu theo ngày</div><div id="rp-days"></div></div>
-  <div class="card"><div class="sec-title">🏆 Top sản phẩm bán chạy</div><div id="rp-top"></div></div>
+  <div class="card"><div class="sec-title">Doanh thu theo ngày</div><div id="rp-days"></div></div>
+  <div class="card"><div class="sec-title">Top sản phẩm bán chạy</div><div id="rp-top"></div></div>
 </div>
 <div class="grid2" style="margin-bottom:14px">
-  <div class="card"><div class="sec-title">🗂️ Doanh thu theo danh mục</div><div id="rp-cat"></div></div>
-  <div class="card"><div class="sec-title">🕒 Doanh thu theo giờ</div><div id="rp-hours"></div></div>
+  <div class="card"><div class="sec-title">Doanh thu theo danh mục</div><div id="rp-cat"></div></div>
+  <div class="card"><div class="sec-title">Doanh thu theo giờ</div><div id="rp-hours"></div></div>
 </div>
 <div class="grid2">
-  <div class="card"><div class="sec-title">⚠️ Sản phẩm sắp hết hàng <span class="hint" id="rp-low-n"></span></div><div class="tbl-wrap" style="box-shadow:none;max-height:300px"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">Tối thiểu</th></tr></thead><tbody id="rp-low"></tbody></table></div></div>
-  <div class="card"><div class="sec-title">🐢 Hàng bán chậm / tồn lâu</div><div class="tbl-wrap" style="box-shadow:none;max-height:300px"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">Giá trị tồn</th><th class="r">Đã bán</th></tr></thead><tbody id="rp-slow"></tbody></table></div></div>
+  <div class="card"><div class="sec-title">Sản phẩm sắp hết hàng <span class="hint" id="rp-low-n"></span></div><div class="tbl-wrap" style="box-shadow:none;max-height:300px"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">Tối thiểu</th></tr></thead><tbody id="rp-low"></tbody></table></div></div>
+  <div class="card"><div class="sec-title">Hàng bán chậm / tồn lâu</div><div class="tbl-wrap" style="box-shadow:none;max-height:300px"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">Giá trị tồn</th><th class="r">Đã bán</th></tr></thead><tbody id="rp-slow"></tbody></table></div></div>
 </div>`;
 
-  if (section === 'products') return `${head(section, '<button class="btn" id="rp-prod-export">📥 Xuất Excel</button>')}
+  if (section === 'products') return `${head(section, '<button class="btn" id="rp-prod-export">Xuất Excel</button>')}
 <div class="stats" id="rp-prod-stats"></div>
 <div class="card">
-  <div class="sec-title">📦 Bảng sản phẩm <span class="hint" id="rp-prod-n"></span></div>
+  <div class="sec-title">Bảng sản phẩm <span class="hint" id="rp-prod-n"></span></div>
   <div class="toolbar" style="margin-bottom:10px">
-    <input class="field grow" id="rp-prod-q" placeholder="🔍 Tìm sản phẩm...">
+    <input class="field grow" id="rp-prod-q" placeholder="Tìm sản phẩm...">
     <select class="field" id="rp-prod-sort"><option value="revenue">Xếp theo doanh thu</option><option value="qty">Xếp theo số lượng</option><option value="profit">Xếp theo lợi nhuận</option><option value="name">Xếp theo tên</option></select>
     <button class="btn" id="rp-prod-view">Xem</button>
   </div>
@@ -58,19 +59,19 @@ function shell(section) {
   if (section === 'vat') return `${head(section)}
 <div class="stats" id="rp-vat-stats"></div>
 <div class="card">
-  <div class="sec-title">🧾 Chi tiết thuế GTGT</div>
+  <div class="sec-title">Chi tiết thuế GTGT</div>
   <div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr><th>Loại</th><th class="r">Giá trị hàng</th><th class="r">Tiền thuế</th></tr></thead><tbody id="rp-vat"></tbody></table></div>
   <div class="rowline total"><span>VAT phải nộp (đầu ra − đầu vào)</span><b id="rp-vat-pay">0</b></div>
 </div>`;
 
   return `${head(section)}
 <div class="grid2" style="margin-bottom:14px">
-  <div class="card"><div class="sec-title">🔤 Nhóm ABC (doanh thu) <span class="hint" id="an-abc-n"></span></div><div class="tbl-wrap" style="box-shadow:none;max-height:320px"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Doanh thu</th><th class="c">% lũy kế</th><th class="c">Nhóm</th></tr></thead><tbody id="an-abc"></tbody></table></div></div>
-  <div class="card"><div class="sec-title">🛒 Gợi ý nhập hàng</div><div class="tbl-wrap" style="box-shadow:none;max-height:320px"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">/ngày</th><th class="r">Đủ dùng</th><th class="r">Đề xuất</th></tr></thead><tbody id="an-reorder"></tbody></table></div></div>
+  <div class="card"><div class="sec-title">Nhóm ABC (doanh thu) <span class="hint" id="an-abc-n"></span></div><div class="tbl-wrap" style="box-shadow:none;max-height:320px"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Doanh thu</th><th class="c">% lũy kế</th><th class="c">Nhóm</th></tr></thead><tbody id="an-abc"></tbody></table></div></div>
+  <div class="card"><div class="sec-title">Gợi ý nhập hàng</div><div class="tbl-wrap" style="box-shadow:none;max-height:320px"><table class="grid"><thead><tr><th>Sản phẩm</th><th class="r">Tồn</th><th class="r">/ngày</th><th class="r">Đủ dùng</th><th class="r">Đề xuất</th></tr></thead><tbody id="an-reorder"></tbody></table></div></div>
 </div>
 <div class="grid2">
-  <div class="card"><div class="sec-title">🤝 Thường mua kèm</div><div class="tbl-wrap" style="box-shadow:none;max-height:240px"><table class="grid"><thead><tr><th>Cặp sản phẩm</th><th class="r">Số lần</th></tr></thead><tbody id="an-basket"></tbody></table></div></div>
-  <div class="card"><div class="sec-title">🚩 Bất thường (giảm giá cao)</div><div class="tbl-wrap" style="box-shadow:none;max-height:240px"><table class="grid"><thead><tr><th>Hóa đơn</th><th class="r">Giảm %</th><th class="r">Tổng</th></tr></thead><tbody id="an-anom"></tbody></table></div></div>
+  <div class="card"><div class="sec-title">Thường mua kèm</div><div class="tbl-wrap" style="box-shadow:none;max-height:240px"><table class="grid"><thead><tr><th>Cặp sản phẩm</th><th class="r">Số lần</th></tr></thead><tbody id="an-basket"></tbody></table></div></div>
+  <div class="card"><div class="sec-title">Bất thường (giảm giá cao)</div><div class="tbl-wrap" style="box-shadow:none;max-height:240px"><table class="grid"><thead><tr><th>Hóa đơn</th><th class="r">Giảm %</th><th class="r">Tổng</th></tr></thead><tbody id="an-anom"></tbody></table></div></div>
 </div>`;
 }
 
@@ -119,18 +120,18 @@ export function makeReportView(section) {
       api(`/api/reports/slow-moving?from=${from}&to=${to}`),
     ]);
     const cards = [
-      stat('💰', 'Doanh thu thuần', money(r.revenue), 'primary', `${num(r.invoices)} hóa đơn`),
-      stat('📈', 'Lợi nhuận gộp', money(r.profit), 'ok', r.revenue ? `${Math.round((r.profit / r.revenue) * 100)}% biên LN` : ''),
-      stat('🧾', 'Số hóa đơn', num(r.invoices)),
-      stat('📦', 'Số món bán', num(r.items)),
-      stat('🧮', 'Giá trị TB/đơn', money(r.avg_order)),
-      stat('🏷️', 'Giảm giá', money(r.discount), r.discount ? 'warn' : ''),
-      stat('💵', 'Tiền mặt', money(r.cash)),
-      stat('🏦', 'Chuyển khoản', money(r.transfer)),
-      stat('💳', 'Thẻ', money(r.card)),
-      stat('↩️', 'Phiếu trả hàng', num(r.returns), r.returns ? 'danger' : '', money(r.return_amount)),
-      stat('🏬', 'Giá trị tồn kho', money(inv.stock_value)),
-      stat('⏳', 'Chờ chuyển khoản', `${num(r.pending.c)} HĐ`, r.pending.c ? 'warn' : '', money(r.pending.total)),
+      stat(icon('wallet'), 'Doanh thu thuần', money(r.revenue), 'primary', `${num(r.invoices)} hóa đơn`),
+      stat(icon('trend'), 'Lợi nhuận gộp', money(r.profit), 'ok', r.revenue ? `${Math.round((r.profit / r.revenue) * 100)}% biên LN` : ''),
+      stat(icon('receipt'), 'Số hóa đơn', num(r.invoices)),
+      stat(icon('package'), 'Số món bán', num(r.items)),
+      stat(icon('chart'), 'Giá trị TB/đơn', money(r.avg_order)),
+      stat(icon('tag'), 'Giảm giá', money(r.discount), r.discount ? 'warn' : ''),
+      stat(icon('wallet'), 'Tiền mặt', money(r.cash)),
+      stat(icon('bank'), 'Chuyển khoản', money(r.transfer)),
+      stat(icon('card'), 'Thẻ', money(r.card)),
+      stat(icon('undo'), 'Phiếu trả hàng', num(r.returns), r.returns ? 'danger' : '', money(r.return_amount)),
+      stat(icon('building'), 'Giá trị tồn kho', money(inv.stock_value)),
+      stat(icon('clock'), 'Chờ chuyển khoản', `${num(r.pending.c)} HĐ`, r.pending.c ? 'warn' : '', money(r.pending.total)),
     ];
     $('#rp-stats').innerHTML = cards.join('');
     $('#rp-days').innerHTML = colChart(r.byDay, 'revenue', 'day');
@@ -150,10 +151,10 @@ export function makeReportView(section) {
     const qty = prodRows.reduce((s, p) => s + Number(p.qty || 0), 0);
     const best = [...prodRows].sort((a, b) => b.revenue - a.revenue)[0];
     $('#rp-prod-stats').innerHTML = [
-      stat('💰', 'Tổng doanh thu', money(rev), 'primary', `${num(prodRows.length)} sản phẩm`),
-      stat('📈', 'Tổng lợi nhuận', money(pro), 'ok', rev ? `${Math.round((pro / rev) * 100)}% biên LN` : ''),
-      stat('📦', 'Tổng SL bán', num(qty)),
-      stat('🏆', 'Bán chạy nhất', best ? esc(best.name) : '—'),
+      stat(icon('wallet'), 'Tổng doanh thu', money(rev), 'primary', `${num(prodRows.length)} sản phẩm`),
+      stat(icon('trend'), 'Tổng lợi nhuận', money(pro), 'ok', rev ? `${Math.round((pro / rev) * 100)}% biên LN` : ''),
+      stat(icon('package'), 'Tổng SL bán', num(qty)),
+      stat(icon('trend'), 'Bán chạy nhất', best ? esc(best.name) : '—'),
     ].join('');
     renderProducts();
   }
@@ -180,9 +181,9 @@ export function makeReportView(section) {
     const outVat = vat.output.reduce((s, t) => s + Number(t.tax || 0), 0);
     const inpVat = vat.input.reduce((s, t) => s + Number(t.tax || 0), 0);
     $('#rp-vat-stats').innerHTML = [
-      stat('⬆️', 'VAT đầu ra', money(outVat), 'primary'),
-      stat('⬇️', 'VAT đầu vào', money(inpVat)),
-      stat('🧾', 'VAT phải nộp', money(vat.payable), vat.payable > 0 ? 'warn' : 'ok'),
+      stat(icon('up'), 'VAT đầu ra', money(outVat), 'primary'),
+      stat(icon('down'), 'VAT đầu vào', money(inpVat)),
+      stat(icon('receipt'), 'VAT phải nộp', money(vat.payable), vat.payable > 0 ? 'warn' : 'ok'),
     ].join('');
     const rows = [
       '<tr class="group-row"><td colspan="3">Bán ra (đầu ra)</td></tr>',

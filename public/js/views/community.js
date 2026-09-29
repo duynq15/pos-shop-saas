@@ -2,13 +2,14 @@
 // Chỉ hiện số tổng; API không trả số liệu từng người bán.
 import { $, esc, num, money, today, monthStart } from '../util.js';
 import { api } from '../store.js';
+import { icon } from '../icons.js';
 
 const stat = (k, v, cls = '') => `<div class="stat ${cls}"><div class="k">${k}</div><div class="v">${v}</div></div>`;
 
 export default {
   id: 'community',
   label: 'Cộng đồng',
-  icon: '🏘️',
+  icon: icon('home'),
 
   mount(el) {
     el.innerHTML = `
