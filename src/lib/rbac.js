@@ -114,4 +114,19 @@ const roleName = (r, labels) => {
 };
 const maxDiscount = (r) => (ROLES[r] ? ROLES[r].maxDiscount : 0);
 
-module.exports = { PERMISSIONS, ROLES, permsFor, has, roleName, maxDiscount, roleAllowed, rolesFor };
+// Quyền nền tảng (GĐ1.7). Gán cho vai trò trong platform_roles; '*' chỉ dành cho vai trò hệ thống
+const PLATFORM_PERMS = [
+  { code: 'tenants.view', label: 'Xem cửa hàng', group: 'Cửa hàng' },
+  { code: 'tenants.manage', label: 'Sửa cửa hàng', group: 'Cửa hàng' },
+  { code: 'tenants.create_owner', label: 'Tạo cửa hàng + tài khoản chủ', group: 'Cửa hàng' },
+  { code: 'communities.view', label: 'Xem cộng đồng', group: 'Cộng đồng' },
+  { code: 'communities.manage', label: 'Quản lý cộng đồng', group: 'Cộng đồng' },
+  { code: 'community_types.manage', label: 'Quản lý loại cộng đồng', group: 'Cộng đồng' },
+  { code: 'users.view', label: 'Xem tài khoản', group: 'Tài khoản' },
+  { code: 'staff.manage', label: 'Quản lý vai trò, nhân sự nền tảng', group: 'Tài khoản' },
+  { code: 'reports.view', label: 'Xem báo cáo', group: 'Báo cáo' },
+  { code: 'vietqr.manage', label: 'Cấu hình VietQR', group: 'Hệ thống' },
+  { code: 'public_report.manage', label: 'Báo cáo công khai', group: 'Hệ thống' },
+];
+
+module.exports = { PLATFORM_PERMS, PERMISSIONS, ROLES, permsFor, has, roleName, maxDiscount, roleAllowed, rolesFor };

@@ -53,6 +53,28 @@ CREATE TABLE IF NOT EXISTS community_types (
   created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
+-- Vai trò nền tảng cấu hình được (GĐ1.7). Nhân sự nền tảng là users có tenant_id NULL, users.role = platform_roles.code
+CREATE TABLE IF NOT EXISTS platform_roles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  scope TEXT NOT NULL DEFAULT 'all',
+  status TEXT NOT NULL DEFAULT 'active',
+  is_system INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS platform_role_permissions (
+  role_id INTEGER NOT NULL REFERENCES platform_roles(id) ON DELETE CASCADE,
+  permission TEXT NOT NULL,
+  PRIMARY KEY (role_id, permission)
+);
+CREATE TABLE IF NOT EXISTS platform_user_communities (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, community_id)
+);
+
 CREATE TABLE IF NOT EXISTS plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   code TEXT UNIQUE NOT NULL,
@@ -146,6 +168,23 @@ if (!control.prepare('SELECT COUNT(*) c FROM community_types').get().c) {
     ['market', 'Chợ', 'Trưởng ban quản lý chợ', 'Ban quản lý chợ'],
     ['association', 'Hội nhóm', 'Chủ nhiệm', 'Ban chấp hành'],
   ].forEach((t, i) => ins.run(...t, i + 1));
+}
+// GĐ1.7: vai trò nền tảng. 'platform' là quản trị tối cao (*), không sửa / xóa được; các vai trò mẫu sửa được
+if (!control.prepare("SELECT id FROM platform_roles WHERE code='platform'").get()) {
+  const insRole = control.prepare('INSERT INTO platform_roles(code,name,description,scope,is_system) VALUES (?,?,?,?,?)');
+  const insPerm = control.prepare('INSERT INTO platform_role_permissions(role_id,permission) VALUES (?,?)');
+  [
+    ['platform', 'Quản trị tối cao', 'Toàn quyền nền tảng', 'all', 1, ['*']],
+    ['platform_ops', 'Vận hành', 'Quản lý cửa hàng, cộng đồng, báo cáo', 'all', 0,
+      ['tenants.view', 'tenants.manage', 'communities.view', 'communities.manage', 'users.view', 'reports.view']],
+    ['platform_community', 'Quản lý cộng đồng', 'Chỉ các cộng đồng được giao', 'assigned', 0,
+      ['tenants.view', 'tenants.manage', 'communities.view', 'communities.manage', 'users.view', 'reports.view']],
+    ['platform_support', 'Hỗ trợ', 'Chỉ xem', 'all', 0, ['tenants.view', 'communities.view', 'users.view', 'reports.view']],
+    ['platform_tech', 'Kỹ thuật', 'Cấu hình VietQR, báo cáo công khai', 'all', 0, ['tenants.view', 'vietqr.manage', 'public_report.manage']],
+  ].forEach(([code, name, desc, scope, sys, perms]) => {
+    const id = Number(insRole.run(code, name, desc, scope, sys).lastInsertRowid);
+    perms.forEach((p) => insPerm.run(id, p));
+  });
 }
 for (const [col, def] of [['amount', 'INTEGER'], ['content', 'TEXT'], ['bank_account', 'TEXT']]) {
   if (!controlColumns('qr_orders').includes(col)) control.exec(`ALTER TABLE qr_orders ADD COLUMN ${col} ${def}`);
@@ -306,5 +345,16 @@ function communityRoleLabels(communityId) {
     JOIN community_types ct ON ct.code = c.type WHERE c.id=?`).get(communityId) || null;
 }
 
-module.exports = { control, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired, getPlatformSettings, setPlatformSettings, nextGlobalSeq, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders,
+// Vai trò nền tảng của nhân sự (tenant_id NULL). Vai trò tạm ngưng / không tồn tại: không có quyền
+function platformRole(code) {
+  const r = control.prepare('SELECT * FROM platform_roles WHERE code=?').get(code);
+  if (!r) return null;
+  const permissions = r.status === 'active'
+    ? control.prepare('SELECT permission FROM platform_role_permissions WHERE role_id=? ORDER BY permission').all(r.id).map((x) => x.permission) : [];
+  return { ...r, permissions };
+}
+const platformUserCommunities = (userId) =>
+  control.prepare('SELECT community_id FROM platform_user_communities WHERE user_id=? ORDER BY community_id').all(userId).map((x) => x.community_id);
+
+module.exports = { control, platformRole, platformUserCommunities, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired, getPlatformSettings, setPlatformSettings, nextGlobalSeq, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders,
   TENANT_KINDS, tenantByCode, sharedAccountConflict, COMMUNITY_SETTINGS, communitySettings, validateCommunitySettings, communityRoleLabels };

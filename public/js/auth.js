@@ -15,7 +15,7 @@ export function applyAuth(data) {
   auth.user = data.user || null;
   auth.tenant = data.tenant || null;
   auth.permissions = data.permissions || [];
-  auth.isPlatform = !!(data.user && data.user.role === 'platform');
+  auth.isPlatform = !!(data.user && data.user.tenant_id == null);
   auth.appEnv = data.app_env || 'development';
 }
 

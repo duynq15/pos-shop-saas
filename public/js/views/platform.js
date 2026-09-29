@@ -1,11 +1,14 @@
 import { $, esc, num, money, today, toast, modal, closeModal, confirmDialog } from '../util.js';
 import { api } from '../store.js';
-import { isProd } from '../auth.js';
+import { isProd, can, auth } from '../auth.js';
 
 let tenants = [];
 let plans = [];
 let communities = [];
 let communityTypes = [];
+let roles = [];
+let staff = [];
+let perms = [];
 
 // Nhãn theo loại tenant (GĐ1.5). Loại cộng đồng lấy từ /community-types (GĐ1.6)
 const KIND_LABEL = { shop: 'Cửa hàng', seller: 'Người bán', community: 'Sổ quỹ cộng đồng' };
@@ -21,13 +24,13 @@ export default {
     el.innerHTML = `
 <div class="view-head"><div><h1>Quản trị nền tảng</h1><div class="sub" id="pf-stats"></div></div>
   <button class="btn primary" id="pf-new">+ Thêm cửa hàng</button></div>
-<div class="card" style="margin-bottom:14px"><h3>Báo cáo theo cửa hàng</h3>
+<div class="card" style="margin-bottom:14px" id="pr-card"><h3>Báo cáo theo cửa hàng</h3>
   <div class="toolbar"><input type="date" class="field" id="pr-from"><input type="date" class="field" id="pr-to"><button class="btn primary" id="pr-view">Xem</button><span class="spacer"></span><span id="pr-total" class="muted"></span></div>
   <div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr>
     <th>Cửa hàng</th><th class="r">Số HĐ</th><th class="r">Doanh thu</th><th class="r">Lợi nhuận</th><th class="r">Sản phẩm</th><th class="r">Sắp hết</th><th>Trạng thái</th>
   </tr></thead><tbody id="pr-body"></tbody></table></div>
 </div>
-<div class="card" style="margin-bottom:14px"><h3>VietQR dùng chung (nền tảng)</h3>
+<div class="card" style="margin-bottom:14px" id="pv-card"><h3>VietQR dùng chung (nền tảng)</h3>
   <p class="muted">Dùng khi nhiều shop chung một tài khoản VietQR. Shop để trống Username/Password sẽ dùng bộ này; mỗi shop vẫn tự nhập số tài khoản ngân hàng của mình.</p>
   <div class="form-grid">
     <label class="fld">Môi trường<select class="field" id="pv-env">${isProd() ? '<option value="prod">prod</option>' : '<option value="mock">mock</option><option value="dev">dev</option><option value="prod">prod</option>'}</select></label>
@@ -36,7 +39,7 @@ export default {
   </div>
   <div class="toolbar"><button class="btn primary" id="pv-save">Lưu</button><span id="pv-status" class="muted"></span></div>
 </div>
-<div class="card" style="margin-bottom:14px"><h3>Báo cáo thống kê giao dịch (công khai)</h3>
+<div class="card" style="margin-bottom:14px" id="pp-card"><h3>Báo cáo thống kê giao dịch (công khai)</h3>
   <p class="muted">Bật để có trang thống kê giao dịch thanh toán số cho ban điều hành, chia sẻ bằng <b>link bí mật</b> (không cần đăng nhập; chỉ hiển thị chỉ số giao dịch và mức tham gia, không có giá vốn/lợi nhuận). Đổi link bất cứ lúc nào để thu hồi quyền xem.</p>
   <label class="chk"><input type="checkbox" id="pp-enabled"> Bật báo cáo công khai</label>
   <div class="toolbar" style="margin-top:8px">
@@ -60,9 +63,20 @@ export default {
     <th>Mã</th><th>Tên</th><th>Loại</th><th>Địa bàn</th><th class="r">Số tenant</th><th>Trạng thái</th><th></th>
   </tr></thead><tbody id="pc-body"></tbody></table></div>
 </div>
-<div class="tbl-wrap"><table class="grid"><thead><tr>
+<div class="tbl-wrap" id="pf-card" style="margin-bottom:14px"><table class="grid"><thead><tr>
   <th>Mã</th><th>Tên đối tác</th><th>Loại</th><th>Cộng đồng</th><th>Khu vực</th><th>Gói</th><th class="r">Người dùng</th><th>Hết hạn</th><th>Trạng thái</th><th></th>
-</tr></thead><tbody id="pf-body"></tbody></table></div>`;
+</tr></thead><tbody id="pf-body"></tbody></table></div>
+<div class="card" style="margin-bottom:14px" id="rl-card"><div class="toolbar"><h3 style="margin:0">Vai trò nền tảng</h3><span class="spacer"></span><button class="btn primary" id="rl-new">+ Thêm vai trò</button></div>
+  <p class="muted">Quyền của nhân sự nền tảng. Phạm vi "Cộng đồng được giao" chỉ thấy cộng đồng và đối tác thuộc cộng đồng gán cho từng người. Quản trị tối cao có toàn quyền, không sửa được.</p>
+  <div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr>
+    <th>Mã</th><th>Tên</th><th>Phạm vi</th><th>Quyền</th><th class="r">Nhân sự</th><th>Trạng thái</th><th></th>
+  </tr></thead><tbody id="rl-body"></tbody></table></div>
+</div>
+<div class="card" style="margin-bottom:14px" id="st-card"><div class="toolbar"><h3 style="margin:0">Nhân sự nền tảng</h3><span class="spacer"></span><button class="btn primary" id="st-new">+ Thêm nhân sự</button></div>
+  <div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr>
+    <th>Tài khoản</th><th>Họ tên</th><th>Vai trò</th><th>Cộng đồng được giao</th><th>Trạng thái</th><th></th>
+  </tr></thead><tbody id="st-body"></tbody></table></div>
+</div>`;
     $('#pf-new').onclick = () => openForm(null);
     $('#pr-view').onclick = loadReport;
     $('#pv-save').onclick = saveVqrConfig;
@@ -72,6 +86,29 @@ export default {
     $('#pp-copy').onclick = copyPublicLink;
     $('#pc-new').onclick = () => openCommunity(null);
     $('#ct-new').onclick = () => openType(null);
+    $('#rl-new').onclick = () => openRole(null);
+    $('#st-new').onclick = () => openStaff(null);
+    $('#rl-body').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-act]'); if (!btn) return;
+      const r = roles.find((x) => x.id === Number(btn.closest('tr').dataset.id));
+      if (btn.dataset.act === 'edit') return openRole(r);
+      try {
+        if (btn.dataset.act === 'toggle') await api('/api/platform/roles/' + r.id, { method: 'PUT', body: { status: r.status === 'active' ? 'suspended' : 'active' } });
+        if (btn.dataset.act === 'del') {
+          if (!(await confirmDialog(`Xóa vai trò "${r.name}"?`))) return;
+          await api('/api/platform/roles/' + r.id, { method: 'DELETE' });
+        }
+        toast('Đã lưu'); load();
+      } catch (err) { toast(err.message, true); }
+    });
+    $('#st-body').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-act]'); if (!btn) return;
+      const u = staff.find((x) => x.id === Number(btn.closest('tr').dataset.id));
+      if (btn.dataset.act === 'edit') return openStaff(u);
+      if (btn.dataset.act === 'toggle') {
+        try { await api('/api/platform/staff/' + u.id, { method: 'PUT', body: { active: !u.active } }); toast('Đã lưu'); load(); } catch (err) { toast(err.message, true); }
+      }
+    });
     $('#ct-body').addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-act]'); if (!btn) return;
       const t = communityTypes.find((x) => x.id === Number(btn.closest('tr').dataset.id));
@@ -116,11 +153,15 @@ export default {
   },
 
   async show() {
+    // Ẩn thẻ và nút theo quyền của vai trò nền tảng (GĐ1.7); API vẫn chặn độc lập
+    const vis = { 'pr-card': 'reports.view', 'pv-card': 'vietqr.manage', 'pp-card': 'public_report.manage', 'ct-card': 'communities.view', 'pc-card': 'communities.view',
+      'pf-card': 'tenants.view', 'rl-card': 'staff.manage', 'st-card': 'staff.manage', 'pf-new': 'tenants.create_owner', 'ct-new': 'community_types.manage', 'pc-new': 'communities.manage' };
+    Object.entries(vis).forEach(([id, p]) => { $('#' + id).hidden = !can(p); });
     if (!$('#pr-from').value) { $('#pr-from').value = today(); $('#pr-to').value = today(); }
     await load();
-    loadReport();
-    loadVqrConfig();
-    loadPublicReport();
+    if (can('reports.view')) loadReport();
+    if (can('vietqr.manage')) loadVqrConfig();
+    if (can('public_report.manage')) loadPublicReport();
   },
 };
 
@@ -207,9 +248,13 @@ async function loadReport() {
 const expired = (t) => t.expires_at && t.expires_at < new Date().toISOString().slice(0, 19).replace('T', ' ');
 
 async function load() {
-  [tenants, plans, communities, communityTypes] = await Promise.all([api('/api/platform/tenants'), api('/api/platform/plans'), api('/api/platform/communities'), api('/api/platform/community-types')]);
-  const stats = await api('/api/platform/stats');
-  $('#pf-stats').textContent = `${stats.tenants} cửa hàng · ${stats.users} người dùng · ${plans.length} gói`;
+  const opt = (perm, url) => (can(perm) ? api(url) : []);
+  [tenants, plans, communities, communityTypes, roles, staff, perms] = await Promise.all([opt('tenants.view', '/api/platform/tenants'), opt('tenants.view', '/api/platform/plans'),
+    opt('communities.view', '/api/platform/communities'), opt('communities.view', '/api/platform/community-types'),
+    opt('staff.manage', '/api/platform/roles'), opt('staff.manage', '/api/platform/staff'), opt('staff.manage', '/api/platform/permissions')]);
+  const stats = can('reports.view') ? await api('/api/platform/stats') : null;
+  $('#pf-stats').textContent = [auth.user?.role_name, stats && `${stats.tenants} cửa hàng · ${stats.users} người dùng · ${plans.length} gói`].filter(Boolean).join(' · ');
+  const mTen = can('tenants.manage'), mCom = can('communities.manage'), mType = can('community_types.manage');
   $('#pf-body').innerHTML = tenants.map((t) => `<tr data-id="${t.id}">
     <td><code>${esc(t.code)}</code></td><td><b>${esc(t.name)}</b></td>
     <td>${esc(KIND_LABEL[t.kind || 'shop'] || t.kind)}</td>
@@ -219,9 +264,9 @@ async function load() {
     <td class="r">${t.user_count}</td>
     <td class="${expired(t) ? 'low' : 'muted'}">${t.expires_at ? esc(t.expires_at.slice(0, 10)) : '—'}</td>
     <td>${t.status === 'active' ? '<span class="badge paid">Hoạt động</span>' : '<span class="badge cancelled">Tạm ngưng</span>'}</td>
-    <td class="r"><button class="btn sm" data-act="users">Người dùng</button>
-      <button class="btn sm" data-act="edit">Sửa</button>
-      <button class="btn sm" data-act="toggle">${t.status === 'active' ? 'Tạm ngưng' : 'Mở lại'}</button></td>
+    <td class="r">${can('users.view') ? '<button class="btn sm" data-act="users">Người dùng</button>' : ''}
+      ${mTen ? `<button class="btn sm" data-act="edit">Sửa</button>
+      <button class="btn sm" data-act="toggle">${t.status === 'active' ? 'Tạm ngưng' : 'Mở lại'}</button>` : ''}</td>
   </tr>`).join('') || '<tr><td colspan="10" class="empty">Chưa có đối tác</td></tr>';
   $('#pc-body').innerHTML = communities.map((c) => `<tr data-id="${c.id}">
     <td><code>${esc(c.code)}</code></td><td><b>${esc(c.name)}</b></td>
@@ -230,19 +275,89 @@ async function load() {
     <td class="r">${num(c.tenant_count)}</td>
     <td>${statusBadge(c.status)}</td>
     <td class="r"><button class="btn sm" data-act="members">Thành viên</button>
-      <button class="btn sm" data-act="edit">Sửa</button>
+      ${mCom ? `<button class="btn sm" data-act="edit">Sửa</button>
       <button class="btn sm" data-act="toggle">${c.status === 'active' ? 'Tạm ngưng' : 'Mở lại'}</button>
-      <button class="btn sm" data-act="del">Xóa</button></td>
+      <button class="btn sm" data-act="del">Xóa</button>` : ''}</td>
   </tr>`).join('') || '<tr><td colspan="7" class="empty">Chưa có cộng đồng</td></tr>';
   $('#ct-body').innerHTML = communityTypes.map((t) => `<tr data-id="${t.id}">
     <td><code>${esc(t.code)}</code></td><td><b>${esc(t.name)}</b></td>
     <td>${esc(t.approver_label)}</td><td>${esc(t.leader_label)}</td>
     <td class="r">${num(t.community_count)}</td>
     <td>${statusBadge(t.status)}</td>
-    <td class="r"><button class="btn sm" data-act="edit">Sửa</button>
+    <td class="r">${mType ? `<button class="btn sm" data-act="edit">Sửa</button>
       <button class="btn sm" data-act="toggle">${t.status === 'active' ? 'Tạm ngưng' : 'Mở lại'}</button>
-      <button class="btn sm" data-act="del">Xóa</button></td>
+      <button class="btn sm" data-act="del">Xóa</button>` : ''}</td>
   </tr>`).join('') || '<tr><td colspan="7" class="empty">Chưa có loại cộng đồng</td></tr>';
+  $('#rl-body').innerHTML = roles.map((r) => `<tr data-id="${r.id}">
+    <td><code>${esc(r.code)}</code></td><td><b>${esc(r.name)}</b>${r.description ? `<div class="muted">${esc(r.description)}</div>` : ''}</td>
+    <td>${r.scope === 'assigned' ? 'Cộng đồng được giao' : 'Toàn nền tảng'}</td>
+    <td>${r.is_system ? 'Toàn quyền' : esc(r.permissions.map((p) => perms.find((x) => x.code === p)?.label || p).join(', ')) || '<span class="muted">—</span>'}</td>
+    <td class="r">${num(r.user_count)}</td><td>${statusBadge(r.status)}</td>
+    <td class="r">${r.is_system || r.code === auth.user?.role ? '' : `<button class="btn sm" data-act="edit">Sửa</button>
+      <button class="btn sm" data-act="toggle">${r.status === 'active' ? 'Tạm ngưng' : 'Mở lại'}</button>
+      <button class="btn sm" data-act="del">Xóa</button>`}</td>
+  </tr>`).join('');
+  $('#st-body').innerHTML = staff.map((u) => `<tr data-id="${u.id}">
+    <td>${esc(u.username)}</td><td>${esc(u.full_name || '')}</td><td>${esc(u.role_name)}</td>
+    <td>${u.scope === 'assigned' ? esc(u.communities.map(communityName).join(', ')) || '<span class="low">Chưa giao</span>' : '<span class="muted">Tất cả</span>'}</td>
+    <td>${u.active ? '<span class="badge paid">Hoạt động</span>' : '<span class="badge cancelled">Đã khóa</span>'}</td>
+    <td class="r"><button class="btn sm" data-act="edit">Sửa</button>
+      ${u.id === auth.user?.id ? '' : `<button class="btn sm" data-act="toggle">${u.active ? 'Khóa' : 'Mở khóa'}</button>`}</td>
+  </tr>`).join('');
+}
+
+function openRole(r) {
+  const isNew = !r;
+  const d = r || { scope: 'all', permissions: [] };
+  const groups = [...new Set(perms.map((p) => p.group))];
+  modal(`<h2>${isNew ? 'Thêm vai trò nền tảng' : 'Sửa vai trò – ' + esc(d.name)}</h2>
+    <div class="form-grid">
+      <label class="fld">Mã<input class="field" id="rf-code" value="${esc(d.code || '')}" ${isNew ? '' : 'disabled'} autocapitalize="none"></label>
+      <label class="fld">Tên<input class="field" id="rf-name" value="${esc(d.name || '')}"></label>
+      <label class="fld full">Mô tả<input class="field" id="rf-desc" value="${esc(d.description || '')}"></label>
+      <label class="fld full">Phạm vi<select class="field" id="rf-scope"><option value="all">Toàn nền tảng</option><option value="assigned">Cộng đồng được giao</option></select></label>
+    </div>
+    <div id="rf-perms">${groups.map((g) => `<fieldset style="margin:8px 0"><legend><b>${esc(g)}</b></legend>
+      ${perms.filter((p) => p.group === g).map((p) => `<label class="chk"><input type="checkbox" value="${esc(p.code)}" ${d.permissions.includes(p.code) ? 'checked' : ''}> ${esc(p.label)}</label>`).join(' ')}</fieldset>`).join('')}</div>
+    <div class="modal-actions"><button class="btn" id="rf-close">Hủy</button><button class="btn primary" id="rf-save">Lưu</button></div>`);
+  $('#rf-scope').value = d.scope;
+  $('#rf-close').onclick = closeModal;
+  $('#rf-save').onclick = async () => {
+    const body = { code: $('#rf-code').value.trim(), name: $('#rf-name').value.trim(), description: $('#rf-desc').value.trim(), scope: $('#rf-scope').value,
+      permissions: [...document.querySelectorAll('#rf-perms input:checked')].map((x) => x.value) };
+    try {
+      await api('/api/platform/roles' + (isNew ? '' : '/' + d.id), { method: isNew ? 'POST' : 'PUT', body });
+      closeModal(); toast('Đã lưu'); load();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+function openStaff(u) {
+  const isNew = !u;
+  const d = u || { role: roles.find((r) => !r.is_system)?.code, communities: [] };
+  const self = !isNew && u.id === auth.user?.id;
+  modal(`<h2>${isNew ? 'Thêm nhân sự nền tảng' : 'Sửa nhân sự – ' + esc(d.username)}</h2>
+    <div class="form-grid">
+      <label class="fld">Tên đăng nhập<input class="field" id="sf-user" value="${esc(d.username || '')}" ${isNew ? '' : 'disabled'} autocapitalize="none"></label>
+      <label class="fld">Họ tên<input class="field" id="sf-name" value="${esc(d.full_name || '')}"></label>
+      <label class="fld">Vai trò<select class="field" id="sf-role" ${self ? 'disabled' : ''}>${roles.map((r) => `<option value="${esc(r.code)}">${esc(r.name)}</option>`).join('')}</select></label>
+      <label class="fld">${isNew ? 'Mật khẩu' : 'Mật khẩu mới (để trống nếu không đổi)'}<input class="field" id="sf-pass" type="password"></label>
+    </div>
+    <fieldset id="sf-comms" style="margin:8px 0"><legend><b>Cộng đồng được giao</b> <span class="muted">(chỉ dùng với vai trò phạm vi "Cộng đồng được giao")</span></legend>
+      ${communities.map((c) => `<label class="chk"><input type="checkbox" value="${c.id}" ${d.communities.includes(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join(' ') || '<span class="muted">Chưa có cộng đồng</span>'}</fieldset>
+    <div class="modal-actions"><button class="btn" id="sf-close">Hủy</button><button class="btn primary" id="sf-save">Lưu</button></div>`);
+  $('#sf-role').value = d.role || '';
+  $('#sf-close').onclick = closeModal;
+  $('#sf-save').onclick = async () => {
+    const body = { full_name: $('#sf-name').value.trim(), communities: [...document.querySelectorAll('#sf-comms input:checked')].map((x) => Number(x.value)) };
+    if (!self) body.role = $('#sf-role').value;
+    if ($('#sf-pass').value) body.password = $('#sf-pass').value;
+    if (isNew) body.username = $('#sf-user').value.trim();
+    try {
+      await api('/api/platform/staff' + (isNew ? '' : '/' + d.id), { method: isNew ? 'POST' : 'PUT', body });
+      closeModal(); toast('Đã lưu'); load();
+    } catch (e) { toast(e.message, true); }
+  };
 }
 
 function openType(t) {

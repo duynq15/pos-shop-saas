@@ -501,6 +501,88 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { status: 'active' } });
   ok('reactivated community summary ok', (await req('c-community_leader', '/community/summary')).status === 200);
 
+  // ---------- GĐ1.7: vai trò nền tảng (SEC-04, ERR-08) ----------
+  const pPerms = await rootJ('/platform/permissions');
+  ok('permission catalog', pPerms.ok && pPerms.data.some((p) => p.code === 'staff.manage' && p.group));
+  const rolesL = await rootJ('/platform/roles');
+  const sys = rolesL.data.find((r) => r.code === 'platform');
+  ok('seeded platform roles', sys && sys.is_system && sys.permissions.includes('*') && ['platform_ops', 'platform_community', 'platform_support', 'platform_tech'].every((c) => rolesL.data.some((r) => r.code === c)));
+  ok('system role not editable', !(await rootJ('/platform/roles/' + sys.id, { method: 'PUT', body: { name: 'X' } })).ok);
+  ok('system role not deletable', !(await rootJ('/platform/roles/' + sys.id, { method: 'DELETE' })).ok);
+  ok('role code clashing tenant role rejected', !(await rootJ('/platform/roles', { method: 'POST', body: { code: 'cashier', name: 'X' } })).ok);
+  ok('unknown permission rejected', !(await rootJ('/platform/roles', { method: 'POST', body: { code: 'pf-x', name: 'X', permissions: ['*'] } })).ok);
+  const mkStaff = async (username, role, communities = []) => {
+    const r = await rootJ('/platform/staff', { method: 'POST', body: { username, password: 'staff123', role, communities } });
+    await req(username, '/auth/login', { method: 'POST', body: { username, password: 'staff123' } });
+    return r;
+  };
+  const pst = (who, u, o) => req(who, '/platform' + u, o).then((r) => r.status);
+  const sOps = await mkStaff('ops1', 'platform_ops');
+  ok('staff create', sOps.ok && sOps.data.role_name === 'Vận hành' && !('password_hash' in sOps.data));
+  ok('staff username validated', !(await rootJ('/platform/staff', { method: 'POST', body: { username: 'A B', password: 'staff123', role: 'platform_ops' } })).ok);
+  ok('staff bad role rejected', !(await rootJ('/platform/staff', { method: 'POST', body: { username: 'bad1', password: 'staff123', role: 'owner' } })).ok);
+  const opsMe = await (await req('ops1', '/auth/me')).json();
+  ok('staff login payload has role perms', opsMe.ok && opsMe.data.permissions.includes('tenants.manage') && !opsMe.data.permissions.includes('*'));
+  ok('ops: tenants/communities/reports 200', (await pst('ops1', '/tenants')) === 200 && (await pst('ops1', '/communities')) === 200 && (await pst('ops1', '/reports')) === 200);
+  ok('ops: vietqr/public-report/staff 403', (await pst('ops1', '/vietqr')) === 403 && (await pst('ops1', '/public-report')) === 403 && (await pst('ops1', '/staff')) === 403 && (await pst('ops1', '/roles')) === 403);
+  ok('ops: cannot create tenant owner', (await pst('ops1', '/tenants', { method: 'POST', body: { code: 'ops-t', name: 'X', owner_username: 'opst', owner_password: '123456' } })) === 403);
+  ok('ops: cannot manage community types', (await pst('ops1', '/community-types', { method: 'POST', body: { code: 'ops-ct', name: 'X' } })) === 403);
+  await mkStaff('sup1', 'platform_support');
+  ok('support: read only', (await pst('sup1', '/tenants')) === 200 && (await pst('sup1', '/tenants/' + selId, { method: 'PUT', body: { name: 'X' } })) === 403
+    && (await pst('sup1', '/communities', { method: 'POST', body: { code: 'sup-c', name: 'X', type: 'village' } })) === 403);
+  await mkStaff('tech1', 'platform_tech');
+  ok('tech: vietqr ok, communities 403', (await pst('tech1', '/vietqr')) === 200 && (await pst('tech1', '/communities')) === 403 && (await pst('tech1', '/users')) === 403);
+  const techVq = await (await req('tech1', '/platform/vietqr')).json();
+  ok('vietqr password never returned', !JSON.stringify(techVq).includes('sharedpass'));
+  // Phạm vi cộng đồng được giao (ERR-08)
+  await mkStaff('cm1', 'platform_community', [com.data.id]);
+  const cmComs = await (await req('cm1', '/platform/communities')).json();
+  ok('ERR-08: scoped staff sees only assigned community', cmComs.ok && cmComs.data.length === 1 && cmComs.data[0].id === com.data.id);
+  const cmTen = await (await req('cm1', '/platform/tenants')).json();
+  ok('ERR-08: scoped staff sees only community tenants', cmTen.ok && cmTen.data.length > 0 && cmTen.data.every((t) => t.community_id === com.data.id));
+  ok('ERR-08: scoped staff blocked on other community', (await pst('cm1', '/communities/' + gxc.data.id + '/tenants')) === 403
+    && (await pst('cm1', '/communities/' + gxc.data.id, { method: 'PUT', body: { name: 'X' } })) === 403);
+  ok('ERR-08: scoped staff blocked on out-of-scope tenant', (await pst('cm1', '/tenants/' + shopM.data.id, { method: 'PUT', body: { name: 'X' } })) === 403);
+  ok('ERR-08: scoped staff cannot move tenant out of scope', (await pst('cm1', '/tenants/' + selId, { method: 'PUT', body: { community_id: gxc.data.id } })) === 403);
+  ok('ERR-08: scoped staff cannot create community', (await pst('cm1', '/communities', { method: 'POST', body: { code: 'cm-c', name: 'X', type: 'village' } })) === 403);
+  const cmUsers = await (await req('cm1', '/platform/users')).json();
+  ok('ERR-08: scoped users list', cmUsers.ok && cmUsers.data.every((u) => cmTen.data.some((t) => t.id === u.tenant_id)));
+  const cmRep = await (await req('cm1', '/platform/reports')).json();
+  ok('ERR-08: scoped report', cmRep.ok && JSON.stringify(cmRep.data).indexOf('shop-gx') === -1);
+  await mkStaff('cm2', 'platform_community');
+  ok('ERR-08: scoped staff without assignment sees nothing', (await (await req('cm2', '/platform/tenants')).json()).data.length === 0 && (await (await req('cm2', '/platform/communities')).json()).data.length === 0);
+  // Vai trò tùy chỉnh, tạm ngưng, xóa
+  const cr = await rootJ('/platform/roles', { method: 'POST', body: { code: 'pf-audit', name: 'Kiểm tra', permissions: ['reports.view'] } });
+  ok('custom role create', cr.ok && cr.data.permissions.join() === 'reports.view');
+  ok('role code immutable', !(await rootJ('/platform/roles/' + cr.data.id, { method: 'PUT', body: { code: 'pf-other' } })).ok);
+  await mkStaff('aud1', 'pf-audit');
+  ok('custom role grants only its perms', (await pst('aud1', '/stats')) === 200 && (await pst('aud1', '/tenants')) === 403);
+  await rootJ('/platform/roles/' + cr.data.id, { method: 'PUT', body: { permissions: ['reports.view', 'tenants.view'] } });
+  ok('role perms change applies to live session', (await pst('aud1', '/tenants')) === 200);
+  await rootJ('/platform/roles/' + cr.data.id, { method: 'PUT', body: { status: 'suspended' } });
+  ok('suspended role has no access', (await pst('aud1', '/stats')) === 403);
+  ok('role with users cannot be deleted', !(await rootJ('/platform/roles/' + cr.data.id, { method: 'DELETE' })).ok);
+  const empty = await rootJ('/platform/roles', { method: 'POST', body: { code: 'pf-empty', name: 'Rỗng' } });
+  ok('unused role deleted', (await rootJ('/platform/roles/' + empty.data.id, { method: 'DELETE' })).ok);
+  // Tự bảo vệ
+  const adm = await rootJ('/platform/roles', { method: 'POST', body: { code: 'pf-staff', name: 'Quản lý nhân sự', permissions: ['staff.manage'] } });
+  const sAdm = await mkStaff('hr1', 'pf-staff');
+  ok('cannot edit own role', (await (await req('hr1', '/platform/roles/' + adm.data.id, { method: 'PUT', body: { permissions: ['staff.manage', 'vietqr.manage'] } })).json()).ok === false);
+  ok('cannot change own role', !(await (await req('hr1', '/platform/staff/' + sAdm.data.id, { method: 'PUT', body: { role: 'platform' } })).json()).ok);
+  ok('cannot lock self', !(await (await req('hr1', '/platform/staff/' + sAdm.data.id, { method: 'PUT', body: { active: false } })).json()).ok);
+  const rootId = (await rootJ('/platform/staff')).data.find((u) => u.username === 'root').id;
+  ok('last super admin cannot be locked', !(await (await req('hr1', '/platform/staff/' + rootId, { method: 'PUT', body: { active: false } })).json()).ok);
+  ok('last super admin cannot be downgraded', !(await (await req('hr1', '/platform/staff/' + rootId, { method: 'PUT', body: { role: 'platform_ops' } })).json()).ok);
+  ok('platform role not assignable to tenant user', !(await api('/users', { method: 'POST', body: { username: 'pfx', password: '123456', full_name: 'X', role: 'platform_ops' } })).ok);
+  ok('tenant owner cannot reach staff API', (await req('admin', '/platform/staff')).status === 403);
+  // Khóa và đổi mật khẩu hủy phiên
+  ok('lock staff', (await rootJ('/platform/staff/' + sOps.data.id, { method: 'PUT', body: { active: false } })).ok);
+  ok('locked staff session revoked', (await req('ops1', '/platform/tenants')).status === 401);
+  await rootJ('/platform/staff/' + sOps.data.id, { method: 'PUT', body: { active: true, password: 'newpass1' } });
+  ok('reset password', (await (await req('ops1', '/auth/login', { method: 'POST', body: { username: 'ops1', password: 'newpass1' } })).json()).ok);
+  const logs = await rootJ('/platform/staff');
+  ok('staff list hides password', logs.ok && !JSON.stringify(logs.data).includes('password_hash'));
+
   for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg', '/report.html', '/report.css', '/js/report.js']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);
   console.log(R.join('\n'));
   const pass = R.filter((x) => x.startsWith('PASS')).length;
