@@ -10,7 +10,7 @@ import vietqr from './views/vietqr.js';
 import promotions from './views/promotions.js';
 import usersView from './views/users.js';
 import settings from './views/settings.js';
-import platformView from './views/platform.js';
+import { platformViews } from './views/platform.js';
 import communityView from './views/community.js';
 
 const reportOverview = makeReportView('overview');
@@ -43,15 +43,16 @@ const VIEWS = [
   { mod: communityView, perm: 'community.report', kinds: ['community'] },
   { mod: usersView, perm: 'user.manage' },
   { mod: settings, perm: 'settings.edit' },
-  { mod: platformView, perm: 'platform' },
+  // Menu quản trị nền tảng: hiện khi có một trong các quyền của menu (GĐ1.7)
+  ...platformViews.map((mod) => ({ mod, perm: 'platform', any: mod.perms })),
 ];
 
 const registry = {};
 const mounted = new Set();
 let current = null;
 
-const allowed = (perm) => {
-  if (perm === 'platform') return auth.isPlatform;
+const allowed = (perm, any) => {
+  if (perm === 'platform') return auth.isPlatform && (!any || any.some(can));
   if (auth.isPlatform) return false;
   return can(perm);
 };
@@ -76,7 +77,7 @@ function build() {
   navList.innerHTML = '';
   for (const entry of VIEWS) {
     const { mod, perm, subs, subOnly, kinds } = entry;
-    if (!allowed(perm) || !kindOk(kinds)) continue;
+    if (!allowed(perm, entry.any) || !kindOk(kinds)) continue;
     let sec = document.getElementById('view-' + mod.id);
     if (!sec) {
       sec = document.createElement('section');
