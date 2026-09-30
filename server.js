@@ -39,6 +39,7 @@ app.use('/vqr', vietqr.webhook);
 
 // Báo cáo thống kê giao dịch công khai (chia sẻ bằng link token, không cần đăng nhập)
 app.get('/r/:token', publicRoutes.page);
+app.get('/congduc/:token', publicRoutes.donationsPage);
 app.use('/public/api', publicRoutes.router);
 
 // Xác thực & định tuyến theo tenant

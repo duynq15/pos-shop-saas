@@ -54,3 +54,12 @@ Tenant cộng đồng (`kind='community'`) cần quản lý nhiều quỹ: quỹ
 - Ảnh chứng từ: đọc file qua `FileReader` thành `data:` URL trước khi gửi, khớp thiết kế backend GĐ2.5 (không multipart).
 - "In" báo cáo dùng lại `printHTML()` có sẵn (đổ bảng vào `#print-area`), không thêm CSS in mới.
 - Test UI: tạo quỹ, thu tiền mặt cập nhật số dư, sổ thu chi hiển thị, QR tĩnh render ảnh, báo cáo kỳ hiện đủ 6 chỉ số. (Không test luồng duyệt trong UI vì chỉ có một tài khoản chủ đăng nhập — ERR-06 chặn tự duyệt; luồng duyệt đã có test API đầy đủ.)
+
+## Bổ sung GĐ2.9 — danh sách công đức công khai (2026-09-30)
+
+- `communities` thêm cột `donations_token`, sinh một lần khi `settings.public_donations` chuyển sang `true` (giữ nguyên khi tắt/bật lại), y hệt cách `public_report_token` của báo cáo nền tảng đang làm — không thêm cơ chế mới.
+- `GET /public/api/donations/:token` (không cần đăng nhập) chỉ liệt kê quỹ `kind='donation'`, chỉ bút toán `type='in' AND status='approved'`; dòng `anonymous=1` trả `name: null` để trang hiện "Người hảo tâm". Sai token hoặc cờ đang tắt đều trả 404 như nhau.
+- Trang `public/donations.html` + `public/js/donations.js`, dùng lại `report.css` (không thêm CSS mới), mounted tại `GET /congduc/:token`.
+- Việc bật/tắt đã được ghi log từ trước (audit `community.update` có sẵn từ GĐ1.6) — không cần thêm gì cho yêu cầu "ẩn/hiện ghi nhật ký" (FR-20).
+- Form sửa cộng đồng hiện link công khai (đọc-only + nút sao chép) khi đã có token, theo đúng mẫu `#pp-url` của báo cáo nền tảng.
+- Bỏ qua: nút đổi (rotate) token — thêm sau nếu cần.

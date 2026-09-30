@@ -444,10 +444,17 @@ function openCommunity(c) {
       <label class="fld full">Ghi chú<input class="field" id="cf-note" value="${esc(d.note || '')}"></label>
       <label class="fld">Cảnh báo giao dịch chưa phân loại sau (ngày)<input class="field" id="cf-alert-days" type="number" min="1" max="90" value="${Number(st.unclassified_alert_days) || 3}"></label>
       <label class="chk"><input type="checkbox" id="cf-public" ${st.public_donations ? 'checked' : ''}> Công khai danh sách công đức</label>
+      ${!isNew && d.donations_url ? `<label class="fld full">Link công khai<div style="display:flex;gap:8px">
+        <input class="field" id="cf-public-url" readonly value="${esc(location.origin + d.donations_url)}" style="flex:1">
+        <button type="button" class="btn sm" id="cf-public-copy">Sao chép</button></div></label>` : ''}
     </div>
     ${isNew ? '' : '<p class="muted">Chỉ đổi loại được khi cộng đồng chưa có cửa hàng / người bán.</p>'}
     <div class="modal-actions"><button class="btn primary" id="cf-save">Lưu</button><button class="btn" id="cf-close">Đóng</button></div>`);
   $('#cf-close').onclick = closeModal;
+  $('#cf-public-copy')?.addEventListener('click', () => {
+    navigator.clipboard?.writeText($('#cf-public-url').value);
+    toast('Đã sao chép');
+  });
   $('#cf-save').onclick = async () => {
     const body = {
       name: $('#cf-name').value.trim(), area: $('#cf-area').value.trim(), type: $('#cf-type').value,

@@ -467,6 +467,22 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const expRes = await req('c-treasurer', '/funds/' + fid + '/report/export?from=' + fundDay + '&to=' + fundDay);
   ok('export xlsx', expRes.status === 200 && (expRes.headers.get('content-type') || '').includes('spreadsheetml'));
 
+  // ---------- Danh sách công đức công khai (GĐ2.9, FR-20) ----------
+  const pubOn = await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: true } } });
+  ok('enabling public donations issues a token', pubOn.ok && !!pubOn.data.donations_url);
+  const donToken = pubOn.data.donations_url.split('/').pop();
+  const donJson = await (await fetch(ROOT + '/public/api/donations/' + donToken)).json();
+  const donFund = donJson.data.programs.find((p) => p.name === 'Quỹ công đức');
+  ok('public list shows only donation-kind funds', donJson.ok && !!donFund && !donJson.data.programs.some((p) => p.name === 'Quỹ chung'));
+  ok('public total matches approved income only', donFund.total === 600000);
+  ok('anonymous entry hides the name', donFund.entries.some((e) => e.name === null && e.amount === 100000));
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: false } } });
+  const pubOn2 = await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: true } } });
+  ok('token stays the same across toggle off/on', pubOn2.data.donations_url === pubOn.data.donations_url);
+  ok('wrong token 404', (await fetch(ROOT + '/public/api/donations/bad-token')).status === 404);
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: false } } });
+  ok('disabled flag 404 even with valid token', (await fetch(ROOT + '/public/api/donations/' + donToken)).status === 404);
+
   await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'closed' } });
   ok('closed fund takes no entries', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).ok);
   await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'active' } });

@@ -154,7 +154,7 @@ if (!controlColumns('tenants').includes('area')) control.exec('ALTER TABLE tenan
 if (!controlColumns('tenants').includes('kind')) control.exec("ALTER TABLE tenants ADD COLUMN kind TEXT NOT NULL DEFAULT 'shop'");
 if (!controlColumns('tenants').includes('community_id')) control.exec('ALTER TABLE tenants ADD COLUMN community_id INTEGER REFERENCES communities(id)');
 // GĐ1.6: thông tin liên hệ và cấu hình riêng từng cộng đồng
-for (const [col, def] of [['contact_name', 'TEXT'], ['contact_phone', 'TEXT'], ['note', 'TEXT'], ['settings', "TEXT NOT NULL DEFAULT '{}'"]]) {
+for (const [col, def] of [['contact_name', 'TEXT'], ['contact_phone', 'TEXT'], ['note', 'TEXT'], ['settings', "TEXT NOT NULL DEFAULT '{}'"], ['donations_token', 'TEXT']]) {
   if (!controlColumns('communities').includes(col)) control.exec(`ALTER TABLE communities ADD COLUMN ${col} ${def}`);
 }
 // Loại mẫu chỉ nạp cho DB mới; root thêm / sửa / xóa loại ở màn Nền tảng

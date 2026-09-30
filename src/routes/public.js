@@ -13,7 +13,7 @@
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
-const { control, getPlatformSettings } = require('../control');
+const { control, getPlatformSettings, communitySettings } = require('../control');
 const db = require('../db');
 const { ok, wrap, str } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
@@ -296,4 +296,38 @@ function page(req, res) {
   res.sendFile(path.join(__dirname, '..', '..', 'public', 'report.html'));
 }
 
-module.exports = { router, page };
+/* ===================== Danh sách công đức công khai (GĐ2.9, FR-20) ===================== */
+// Token duy nhất trên communities.donations_token; 404 như nhau dù token sai hay cờ đang tắt.
+function donationsData(token) {
+  if (!token) return null;
+  const c = control.prepare('SELECT id,name,settings,donations_token FROM communities WHERE donations_token=?').get(String(token));
+  if (!c || !communitySettings(c.settings).public_donations) return null;
+  const tenant = control.prepare("SELECT code FROM tenants WHERE community_id=? AND kind='community'").get(c.id);
+  if (!tenant) return { community_name: c.name, programs: [] };
+  const programs = db.runWith(tenant.code, () => {
+    const funds = db.prepare("SELECT id,name FROM funds WHERE kind='donation' ORDER BY id").all();
+    return funds.map((f) => {
+      const entries = db.prepare(`SELECT payer_name, anonymous, amount, created_at FROM fund_entries
+        WHERE fund_id=? AND type='in' AND status='approved' ORDER BY created_at DESC`).all(f.id);
+      return {
+        name: f.name,
+        total: entries.reduce((s, e) => s + e.amount, 0),
+        entries: entries.map((e) => ({ name: e.anonymous ? null : (e.payer_name || null), amount: e.amount, date: (e.created_at || '').slice(0, 10) })),
+      };
+    });
+  });
+  return { community_name: c.name, programs };
+}
+
+router.get('/donations/:token', wrap((req, res) => {
+  const data = donationsData(req.params.token);
+  if (!data) return res.status(404).json({ error: 'Không tìm thấy' });
+  ok(res, data);
+}));
+
+function donationsPage(req, res) {
+  if (!donationsData(req.params.token)) return res.status(404).type('html').send('<h1>404</h1><p>Không tìm thấy trang.</p>');
+  res.sendFile(path.join(__dirname, '..', '..', 'public', 'donations.html'));
+}
+
+module.exports = { router, page, donationsPage };

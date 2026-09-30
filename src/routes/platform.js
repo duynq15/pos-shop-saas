@@ -102,7 +102,12 @@ router.delete('/community-types/:id', need('community_types.manage'), wrap((req,
 }));
 
 // ---------- Cộng đồng (GĐ1.1, GĐ1.6, NFR-05) ----------
-const communityOut = (c) => (c ? { ...c, settings: communitySettings(c.settings) } : c);
+const communityOut = (c) => (c ? { ...c, settings: communitySettings(c.settings), donations_url: c.donations_token ? '/congduc/' + c.donations_token : '' } : c);
+// Sinh token khi bật công khai danh sách công đức (GĐ2.9), giữ nguyên nếu đã có.
+function ensureDonationsToken(c, settings) {
+  if (!settings.public_donations || c.donations_token) return c.donations_token || null;
+  return crypto.randomBytes(16).toString('hex');
+}
 const communityById = (id) => control.prepare('SELECT * FROM communities WHERE id=?').get(id);
 const communityTenantCount = (id) => control.prepare('SELECT COUNT(*) c FROM tenants WHERE community_id=?').get(id).c;
 
@@ -124,9 +129,10 @@ router.post('/communities', need('communities.manage'), wrap((req, res) => {
   if (control.prepare('SELECT id FROM communities WHERE code=?').get(code)) return fail(res, 'Mã cộng đồng đã tồn tại');
   const st = validateCommunitySettings(req.body.settings === undefined ? {} : req.body.settings, '{}');
   if (st.error) return fail(res, st.error);
-  const r = control.prepare('INSERT INTO communities(code,name,type,area,contact_name,contact_phone,note,settings) VALUES (?,?,?,?,?,?,?,?)')
+  const donationsToken = st.value.public_donations ? crypto.randomBytes(16).toString('hex') : null;
+  const r = control.prepare('INSERT INTO communities(code,name,type,area,contact_name,contact_phone,note,settings,donations_token) VALUES (?,?,?,?,?,?,?,?,?)')
     .run(code, name, type, str(req.body.area, 120) || null, str(req.body.contact_name, 120) || null,
-      str(req.body.contact_phone, 30) || null, str(req.body.note, 500) || null, JSON.stringify(st.value));
+      str(req.body.contact_phone, 30) || null, str(req.body.note, 500) || null, JSON.stringify(st.value), donationsToken);
   const id = Number(r.lastInsertRowid);
   audit({ userId: req.user.id, username: req.user.username, action: 'community.create', entity: 'community', entityId: id, detail: code, ip: req.ip });
   ok(res, communityOut(communityById(id)));
@@ -147,15 +153,17 @@ router.put('/communities/:id', need('communities.manage'), wrap((req, res) => {
     if (communityTenantCount(id)) return fail(res, 'Chỉ đổi loại khi cộng đồng chưa có cửa hàng / người bán');
   }
   let settings = c.settings;
+  let donationsToken = c.donations_token;
   if (req.body.settings !== undefined) {
     const st = validateCommunitySettings(req.body.settings, c.settings);
     if (st.error) return fail(res, st.error);
     settings = JSON.stringify(st.value);
+    donationsToken = ensureDonationsToken(c, st.value);
   }
   const keep = (k, n) => (req.body[k] === undefined ? c[k] : (str(req.body[k], n) || null));
-  control.prepare('UPDATE communities SET name=?, type=?, area=?, status=?, contact_name=?, contact_phone=?, note=?, settings=? WHERE id=?')
+  control.prepare('UPDATE communities SET name=?, type=?, area=?, status=?, contact_name=?, contact_phone=?, note=?, settings=?, donations_token=? WHERE id=?')
     .run(str(req.body.name, 160) || c.name, type, keep('area', 120), status, keep('contact_name', 120), keep('contact_phone', 30),
-      keep('note', 500), settings, id);
+      keep('note', 500), settings, donationsToken, id);
   audit({ userId: req.user.id, username: req.user.username, action: 'community.update', entity: 'community', entityId: id,
     detail: status !== c.status ? `status=${status}` : undefined, ip: req.ip });
   ok(res, communityOut(communityById(id)));
