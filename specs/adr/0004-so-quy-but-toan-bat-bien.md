@@ -63,3 +63,15 @@ Tenant cộng đồng (`kind='community'`) cần quản lý nhiều quỹ: quỹ
 - Việc bật/tắt đã được ghi log từ trước (audit `community.update` có sẵn từ GĐ1.6) — không cần thêm gì cho yêu cầu "ẩn/hiện ghi nhật ký" (FR-20).
 - Form sửa cộng đồng hiện link công khai (đọc-only + nút sao chép) khi đã có token, theo đúng mẫu `#pp-url` của báo cáo nền tảng.
 - Bỏ qua: nút đổi (rotate) token — thêm sau nếu cần.
+
+## Sửa sau review (2026-09-30)
+
+Review lại GĐ2.3–2.9 tìm ra các lỗi sau, đã sửa:
+
+- **DB cũ không có cột mới.** `bank_bin`, `bank_name`, `attachment` chỉ được thêm vào `CREATE TABLE`, nên DB đã tạo từ GĐ2.1 sẽ lỗi khi dùng QR, ảnh chứng từ hoặc tạo quỹ. Đã thêm `ensureColumn`, và đã kiểm tra trên bản sao dữ liệu thật.
+- **BR-02 chỉ chặn một chiều.** Quỹ không lấy được tài khoản của tenant, nhưng tenant vẫn khai được tài khoản trùng quỹ. Khi đó webhook sẽ ghi tiền của cửa hàng vào quỹ. `accountConflict` giờ kiểm cả tài khoản quỹ (`fundByAccount` trong `lib/community.js`, dùng chung với webhook).
+- **ERR-05 chưa được thực thi.** SRS yêu cầu chặn gửi khoản chi không có ảnh chứng từ. Giờ `submit` từ chối khoản chi thiếu ảnh. Phiếu nháp vẫn lưu được khi chưa có ảnh.
+- **FR-20 thiếu thao tác ẩn / hiện tên.** Trước đây chỉ có cờ lúc nhập. Đã thêm `POST /fund-entries/:id/anonymous` (quyền `fund.anonymize`), ghi nhật ký `fund_entry.hide_name` / `show_name`, và nút tương ứng trong sổ thu chi.
+- **QR quỹ phụ thuộc cấu hình VietQR của tenant.** Ở dev/prod, `generateQR` gọi API VietQR với `bankCode` và thông tin đăng nhập của tenant, không phải của quỹ, nên QR in dán có thể sai hoặc lỗi. QR quỹ giờ dựng bằng `buildVietQR` ngay tại máy chủ, vì tiền về đã được định tuyến theo số tài khoản quỹ. Vì vậy đã hoàn nguyên phần sửa `payments/vietqr.js` và bỏ `lib/vqr-settings.js` vì không còn cần.
+- **Báo cáo kỳ tính theo ngày lập.** Khoản chi lập kỳ trước nhưng duyệt kỳ này bị tính sai kỳ. Giờ báo cáo tính theo `approved_at`, tức ngày ghi sổ.
+- **Webhook quỹ:** bỏ qua số tiền ≤ 0, và ghi bút toán cùng giao dịch VietQR trong một transaction.

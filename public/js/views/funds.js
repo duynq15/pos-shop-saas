@@ -176,8 +176,16 @@ async function loadLedger(fundId) {
     <td class="muted">${SRC_LABEL[e.source] || e.source}</td>
     <td class="muted">${esc(e.anonymous ? 'Người hảo tâm' : (e.payer_name || e.note || ''))}</td>
     <td><span class="badge ${STATUS_BADGE[e.status]}">${STATUS_LABEL[e.status]}</span></td>
-    <td class="r">${e.attachment ? `<a class="btn sm" href="/api/fund-entries/${e.id}/attachment" target="_blank">Ảnh</a>` : ''}</td>
+    <td class="r">${e.attachment ? `<a class="btn sm" href="/api/fund-entries/${e.id}/attachment" target="_blank" rel="noopener">Ảnh</a>` : ''}
+      ${e.type === 'in' && can('fund.anonymize') ? `<button class="btn sm" data-anon="${e.anonymous ? 0 : 1}" data-id="${e.id}">${e.anonymous ? 'Hiện tên' : 'Ẩn tên'}</button>` : ''}</td>
   </tr>`).join('') || '<tr><td colspan="8" class="empty">Không có bút toán</td></tr>';
+  $('#fd-ledger-body').onclick = async (ev) => {
+    const b = ev.target.closest('[data-anon]'); if (!b) return;
+    try {
+      await api(`/api/fund-entries/${b.dataset.id}/anonymous`, { method: 'POST', body: { anonymous: b.dataset.anon === '1' } });
+      toast(b.dataset.anon === '1' ? 'Đã ẩn tên người ủng hộ' : 'Đã hiện tên người ủng hộ'); await loadLedger(fundId);
+    } catch (e) { toast(e.message, true); }
+  };
 }
 
 async function loadReport(fundId) {
@@ -284,7 +292,7 @@ async function openEntryForm(f, type) {
         <label class="chk">Ẩn danh<input type="checkbox" id="fd-e-anon"></label>` : ''}
       ${type === 'adjust' ? `<label class="fld full">Bút toán gốc *<select class="field" id="fd-e-ref">${refOptions}</select></label>` : ''}
       <label class="fld full">Ghi chú${type !== 'in' ? ' *' : ''}<input class="field" id="fd-e-note"></label>
-      ${type === 'out' ? '<label class="fld full">Ảnh chứng từ<input class="field" type="file" id="fd-e-file" accept="image/jpeg,image/png,image/webp"></label>' : ''}
+      ${type === 'out' ? '<label class="fld full">Ảnh chứng từ * (bắt buộc trước khi gửi duyệt)<input class="field" type="file" id="fd-e-file" accept="image/jpeg,image/png,image/webp"></label>' : ''}
     </div>
     <div class="modal-actions"><button class="btn primary" id="fd-e-save">Lưu</button><button class="btn" id="fd-e-close">Đóng</button></div>`);
   $('#fd-e-close').onclick = closeModal;

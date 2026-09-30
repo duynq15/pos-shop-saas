@@ -420,7 +420,8 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('balance from approved entries', (await cj('c-community_leader', '/funds/' + fid)).data.balance === 600000);
   ok('leader cannot enter', (await req('c-community_leader', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).status === 403);
   ok('approver cannot enter (BR-05)', (await req('c-approver', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).status === 403);
-  const out = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 200000, note: 'Mua hương' } });
+  const receipt = 'data:image/jpeg;base64,' + Buffer.from('chung-tu').toString('base64');
+  const out = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 200000, note: 'Mua hương', attachment: receipt } });
   ok('out starts as draft', out.ok && out.data.status === 'draft' && /^PC/.test(out.data.code));
   ok('draft cannot be approved', !(await cj('c-approver', '/fund-entries/' + out.data.id + '/approve', { method: 'POST' })).ok);
   ok('submit', (await cj('c-treasurer', '/fund-entries/' + out.data.id + '/submit', { method: 'POST' })).data.status === 'submitted');
@@ -428,12 +429,14 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('approve', (await cj('c-approver', '/fund-entries/' + out.data.id + '/approve', { method: 'POST' })).data.status === 'approved');
   ok('balance after out', (await cj('cadm', '/funds/' + fid)).data.balance === 400000);
   // Chủ tài khoản có mọi quyền nhưng vẫn không được tự duyệt phiếu mình lập
-  const own = await cj('cadm', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000 } });
+  const noImg = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000 } });
+  ok('ERR-05: expense without receipt cannot be submitted', !(await cj('c-treasurer', '/fund-entries/' + noImg.data.id + '/submit', { method: 'POST' })).ok);
+  const own = await cj('cadm', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, attachment: receipt } });
   await cj('cadm', '/fund-entries/' + own.data.id + '/submit', { method: 'POST' });
   ok('ERR-06: creator cannot approve own entry', (await req('cadm', '/fund-entries/' + own.data.id + '/approve', { method: 'POST' })).status === 403);
   ok('reject needs reason', !(await cj('c-approver', '/fund-entries/' + own.data.id + '/reject', { method: 'POST' })).ok);
   ok('reject', (await cj('c-approver', '/fund-entries/' + own.data.id + '/reject', { method: 'POST', body: { reason: 'Thiếu chứng từ' } })).data.status === 'rejected');
-  const big = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 400001 } });
+  const big = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 400001, attachment: receipt } });
   await cj('c-treasurer', '/fund-entries/' + big.data.id + '/submit', { method: 'POST' });
   ok('BR-03: overspend blocked', !(await cj('c-approver', '/fund-entries/' + big.data.id + '/approve', { method: 'POST' })).ok);
   ok('adjust needs ref + reason', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'adjust', amount: -50000 } })).ok);
@@ -454,7 +457,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('bad attachment format rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, attachment: 'data:text/plain;base64,aGk=' } })).ok);
   const bigB64 = 'data:image/jpeg;base64,' + Buffer.alloc(5.2 * 1024 * 1024, 'a').toString('base64');
   ok('oversize attachment rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, attachment: bigB64 } })).ok);
-  ok('entry without attachment 404', (await req('c-treasurer', '/fund-entries/' + out.data.id + '/attachment')).status === 404);
+  ok('entry without attachment 404', (await req('c-treasurer', '/fund-entries/' + noImg.data.id + '/attachment')).status === 404);
 
   // ---------- Báo cáo kỳ (GĐ2.7 — BR-12: không chốt sổ) ----------
   const fundDay = new Date().toISOString().slice(0, 10);
@@ -476,6 +479,11 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('public list shows only donation-kind funds', donJson.ok && !!donFund && !donJson.data.programs.some((p) => p.name === 'Quỹ chung'));
   ok('public total matches approved income only', donFund.total === 600000);
   ok('anonymous entry hides the name', donFund.entries.some((e) => e.name === null && e.amount === 100000));
+  const named = (await cj('c-treasurer', '/funds/' + fid + '/entries?type=in')).data.entries.find((e) => e.payer_name === 'Ông Ba');
+  ok('FR-20: approver cannot toggle anonymity', (await req('c-approver', '/fund-entries/' + named.id + '/anonymous', { method: 'POST', body: { anonymous: true } })).status === 403);
+  ok('FR-20: treasurer hides a donor name', (await cj('c-treasurer', '/fund-entries/' + named.id + '/anonymous', { method: 'POST', body: { anonymous: true } })).data.anonymous === 1);
+  const donAfter = (await (await fetch(ROOT + '/public/api/donations/' + donToken)).json()).data.programs.find((p) => p.name === 'Quỹ công đức');
+  ok('FR-20: hidden name no longer public', !JSON.stringify(donAfter).includes('Ông Ba') && donAfter.total === 600000);
   await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: false } } });
   const pubOn2 = await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: true } } });
   ok('token stays the same across toggle off/on', pubOn2.data.donations_url === pubOn.data.donations_url);
@@ -492,7 +500,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('fund without bank_bin blocks QR', (await req('cadm', '/funds/' + fund2.data.id + '/qr')).status === 400);
   await cj('c-approver', '/funds/' + fund2.data.id, { method: 'PATCH', body: { bank_bin: '970422', bank_name: 'MB Bank' } });
   const staticQr = await cj('c-community_leader', '/funds/' + fund2.data.id + '/qr');
-  ok('static fund QR generated (mock)', staticQr.ok && staticQr.data.mock && !!staticQr.data.qrDataUrl);
+  ok('static fund QR has no amount', staticQr.ok && !!staticQr.data.qrDataUrl && !/54\d\d\d/.test(staticQr.data.qrCode.split('5303704')[1].split('5802VN')[0]) && staticQr.data.qrCode.includes('QUYCHUNG01'));
   ok('leader cannot request dynamic QR', (await req('c-community_leader', '/funds/' + fund2.data.id + '/qr', { method: 'POST', body: { amount: 100000 } })).status === 403);
   const dynQr = await cj('c-treasurer', '/funds/' + fund2.data.id + '/qr', { method: 'POST', body: { amount: 250000 } });
   ok('dynamic fund QR carries amount', dynQr.ok && dynQr.data.amount === 250000 && dynQr.data.qrCode.includes('250000'));
@@ -502,6 +510,9 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('fund balance increases from webhook', (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
   const syncFundAgain = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
   ok('webhook fund payment idempotent', syncFundAgain.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
+  ok('BR-02: shop cannot take a fund account', !(await api('/settings', { method: 'PUT', body: { bank_account: 'QUY CHUNG 01' } })).ok);
+  const syncNeg = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: -5000, content: 'x', transType: 'C', transactionid: 'FUND-TXN-NEG' }) })).json();
+  ok('webhook ignores non-positive amount', syncNeg.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
 
   // ---------- Phạm vi cộng đồng (GĐ1.4 — BR-07, BR-09, ERR-08) ----------
   const day = new Date().toISOString().slice(0, 10);

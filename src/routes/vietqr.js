@@ -3,13 +3,12 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
-const { control, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders } = require('../control');
+const { control, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders } = require('../control');
 const { ok, fail, wrap, str, round } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
 const { requirePerm } = require('../middleware');
 const { accountConflict, CONFLICT_MSG } = require('../lib/community');
 const { generateQR, getToken, bases, testCallbackUrl } = require('../payments/vietqr');
-const { vqrSettings } = require('../lib/vqr-settings');
 const funds = require('./funds');
 
 const router = express.Router();   // API phía app (đã đăng nhập), mount /api
@@ -25,6 +24,22 @@ function readSettings() {
   return Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map((r) => [r.key, r.value]));
 }
 const settingsOf = (code) => db.runWith(code, readSettings);
+
+// Cấu hình VietQR hiệu dụng: ưu tiên của shop, fallback credentials dùng chung cấp nền tảng.
+function vqrSettings() {
+  const st = readSettings();
+  let p = {};
+  try { p = getPlatformSettings(); } catch { p = {}; }
+  const inherit = !st.vqr_username && !st.vqr_password && !!(p.vqr_username && p.vqr_password);
+  const isProd = process.env.NODE_ENV === 'production';
+  return {
+    ...st,
+    vqr_username: st.vqr_username || p.vqr_username || '',
+    vqr_password: st.vqr_password || p.vqr_password || '',
+    vqr_env: isProd ? 'prod' : (inherit ? (p.vqr_env || st.vqr_env || 'mock') : (st.vqr_env || 'mock')),
+    _inherited: inherit,
+  };
+}
 
 function signToken(payload) {
   const p = Buffer.from(JSON.stringify(payload)).toString('base64url');

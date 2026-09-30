@@ -10,16 +10,15 @@ const db = require('../db');
 const { control, audit } = require('../control');
 const { ok, fail, wrap, bad, int, str, round, today } = require('../lib/util');
 const { makeCode } = require('../lib/codes');
-const { bankAccountOf } = require('../lib/community');
+const { normAccount, bankAccountOf, fundByAccount } = require('../lib/community');
 const { requirePerm } = require('../middleware');
-const { generateQR } = require('../payments/vietqr');
-const { vqrSettings } = require('../lib/vqr-settings');
+const QRCode = require('qrcode');
+const { buildVietQR, removeVietnamese } = require('../lib/vietqr');
 const { sendXlsx } = require('../lib/xlsx');
 
 const router = express.Router();
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const PREFIX = { in: 'PT', out: 'PC', adjust: 'DC' };
-const normAccount = (v) => String(v || '').replace(/[\s.-]/g, '');
 
 router.use('/funds', (req, res, next) => {
   if (!req.tenant || req.tenant.kind !== 'community') return fail(res, 'Sổ quỹ chỉ dành cho tài khoản cộng đồng', 403);
@@ -56,18 +55,11 @@ function saveAttachment(dataUrl, code) {
 }
 
 // Tài khoản nhận của quỹ phải riêng: không trùng tài khoản của bất kỳ tenant nào, không trùng quỹ khác (quyết định 0.3, BR-02).
-// ponytail: quét DB mọi tenant cộng đồng mỗi lần lưu; đủ cho vài chục thôn, nhiều hơn thì đưa tài khoản quỹ lên control.db.
 function fundAccountTaken(account, selfFundId) {
-  const acc = normAccount(account);
-  if (!acc) return null;
-  const tenants = control.prepare('SELECT code, kind FROM tenants').all();
-  for (const t of tenants) if (normAccount(bankAccountOf(t.code)) === acc) return t.code;
-  for (const t of tenants.filter((x) => x.kind === 'community')) {
-    const hit = db.runWith(t.code, (conn) => conn.prepare('SELECT id, bank_account FROM funds').all())
-      .find((f) => normAccount(f.bank_account) === acc && !(t.code === db.tenantCode && f.id === selfFundId));
-    if (hit) return t.code;
-  }
-  return null;
+  if (!normAccount(account)) return false;
+  const others = control.prepare('SELECT code FROM tenants').all();
+  return others.some((t) => normAccount(bankAccountOf(t.code)) === normAccount(account))
+    || !!fundByAccount(account, { tenantCode: db.tenantCode, fundId: selfFundId });
 }
 
 function fundInput(b, current = {}) {
@@ -134,30 +126,31 @@ router.patch('/funds/:id', requirePerm('fund.manage'), wrap((req, res) => {
   ok(res, getFund(cur.id));
 }));
 
-/* ===================== QR (GĐ2.3 — reuse generateQR, tài khoản quỹ luôn riêng theo BR-02) ===================== */
-function fundQrSettings(f) {
-  return { ...vqrSettings(), bank_account: f.bank_account, bank_bin: f.bank_bin, bank_name: f.bank_name || '' };
+/* ===================== QR (GĐ2.3) ===================== */
+// Dựng chuỗi VietQR (NAPAS) ngay tại máy chủ, không gọi API VietQR: tiền về được định tuyến theo
+// số tài khoản quỹ (BR-02), không cần orderId, nên QR in dán vẫn dùng được khi mất mạng hoặc đổi môi trường.
+async function fundQr(f, amount) {
+  if (!f.bank_account || !f.bank_bin) bad('Quỹ chưa cấu hình tài khoản ngân hàng (số tài khoản + mã ngân hàng)');
+  const qrCode = buildVietQR({ bankBin: f.bank_bin, accountNo: f.bank_account, amount, message: removeVietnamese(f.name).slice(0, 25) });
+  const qrDataUrl = await QRCode.toDataURL(qrCode, { width: 340, margin: 1, errorCorrectionLevel: 'M' });
+  return { qrCode, qrDataUrl, fund_id: f.id, bank_name: f.bank_name, bank_account: f.bank_account, account_holder: f.account_holder };
 }
 
 // QR tĩnh để in dán: không mã hóa số tiền.
 router.get('/funds/:id/qr', requirePerm('fund.view'), wrap(async (req, res) => {
   const f = getFund(req.params.id);
   if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
-  if (!f.bank_account || !f.bank_bin) bad('Quỹ chưa cấu hình tài khoản ngân hàng (số tài khoản + mã ngân hàng)');
-  const q = await generateQR(fundQrSettings(f), req.tenant.code, { content: f.name });
-  ok(res, { ...q, fund_id: f.id, bank_name: f.bank_name, account_holder: f.account_holder });
+  ok(res, await fundQr(f));
 }));
 
-// QR động yêu cầu một số tiền cụ thể. Không tạo bút toán trước; chỉ ghi sổ khi tiền thật về (webhook).
+// QR có số tiền. Không tạo bút toán trước; chỉ ghi sổ khi tiền thật về (webhook).
 router.post('/funds/:id/qr', requirePerm('fund.entry'), wrap(async (req, res) => {
   const f = getFund(req.params.id);
   if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
   if (f.status !== 'active') bad('Quỹ đã đóng');
-  if (!f.bank_account || !f.bank_bin) bad('Quỹ chưa cấu hình tài khoản ngân hàng (số tài khoản + mã ngân hàng)');
   const amount = int((req.body || {}).amount);
   if (amount <= 0) bad('Số tiền không hợp lệ');
-  const q = await generateQR(fundQrSettings(f), req.tenant.code, { amount, content: f.name });
-  ok(res, { ...q, fund_id: f.id, amount });
+  ok(res, { ...(await fundQr(f, amount)), amount });
 }));
 
 /* ===================== BÚT TOÁN ===================== */
@@ -220,6 +213,18 @@ router.get('/fund-entries/:id/attachment', requirePerm('fund.view'), wrap((req, 
   });
 }));
 
+// FR-20: thủ quỹ ẩn / hiện tên người công đức sau khi ghi sổ; mỗi lần đổi ghi nhật ký.
+// Chỉ đổi cờ hiển thị, không đụng số tiền nên không vướng trigger BR-04.
+router.post('/fund-entries/:id/anonymous', requirePerm('fund.anonymize'), wrap((req, res) => {
+  const e = getEntry(req.params.id);
+  if (!e) return fail(res, 'Không tìm thấy bút toán', 404);
+  if (e.type !== 'in') bad('Chỉ khoản thu mới ẩn / hiện tên được');
+  const anonymous = (req.body || {}).anonymous ? 1 : 0;
+  db.prepare('UPDATE fund_entries SET anonymous=? WHERE id=?').run(anonymous, e.id);
+  log(req, anonymous ? 'fund_entry.hide_name' : 'fund_entry.show_name', 'fund_entry', e.id, { code: e.code });
+  ok(res, getEntry(e.id));
+}));
+
 function transition(req, res, from, fn) {
   const e = getEntry(req.params.id);
   if (!e) return fail(res, 'Không tìm thấy bút toán', 404);
@@ -230,6 +235,7 @@ function transition(req, res, from, fn) {
 
 router.post('/fund-entries/:id/submit', requirePerm('fund.entry'), wrap((req, res) => transition(req, res, 'draft', (e) => {
   if (e.created_by !== req.user.id) bad('Chỉ người lập được gửi duyệt');
+  if (e.type === 'out' && !e.attachment) bad('Khoản chi phải có ảnh chứng từ trước khi gửi duyệt (ERR-05)');
   db.prepare("UPDATE fund_entries SET status='submitted' WHERE id=?").run(e.id);
   log(req, 'fund_entry.submit', 'fund_entry', e.id);
 })));
@@ -259,6 +265,7 @@ router.post('/fund-entries/:id/reject', requirePerm('fund.approve'), wrap((req, 
 })));
 
 /* ===================== Báo cáo kỳ (GĐ2.7 — BR-12: không chốt sổ, luôn tính lại theo kỳ) ===================== */
+// Kỳ tính theo ngày ghi sổ (approved_at): khoản chi lập ngày 1, duyệt ngày 5 thuộc kỳ chứa ngày 5.
 const rangeOf = (q) => { const f = q.from || today(); const t = q.to || f; return { from: f, to: t }; };
 const SRC_LABEL = { vietqr: 'VietQR', manual: 'Chuyển khoản khác', cash: 'Tiền mặt' };
 const TYPE_LABEL = { in: 'Thu', out: 'Chi', adjust: 'Điều chỉnh' };
@@ -266,16 +273,16 @@ const TYPE_LABEL = { in: 'Thu', out: 'Chi', adjust: 'Điều chỉnh' };
 function fundPeriod(fundId, from, to) {
   if (!DAY.test(from) || !DAY.test(to) || from > to) bad('Khoảng ngày không hợp lệ');
   const opening = Number(db.prepare(`SELECT COALESCE(SUM(CASE type WHEN 'out' THEN -amount ELSE amount END),0) b
-    FROM fund_entries WHERE fund_id=? AND status='approved' AND date(created_at)<date(?)`).get(fundId, from).b);
+    FROM fund_entries WHERE fund_id=? AND status='approved' AND date(approved_at)<date(?)`).get(fundId, from).b);
   const sums = db.prepare(`SELECT
       COALESCE(SUM(CASE WHEN type='in' AND source IN ('vietqr','manual') THEN amount END),0) income_bank,
       COALESCE(SUM(CASE WHEN type='in' AND source='cash' THEN amount END),0) income_cash,
       COALESCE(SUM(CASE WHEN type='out' THEN amount END),0) expense,
       COALESCE(SUM(CASE WHEN type='adjust' THEN amount END),0) adjust
-    FROM fund_entries WHERE fund_id=? AND status='approved' AND date(created_at)>=date(?) AND date(created_at)<=date(?)`)
+    FROM fund_entries WHERE fund_id=? AND status='approved' AND date(approved_at)>=date(?) AND date(approved_at)<=date(?)`)
     .get(fundId, from, to);
   const entries = db.prepare(`SELECT * FROM fund_entries WHERE fund_id=? AND status='approved'
-    AND date(created_at)>=date(?) AND date(created_at)<=date(?) ORDER BY created_at, id`).all(fundId, from, to);
+    AND date(approved_at)>=date(?) AND date(approved_at)<=date(?) ORDER BY approved_at, id`).all(fundId, from, to);
   const closing = opening + sums.income_bank + sums.income_cash + sums.adjust - sums.expense;
   return { from, to, opening_balance: opening, income_bank: sums.income_bank, income_cash: sums.income_cash,
     expense: sums.expense, adjust: sums.adjust, closing_balance: closing, entries };
@@ -294,7 +301,7 @@ router.get('/funds/:id/report/export', requirePerm('report.export'), wrap((req, 
   const { from, to } = rangeOf(req.query);
   const { entries } = fundPeriod(f.id, from, to);
   const rows = entries.map((e) => ({
-    'Ngày': e.created_at, 'Mã chứng từ': e.code, 'Loại': TYPE_LABEL[e.type],
+    'Ngày ghi sổ': e.approved_at, 'Mã chứng từ': e.code, 'Loại': TYPE_LABEL[e.type],
     'Nguồn': SRC_LABEL[e.source] || e.source,
     'Số tiền': e.type === 'out' ? -e.amount : e.amount,
     'Người nộp': e.anonymous ? 'Người hảo tâm' : (e.payer_name || ''),
@@ -306,15 +313,7 @@ router.get('/funds/:id/report/export', requirePerm('report.export'), wrap((req, 
 /* ===================== Webhook VietQR (dùng bởi src/routes/vietqr.js) ===================== */
 // Tài khoản của quỹ luôn duy nhất toàn hệ thống (BR-02), nên tài khoản đủ để xác định
 // tenant + quỹ, không cần bảng theo dõi đơn hàng như luồng hóa đơn.
-function resolveFundByBank(account) {
-  const acc = normAccount(account);
-  if (!acc) return null;
-  for (const t of control.prepare("SELECT code FROM tenants WHERE kind='community'").all()) {
-    const hit = db.runWith(t.code, (conn) => conn.prepare('SELECT id FROM funds WHERE bank_account=?').get(acc));
-    if (hit) return { tenantCode: t.code, fundId: hit.id };
-  }
-  return null;
-}
+const resolveFundByBank = (account) => fundByAccount(account);
 
 // p: { transactionid, bankaccount, amount, content, transType, raw }. Khoản thu ghi sổ ngay (approved),
 // khớp nguyên tắc đã chốt ở GĐ2.1: tiền đã về quỹ thì ghi nhận luôn, không qua duyệt.
@@ -336,15 +335,19 @@ function processFundPayment(code, fundId, p) {
       insTxn.run(txnId, null, bank, amount, content, '', transType, 0, 'Quỹ không hoạt động', raw);
       return { ref: '', message: 'Quỹ không hoạt động', paid: false };
     }
-    if (transType !== 'C') {
+    if (transType !== 'C' || amount <= 0) {
       insTxn.run(txnId, null, bank, amount, content, '', transType, 0, 'Không phải giao dịch tiền vào', raw);
       return { ref: '', message: 'Không phải giao dịch tiền vào', paid: false };
     }
     const entryCode = makeCode(db, 'PT', 'fund_entries');
+    db.exec('BEGIN');
+    try {
     db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,note,status,created_by_name,approved_by_name,approved_at)
       VALUES (?,?,'in',?,'vietqr',?,?,'approved',?,?,datetime('now','localtime'))`)
       .run(entryCode, f.id, amount, txnId, content, 'VietQR', 'Hệ thống (VietQR)');
     insTxn.run(txnId, null, bank, amount, content, '', transType, 1, 'Đã ghi vào quỹ ' + f.name, raw);
+    db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
     return { ref: entryCode, message: 'Đã ghi vào quỹ ' + f.name, paid: true };
   });
 }

@@ -385,6 +385,10 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   ensureColumn('invoices', 'payment_ref', 'TEXT');
   ensureColumn('invoices', 'payment_content', 'TEXT');
   conn.exec('CREATE INDEX IF NOT EXISTS idx_invoices_payref ON invoices(payment_ref)');
+  // GĐ2.3, GĐ2.5: cột thêm sau khi bảng quỹ đã có ở DB cũ
+  ensureColumn('funds', 'bank_bin', 'TEXT');
+  ensureColumn('funds', 'bank_name', 'TEXT');
+  ensureColumn('fund_entries', 'attachment', 'TEXT');
   ensureColumn('invoice_items', 'unit_id', 'INTEGER');
   ensureColumn('invoice_items', 'unit_name', 'TEXT');
   ensureColumnWithDefault('invoice_items', 'conversion', 'REAL DEFAULT 1', '1');
