@@ -7,7 +7,7 @@ const money = (n) => nf.format(Math.round(Number(n) || 0)) + ' ₫';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function programCard(p) {
-  const rows = p.entries.map((e) => `<tr><td>${esc(e.date)}</td><td>${esc(e.name || 'Người hảo tâm')}</td><td class="r">${money(e.amount)}</td></tr>`).join('')
+  const rows = p.entries.map((e) => `<tr><td>${esc(e.date)}</td><td>${esc(e.anonymous ? 'Người hảo tâm' : (e.name || 'Chưa rõ tên'))}</td><td class="r">${money(e.amount)}</td></tr>`).join('')
     || '<tr><td colspan="3" class="rp-hint">Chưa có khoản ủng hộ</td></tr>';
   return `<div class="rp-card"><div class="rp-card-head"><h2>${esc(p.name)}</h2><div class="rp-hint">Tổng: ${money(p.total)}</div></div>
     <div class="rp-table-wrap"><table class="rp-table"><thead><tr><th>Ngày</th><th>Người ủng hộ</th><th class="r">Số tiền</th></tr></thead>

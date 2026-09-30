@@ -28,6 +28,7 @@ if (process.argv.includes('--reset') && fs.existsSync(DATA_DIR)) {
 const { control } = require('../src/control');
 const db = require('../src/db');
 const { hashPassword } = require('../src/lib/auth');
+const { removeVietnamese } = require('../src/lib/vietqr');
 
 /* ===================== Tiện ích ===================== */
 function mulberry32(a) {
@@ -423,14 +424,69 @@ function seedExtras(conn, pool, catIds, rnd, between, now) {
   return { suppliers: sups.length, purchases, txns };
 }
 
+/* ===================== Sổ quỹ mẫu (GĐ2) ===================== */
+// Mỗi cộng đồng: Quỹ chung + một chương trình công đức, có thu tiền mặt / VietQR, một khoản chi đã duyệt,
+// một khoản chờ duyệt. Ghi thẳng DB (không qua API) nên phải tự giữ đúng luật: người duyệt khác người lập,
+// chi không vượt tồn, khoản chi có ảnh chứng từ.
+const TINY_JPEG = Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=', 'base64');
+const DONORS = ['Ông Nguyễn Văn Thành', 'Bà Lê Thị Hoa', 'Gia đình anh Tuấn', 'Chị Phạm Thu Hà', 'Ông Trần Văn Bảy', 'Bà Võ Thị Mai', 'Anh Đỗ Minh Khoa', 'Cô Hồ Thị Lan'];
+function seedFunds(code, c) {
+  const conn = db.getTenantDb(code);
+  if (conn.prepare('SELECT COUNT(*) n FROM funds').get().n) return;
+  const u = (suffix) => control.prepare('SELECT id, full_name FROM users WHERE username=?').get(`${c.code}-${suffix}`);
+  const tq = u('thuquy'); const dy = u('duyet');
+  const rnd = mulberry32(hash('funds-' + c.code));
+  const acc = (i) => '96' + pad(hash(c.code + i) % 1e8, 8);
+  const dir = path.join(DATA_DIR, 'tenants', code, 'attachments');
+  fs.mkdirSync(dir, { recursive: true });
+  const insFund = conn.prepare(`INSERT INTO funds(code,name,kind,bank_account,bank_bin,bank_name,account_holder,manager_user_id,description,created_by)
+    VALUES (?,?,?,?,'970422','MB Bank',?,?,?,?)`);
+  const insEntry = conn.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,payer_name,anonymous,note,attachment,status,
+    created_by,created_by_name,created_at,approved_by,approved_by_name,approved_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  // Cùng khuôn makeCode: số thứ tự đếm riêng theo tiền tố + ngày
+  const seqs = {};
+  const entryCode = (prefix, d) => { const k = prefix + fmtDate(d).slice(0, 10).replace(/-/g, ''); seqs[k] = (seqs[k] || 0) + 1; return `${k}-${pad(seqs[k], 4)}`; };
+  conn.exec('BEGIN');
+  for (const [fcode, name, kind, desc] of [['quy-chung', 'Quỹ chung ' + c.name, 'general', 'Chi tiêu chung, sửa đường, điện chiếu sáng'],
+    ['cong-duc', 'Công đức tu sửa đình làng', 'donation', 'Chương trình công đức năm nay']]) {
+    const fid = Number(insFund.run(fcode, name, kind, acc(fcode), 'BAN QUAN LY ' + removeVietnamese(c.name).toUpperCase(), tq.id, desc, dy.id).lastInsertRowid);
+    let balance = 0;
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(Date.now() - (60 - i * 4) * 86400000 - rnd() * 3 * 3600000);
+      const amount = (Math.round(rnd() * 19) + 1) * 50000;
+      const viaQr = rnd() < 0.6;
+      const anon = rnd() < 0.2;
+      insEntry.run(entryCode('PT', d), fid, 'in', amount, viaQr ? 'vietqr' : 'cash', viaQr ? `FT${hash(fcode + i + c.code)}` : null,
+        viaQr && rnd() < 0.3 ? null : DONORS[Math.floor(rnd() * DONORS.length)], anon ? 1 : 0, viaQr ? 'Chuyen khoan ung ho' : 'Thu tiền mặt',
+        null, 'approved', viaQr ? null : tq.id, viaQr ? 'VietQR' : tq.full_name, fmtDate(d),
+        viaQr ? null : tq.id, viaQr ? 'Hệ thống (VietQR)' : tq.full_name, fmtDate(d));
+      balance += amount;
+    }
+    const spend = (days, amount, note, status) => {
+      const d = new Date(Date.now() - days * 86400000);
+      const ecode = entryCode('PC', d);
+      const file = `${ecode}-seed.jpg`;
+      fs.writeFileSync(path.join(dir, file), TINY_JPEG);
+      insEntry.run(ecode, fid, 'out', amount, 'cash', null, null, 0, note, file, status, tq.id, tq.full_name, fmtDate(d),
+        status === 'approved' ? dy.id : null, status === 'approved' ? dy.full_name : null, status === 'approved' ? fmtDate(new Date(d.getTime() + 86400000)) : null);
+    };
+    const paid = Math.min(Math.round(balance * 0.3 / 10000) * 10000, balance);
+    spend(10, paid, kind === 'donation' ? 'Mua ngói lợp mái đình' : 'Thay bóng đèn đường xóm', 'approved');
+    spend(2, Math.min(300000, balance - paid), kind === 'donation' ? 'Sơn lại cột đình' : 'Phát quang bụi rậm', 'submitted');
+  }
+  conn.exec('COMMIT');
+}
+
 /* ===================== Cộng đồng và nhân sự nền tảng ===================== */
 function seedCommunities() {
   for (const c of COMMUNITIES) {
     let row = control.prepare('SELECT id FROM communities WHERE code=?').get(c.code);
     if (!row) {
       const settings = JSON.stringify({ public_donations: c.type === 'village', unclassified_alert_days: 3 });
-      row = { id: Number(control.prepare('INSERT INTO communities(code,name,type,area,contact_name,contact_phone,note,settings) VALUES (?,?,?,?,?,?,?,?)')
-        .run(c.code, c.name, c.type, c.area, c.contact, '09' + pad(hash(c.code) % 1e8, 8), 'Dữ liệu mẫu', settings).lastInsertRowid) };
+      // Bật công khai công đức thì cần token cho link /congduc/<token> (GĐ2.9)
+      const token = c.type === 'village' ? require('crypto').randomBytes(16).toString('hex') : null;
+      row = { id: Number(control.prepare('INSERT INTO communities(code,name,type,area,contact_name,contact_phone,note,settings,donations_token) VALUES (?,?,?,?,?,?,?,?,?)')
+        .run(c.code, c.name, c.type, c.area, c.contact, '09' + pad(hash(c.code) % 1e8, 8), 'Dữ liệu mẫu', settings, token).lastInsertRowid) };
     }
     for (const s of c.sellers) control.prepare("UPDATE tenants SET kind='seller', community_id=? WHERE code=?").run(row.id, s);
     // Sổ quỹ cộng đồng với 3 vai trò: thủ quỹ nhập, người duyệt, trưởng cộng đồng xem tổng hợp
@@ -443,6 +499,7 @@ function seedCommunities() {
     addUser(t.id, `${c.code}-thuquy`, 'Thủ quỹ ' + c.name, 'treasurer');
     addUser(t.id, `${c.code}-duyet`, `${lb.approver_label || 'Người duyệt'} ${c.name}`, 'approver');
     addUser(t.id, `${c.code}-truong`, `${lb.leader_label || 'Trưởng'} ${c.name}`, 'community_leader');
+    seedFunds(fundCode, c);
   }
   for (const [u, name, role] of [['vanhanh', 'Nhân viên vận hành', 'platform_ops'], ['hotro', 'Nhân viên hỗ trợ', 'platform_support'],
     ['kythuat', 'Kỹ sư VietQR', 'platform_tech'], ['ql-thon-a', 'Cán bộ phụ trách Thôn An Phú', 'platform_community']]) addUser(null, u, name, role);
@@ -473,5 +530,8 @@ console.log(`  Tổng: ${results.filter((r) => !r.skipped).length} cửa hàng m
 console.log(`  Doanh thu mẫu: ${money(Math.round(tRevenue))}`);
 console.log('\n  Chạy:  DATA_DIR="' + DATA_DIR + '" npm start');
 console.log('  Báo cáo công khai: /r/' + reportToken);
+for (const c of control.prepare('SELECT code, donations_token FROM communities WHERE donations_token IS NOT NULL').all()) {
+  console.log(`  Công đức công khai ${c.code}: /congduc/${c.donations_token}`);
+}
 console.log('  Tài khoản (mật khẩu demo1234): <mã-cửa-hàng>-owner|quanly|thungan|kho|ketoan,');
 console.log('    thon-a-thuquy|duyet|truong (tương tự thon-b, cho-c), vanhanh, hotro, kythuat, ql-thon-a.\n');

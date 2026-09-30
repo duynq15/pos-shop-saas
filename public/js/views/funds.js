@@ -126,8 +126,12 @@ async function render() {
 
 function pendingActions(e) {
   const out = [];
-  if (e.status === 'draft' && can('fund.entry')) out.push(`<button class="btn sm" data-act="submit" data-id="${e.id}">Gửi duyệt</button>`);
-  if (e.status === 'submitted' && can('fund.approve')) {
+  const mine = e.created_by === auth.user.id;
+  if (e.status === 'draft' && mine && can('fund.entry')) {
+    out.push(`<button class="btn sm" data-act="edit" data-id="${e.id}">Sửa</button>`);
+    out.push(`<button class="btn sm" data-act="submit" data-id="${e.id}">Gửi duyệt</button>`);
+  }
+  if (e.status === 'submitted' && !mine && can('fund.approve')) {
     out.push(`<button class="btn sm ok" data-act="approve" data-id="${e.id}">Duyệt</button>`);
     out.push(`<button class="btn sm danger" data-act="reject" data-id="${e.id}">Từ chối</button>`);
   }
@@ -137,19 +141,21 @@ function pendingActions(e) {
 async function loadPending(fundId) {
   const { entries } = await api(`/api/funds/${fundId}/entries?status=submitted`);
   let list = entries;
-  if (can('fund.entry') && !can('fund.approve')) {
+  if (can('fund.entry')) {
     const { entries: drafts } = await api(`/api/funds/${fundId}/entries?status=draft`);
     list = [...drafts.filter((e) => e.created_by === auth.user.id), ...entries];
   }
   $('#fd-pending-body').innerHTML = list.map((e) => `<tr>
     <td>${esc(e.code)}</td><td>${TYPE_LABEL[e.type]}</td>
     <td class="r">${money(signed(e))}</td>
-    <td class="muted">${esc(e.note || '')}</td><td class="muted">${esc(e.created_by_name || '')}</td>
+    <td class="muted">${esc(e.note || '')}${e.type === 'out' && !e.attachment ? ' <span class="badge pending">Thiếu chứng từ</span>' : ''}</td>
+    <td class="muted">${esc(e.created_by_name || '')}</td>
     <td class="r">${pendingActions(e)}</td>
   </tr>`).join('') || '<tr><td colspan="6" class="empty">Không có khoản chờ</td></tr>';
   $('#fd-pending-body').onclick = async (ev) => {
     const b = ev.target.closest('[data-act]'); if (!b) return;
     const id = b.dataset.id; const act = b.dataset.act;
+    if (act === 'edit') { openEntryForm(null, null, list.find((x) => String(x.id) === id)); return; }
     try {
       if (act === 'reject') {
         const reason = prompt('Lý do từ chối?');
@@ -244,9 +250,13 @@ async function openQr(f) {
   }
 }
 
-function openFundForm(f) {
+async function openFundForm(f) {
   const isNew = !f;
   const d = f || { kind: 'general', status: 'active' };
+  let treasurers = [];
+  try { treasurers = await api('/api/fund-treasurers'); } catch { /* không có quyền thì bỏ ô chọn */ }
+  const tOpts = '<option value="">Chưa giao (mọi thủ quỹ)</option>' + treasurers.map((t) =>
+    `<option value="${t.id}" ${t.id === d.manager_user_id ? 'selected' : ''}>${esc(t.full_name || t.username)}</option>`).join('');
   modal(`<h2>${isNew ? 'Quỹ mới' : 'Sửa quỹ'}</h2>
     <div class="form-grid">
       ${isNew ? '<label class="fld">Mã quỹ *<input class="field" id="fd-f-code"></label>' : ''}
@@ -258,6 +268,7 @@ function openFundForm(f) {
       <label class="fld">Mã ngân hàng (BIN)<input class="field" id="fd-f-bin" value="${esc(d.bank_bin || '')}"></label>
       <label class="fld">Tên ngân hàng<input class="field" id="fd-f-bankname" value="${esc(d.bank_name || '')}"></label>
       <label class="fld">Chủ tài khoản<input class="field" id="fd-f-holder" value="${esc(d.account_holder || '')}"></label>
+      <label class="fld">Thủ quỹ phụ trách<select class="field" id="fd-f-manager">${tOpts}</select></label>
       ${!isNew ? `<label class="fld">Trạng thái<select class="field" id="fd-f-status">
         <option value="active" ${d.status === 'active' ? 'selected' : ''}>Đang hoạt động</option>
         <option value="closed" ${d.status === 'closed' ? 'selected' : ''}>Đã đóng</option></select></label>` : ''}
@@ -268,6 +279,7 @@ function openFundForm(f) {
     const body = {
       name: $('#fd-f-name').value, kind: $('#fd-f-kind').value, bank_account: $('#fd-f-account').value,
       bank_bin: $('#fd-f-bin').value, bank_name: $('#fd-f-bankname').value, account_holder: $('#fd-f-holder').value,
+      manager_user_id: $('#fd-f-manager').value || null,
     };
     if (isNew) body.code = $('#fd-f-code').value; else body.status = $('#fd-f-status').value;
     try {
@@ -278,34 +290,38 @@ function openFundForm(f) {
   };
 }
 
-async function openEntryForm(f, type) {
-  const title = { in: 'Thu tiền mặt', out: 'Lập phiếu chi', adjust: 'Điều chỉnh' }[type];
+// draft: phiếu nháp cần sửa (khi đó f, type bỏ qua).
+async function openEntryForm(f, type, draft) {
+  if (draft) type = draft.type;
+  const title = draft ? 'Sửa phiếu ' + draft.code : { in: 'Thu tiền mặt', out: 'Lập phiếu chi', adjust: 'Điều chỉnh' }[type];
   let refOptions = '';
-  if (type === 'adjust') {
+  if (type === 'adjust' && !draft) {
     const { entries } = await api(`/api/funds/${f.id}/entries?status=approved`);
     refOptions = entries.map((e) => `<option value="${e.id}">${esc(e.code)} — ${money(signed(e))}</option>`).join('');
   }
   modal(`<h2>${title}</h2>
     <div class="form-grid">
-      <label class="fld full">Số tiền *<input class="field" type="number" id="fd-e-amount"></label>
+      <label class="fld full">Số tiền *<input class="field" type="number" id="fd-e-amount" value="${draft ? draft.amount : ''}"></label>
       ${type === 'in' ? `<label class="fld">Người nộp<input class="field" id="fd-e-payer"></label>
         <label class="chk">Ẩn danh<input type="checkbox" id="fd-e-anon"></label>` : ''}
-      ${type === 'adjust' ? `<label class="fld full">Bút toán gốc *<select class="field" id="fd-e-ref">${refOptions}</select></label>` : ''}
-      <label class="fld full">Ghi chú${type !== 'in' ? ' *' : ''}<input class="field" id="fd-e-note"></label>
-      ${type === 'out' ? '<label class="fld full">Ảnh chứng từ * (bắt buộc trước khi gửi duyệt)<input class="field" type="file" id="fd-e-file" accept="image/jpeg,image/png,image/webp"></label>' : ''}
+      ${type === 'adjust' && !draft ? `<label class="fld full">Bút toán gốc *<select class="field" id="fd-e-ref">${refOptions}</select></label>` : ''}
+      <label class="fld full">Ghi chú${type !== 'in' ? ' *' : ''}<input class="field" id="fd-e-note" value="${esc(draft?.note || '')}"></label>
+      ${type === 'out' ? '<label class="fld full">Ảnh chứng từ * (bắt buộc trước khi gửi duyệt)' + (draft?.attachment ? ' — đã có ảnh, chọn file mới để thay' : '') + '<input class="field" type="file" id="fd-e-file" accept="image/jpeg,image/png,image/webp"></label>' : ''}
     </div>
     <div class="modal-actions"><button class="btn primary" id="fd-e-save">Lưu</button><button class="btn" id="fd-e-close">Đóng</button></div>`);
   $('#fd-e-close').onclick = closeModal;
   $('#fd-e-save').onclick = async () => {
     const body = { type, amount: $('#fd-e-amount').value, note: $('#fd-e-note').value };
+    if (draft) delete body.type;
     if (type === 'in') { body.payer_name = $('#fd-e-payer').value; body.anonymous = $('#fd-e-anon').checked; body.source = 'cash'; }
-    if (type === 'adjust') body.ref_entry_id = $('#fd-e-ref').value;
+    if (type === 'adjust' && !draft) body.ref_entry_id = $('#fd-e-ref').value;
     if (type === 'out') {
       const file = $('#fd-e-file').files[0];
       if (file) body.attachment = await fileToDataUrl(file);
     }
     try {
-      await api(`/api/funds/${f.id}/entries`, { method: 'POST', body });
+      if (draft) await api(`/api/fund-entries/${draft.id}`, { method: 'PATCH', body });
+      else await api(`/api/funds/${f.id}/entries`, { method: 'POST', body });
       toast('Đã lưu'); closeModal(); await loadFunds();
     } catch (e) { toast(e.message, true); }
   };

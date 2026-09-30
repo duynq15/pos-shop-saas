@@ -75,3 +75,29 @@ Review lại GĐ2.3–2.9 tìm ra các lỗi sau, đã sửa:
 - **QR quỹ phụ thuộc cấu hình VietQR của tenant.** Ở dev/prod, `generateQR` gọi API VietQR với `bankCode` và thông tin đăng nhập của tenant, không phải của quỹ, nên QR in dán có thể sai hoặc lỗi. QR quỹ giờ dựng bằng `buildVietQR` ngay tại máy chủ, vì tiền về đã được định tuyến theo số tài khoản quỹ. Vì vậy đã hoàn nguyên phần sửa `payments/vietqr.js` và bỏ `lib/vqr-settings.js` vì không còn cần.
 - **Báo cáo kỳ tính theo ngày lập.** Khoản chi lập kỳ trước nhưng duyệt kỳ này bị tính sai kỳ. Giờ báo cáo tính theo `approved_at`, tức ngày ghi sổ.
 - **Webhook quỹ:** bỏ qua số tiền ≤ 0, và ghi bút toán cùng giao dịch VietQR trong một transaction.
+
+## Rà soát kế hoạch GĐ2 (2026-09-30)
+
+Rà soát lại kế hoạch GĐ2 so với SRS và `quyet-dinh-gd0.md`. Không làm lại từ đầu: thiết kế lõi vẫn đúng (sổ bút toán bất biến, tồn quỹ tính bằng tổng, người duyệt khác người lập, chặn chi vượt tồn, định tuyến tiền theo tài khoản quỹ). Đã bổ sung các lỗ hổng sau:
+
+- **BR-08, FR-02 — thủ quỹ chỉ thấy quỹ được giao.**
+  - `funds.manager_user_id` phải là một thủ quỹ đang hoạt động của cộng đồng.
+  - Thủ quỹ chỉ thấy quỹ giao cho mình và quỹ chưa giao ai.
+  - Người duyệt, ban lãnh đạo và chủ tài khoản thấy mọi quỹ.
+  - Quỹ ngoài phạm vi trả 404, áp dụng cho cả bút toán và ảnh chứng từ.
+  - `GET /fund-treasurers` (quyền `fund.manage`) cấp danh sách cho ô chọn người phụ trách.
+  - **[NEED DECISION]** Có bắt buộc mọi quỹ phải giao cho một thủ quỹ không. Hiện quỹ chưa giao thì mọi thủ quỹ đều thấy.
+- **Sửa phiếu nháp.** `PATCH /fund-entries/:id` cho người lập sửa số tiền, ghi chú và ảnh khi phiếu còn ở trạng thái nháp. Trước đó, phiếu chi lập mà thiếu ảnh sẽ kẹt vĩnh viễn: ERR-05 chặn gửi duyệt, còn BR-04 cấm xóa.
+- **Ảnh chứng từ.**
+  - Loại ảnh xác định theo byte đầu file (JPEG, PNG, WebP), không tin kiểu do trình duyệt khai.
+  - Khi trả ảnh, gửi kèm `X-Content-Type-Options: nosniff`.
+  - Tên file có hậu tố thời gian, nên thay ảnh ở phiếu nháp không ghi đè file cũ.
+- **Mọi route `/fund-entries` giờ cũng chỉ cho tenant cộng đồng.** Trước đó chỉ `/funds` bị chặn.
+- **Trang công khai tách hai trường hợp.** Khoản ẩn danh hiện "Người hảo tâm". Khoản VietQR không có tên người chuyển hiện "Chưa rõ tên".
+- **Seed.** Mỗi cộng đồng có Quỹ chung và một chương trình công đức, kèm thu tiền mặt, thu VietQR, một khoản chi đã duyệt (có ảnh) và một khoản chờ duyệt. Thôn có token công khai công đức; seed in link ra màn hình.
+
+Chưa xử lý, để GĐ3:
+
+- Webhook định tuyến theo số tài khoản, bất kể token là của tenant nào. Ai lộ thông tin đăng nhập webhook của một cửa hàng thì giả được khoản thu vào quỹ.
+- Lỗ hổng này có từ trước GĐ2 và cũng áp dụng cho hóa đơn. Test hiện có đang cố ý giữ hành vi đó.
+- Xử lý cùng phần chống ghi trùng và đối soát (3.5, 3.6).

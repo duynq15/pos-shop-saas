@@ -312,7 +312,7 @@ function donationsData(token) {
       return {
         name: f.name,
         total: entries.reduce((s, e) => s + e.amount, 0),
-        entries: entries.map((e) => ({ name: e.anonymous ? null : (e.payer_name || null), amount: e.amount, date: (e.created_at || '').slice(0, 10) })),
+        entries: entries.map((e) => ({ name: e.anonymous ? null : (e.payer_name || null), anonymous: !!e.anonymous, amount: e.amount, date: (e.created_at || '').slice(0, 10) })),
       };
     });
   });

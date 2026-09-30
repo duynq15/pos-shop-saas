@@ -11,7 +11,7 @@ const { control, audit } = require('../control');
 const { ok, fail, wrap, bad, int, str, round, today } = require('../lib/util');
 const { makeCode } = require('../lib/codes');
 const { normAccount, bankAccountOf, fundByAccount } = require('../lib/community');
-const { requirePerm } = require('../middleware');
+const { requirePerm, can } = require('../middleware');
 const QRCode = require('qrcode');
 const { buildVietQR, removeVietnamese } = require('../lib/vietqr');
 const { sendXlsx } = require('../lib/xlsx');
@@ -20,7 +20,8 @@ const router = express.Router();
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const PREFIX = { in: 'PT', out: 'PC', adjust: 'DC' };
 
-router.use('/funds', (req, res, next) => {
+// Mọi route sổ quỹ chỉ cho tenant cộng đồng (trước đây /fund-entries lọt khỏi chốt này).
+router.use(['/funds', '/fund-entries', '/fund-treasurers'], (req, res, next) => {
   if (!req.tenant || req.tenant.kind !== 'community') return fail(res, 'Sổ quỹ chỉ dành cho tài khoản cộng đồng', 403);
   next();
 });
@@ -38,18 +39,25 @@ const getFund = (id) => {
 const getEntry = (id) => db.prepare('SELECT * FROM fund_entries WHERE id=?').get(Number(id));
 
 // Ảnh chứng từ (GĐ2.5 — dữ liệu base64 trong body JSON, không thêm thư viện multipart).
-const ATTACH_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 const ATTACH_MAX = 5 * 1024 * 1024; // 5MB sau giải mã
+// Nhận diện loại ảnh theo byte đầu file, không tin kiểu do trình duyệt khai.
+function imageExt(buf) {
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
+  if (buf.length > 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'png';
+  if (buf.length > 12 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'webp';
+  return null;
+}
+// Tên file theo mã chứng từ + số lần sửa, để bản ảnh cũ của phiếu nháp không bị ghi đè mất dấu.
 function saveAttachment(dataUrl, code) {
-  const m = /^data:(image\/[a-z]+);base64,([a-zA-Z0-9+/=]+)$/.exec(String(dataUrl || ''));
+  const m = /^data:image\/[a-z]+;base64,([a-zA-Z0-9+/=]+)$/.exec(String(dataUrl || ''));
   if (!m) bad('Ảnh chứng từ không hợp lệ');
-  const ext = ATTACH_MIME[m[1]];
-  if (!ext) bad('Chỉ nhận ảnh JPEG, PNG hoặc WebP');
-  const buf = Buffer.from(m[2], 'base64');
+  const buf = Buffer.from(m[1], 'base64');
   if (buf.length > ATTACH_MAX) bad('Ảnh chứng từ tối đa 5MB');
+  const ext = imageExt(buf);
+  if (!ext) bad('Chỉ nhận ảnh JPEG, PNG hoặc WebP');
   const dir = path.join(db.DATA_DIR, 'attachments');
   fs.mkdirSync(dir, { recursive: true });
-  const filename = code + '.' + ext;
+  const filename = `${code}-${Date.now().toString(36)}.${ext}`;
   fs.writeFileSync(path.join(dir, filename), buf);
   return filename;
 }
@@ -84,17 +92,44 @@ function fundInput(b, current = {}) {
   return v;
 }
 
+// Người phụ trách phải là thủ quỹ đang hoạt động của cộng đồng này.
 function checkManager(req, userId) {
-  if (userId && !control.prepare('SELECT 1 FROM users WHERE id=? AND tenant_id=?').get(userId, req.user.tenant_id)) bad('Người phụ trách không thuộc cộng đồng này');
+  if (userId && !control.prepare("SELECT 1 FROM users WHERE id=? AND tenant_id=? AND role='treasurer' AND active=1").get(userId, req.user.tenant_id)) {
+    bad('Người phụ trách phải là thủ quỹ của cộng đồng này');
+  }
+}
+
+// BR-08: thủ quỹ chỉ thấy quỹ được giao. Quỹ chưa giao ai thì mọi thủ quỹ đều thấy.
+// Người duyệt, ban lãnh đạo, chủ tài khoản (có fund.manage hoặc không có fund.entry) thấy mọi quỹ.
+// ponytail: quỹ chưa giao ai mở cho mọi thủ quỹ; muốn bắt buộc giao thì bỏ nhánh manager_user_id IS NULL.
+const scoped = (req) => req.user.role === 'treasurer';
+const SCOPE_SQL = '(f.manager_user_id IS NULL OR f.manager_user_id=?)';
+const canSeeFund = (req, f) => !scoped(req) || f.manager_user_id == null || f.manager_user_id === req.user.id;
+function fundFor(req, id) {
+  const f = getFund(id);
+  return f && canSeeFund(req, f) ? f : null;
+}
+function entryFor(req, id) {
+  const e = getEntry(id);
+  if (!e) return null;
+  const f = db.prepare('SELECT manager_user_id FROM funds WHERE id=?').get(e.fund_id);
+  return canSeeFund(req, f) ? e : null;
 }
 
 /* ===================== QUỸ ===================== */
 router.get('/funds', requirePerm('fund.view'), wrap((req, res) => {
-  ok(res, db.prepare(`SELECT f.*, (SELECT ${BALANCE} FROM fund_entries WHERE fund_id=f.id) balance FROM funds f ORDER BY f.status, f.id`).all());
+  const where = scoped(req) ? 'WHERE ' + SCOPE_SQL : '';
+  const args = scoped(req) ? [req.user.id] : [];
+  ok(res, db.prepare(`SELECT f.*, (SELECT ${BALANCE} FROM fund_entries WHERE fund_id=f.id) balance FROM funds f ${where} ORDER BY f.status, f.id`).all(...args));
+}));
+
+// Danh sách thủ quỹ để chọn người phụ trách quỹ (người có fund.manage không cần quyền user.manage).
+router.get('/fund-treasurers', requirePerm('fund.manage'), wrap((req, res) => {
+  ok(res, control.prepare("SELECT id, username, full_name FROM users WHERE tenant_id=? AND role='treasurer' AND active=1 ORDER BY full_name, username").all(req.user.tenant_id));
 }));
 
 router.get('/funds/:id', requirePerm('fund.view'), wrap((req, res) => {
-  const f = getFund(req.params.id);
+  const f = fundFor(req, req.params.id);
   if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
   ok(res, f);
 }));
@@ -115,7 +150,7 @@ router.post('/funds', requirePerm('fund.manage'), wrap((req, res) => {
 }));
 
 router.patch('/funds/:id', requirePerm('fund.manage'), wrap((req, res) => {
-  const cur = getFund(req.params.id);
+  const cur = fundFor(req, req.params.id);
   if (!cur) return fail(res, 'Không tìm thấy quỹ', 404);
   const v = fundInput(req.body || {}, cur);
   checkManager(req, v.manager_user_id);
@@ -138,14 +173,14 @@ async function fundQr(f, amount) {
 
 // QR tĩnh để in dán: không mã hóa số tiền.
 router.get('/funds/:id/qr', requirePerm('fund.view'), wrap(async (req, res) => {
-  const f = getFund(req.params.id);
+  const f = fundFor(req, req.params.id);
   if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
   ok(res, await fundQr(f));
 }));
 
 // QR có số tiền. Không tạo bút toán trước; chỉ ghi sổ khi tiền thật về (webhook).
 router.post('/funds/:id/qr', requirePerm('fund.entry'), wrap(async (req, res) => {
-  const f = getFund(req.params.id);
+  const f = fundFor(req, req.params.id);
   if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
   if (f.status !== 'active') bad('Quỹ đã đóng');
   const amount = int((req.body || {}).amount);
@@ -155,7 +190,7 @@ router.post('/funds/:id/qr', requirePerm('fund.entry'), wrap(async (req, res) =>
 
 /* ===================== BÚT TOÁN ===================== */
 router.get('/funds/:id/entries', requirePerm('fund.view'), wrap((req, res) => {
-  const f = getFund(req.params.id);
+  const f = fundFor(req, req.params.id);
   if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
   const q = req.query;
   const where = ['fund_id=?']; const args = [f.id];
@@ -169,7 +204,7 @@ router.get('/funds/:id/entries', requirePerm('fund.view'), wrap((req, res) => {
 // Thủ quỹ nhập: thu tiền mặt / chuyển khoản ngân hàng ngoài (ghi sổ ngay), lập phiếu chi hoặc điều chỉnh (nháp).
 // Nguồn vietqr chỉ đến từ webhook (GĐ2.4), không nhập tay.
 router.post('/funds/:id/entries', requirePerm('fund.entry'), wrap((req, res) => {
-  const f = getFund(req.params.id);
+  const f = fundFor(req, req.params.id);
   if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
   if (f.status !== 'active') bad('Quỹ đã đóng, không ghi thêm bút toán');
   const b = req.body || {};
@@ -204,10 +239,11 @@ router.post('/funds/:id/entries', requirePerm('fund.entry'), wrap((req, res) => 
 }));
 
 router.get('/fund-entries/:id/attachment', requirePerm('fund.view'), wrap((req, res) => {
-  const e = getEntry(req.params.id);
+  const e = entryFor(req, req.params.id);
   if (!e || !e.attachment) return fail(res, 'Không có ảnh chứng từ', 404);
   // dotfiles: 'allow' — DATA_DIR có thể nằm dưới thư mục chấm (giống backup.js); tên file
   // luôn do server đặt theo mã chứng từ nên không có rủi ro path traversal.
+  res.set('X-Content-Type-Options', 'nosniff');
   res.sendFile(path.join(db.DATA_DIR, 'attachments', e.attachment), { dotfiles: 'allow' }, (err) => {
     if (err && !res.headersSent) fail(res, 'Không tìm thấy ảnh', 404);
   });
@@ -216,7 +252,7 @@ router.get('/fund-entries/:id/attachment', requirePerm('fund.view'), wrap((req, 
 // FR-20: thủ quỹ ẩn / hiện tên người công đức sau khi ghi sổ; mỗi lần đổi ghi nhật ký.
 // Chỉ đổi cờ hiển thị, không đụng số tiền nên không vướng trigger BR-04.
 router.post('/fund-entries/:id/anonymous', requirePerm('fund.anonymize'), wrap((req, res) => {
-  const e = getEntry(req.params.id);
+  const e = entryFor(req, req.params.id);
   if (!e) return fail(res, 'Không tìm thấy bút toán', 404);
   if (e.type !== 'in') bad('Chỉ khoản thu mới ẩn / hiện tên được');
   const anonymous = (req.body || {}).anonymous ? 1 : 0;
@@ -225,8 +261,22 @@ router.post('/fund-entries/:id/anonymous', requirePerm('fund.anonymize'), wrap((
   ok(res, getEntry(e.id));
 }));
 
+// Người lập sửa phiếu nháp của mình (số tiền, ghi chú, ảnh) trước khi gửi duyệt.
+// Phiếu đã gửi / đã chốt không sửa được; sai thì từ chối hoặc lập điều chỉnh (BR-04).
+router.patch('/fund-entries/:id', requirePerm('fund.entry'), wrap((req, res) => transition(req, res, 'draft', (e) => {
+  if (e.created_by !== req.user.id) bad('Chỉ người lập được sửa phiếu nháp');
+  const b = req.body || {};
+  const amount = b.amount !== undefined ? int(b.amount) : e.amount;
+  if (e.type === 'adjust' ? amount === 0 : amount <= 0) bad('Số tiền không hợp lệ');
+  const note = b.note !== undefined ? str(b.note, 500) || null : e.note;
+  if (e.type === 'adjust' && !note) bad('Điều chỉnh phải ghi lý do');
+  const attachment = b.attachment ? saveAttachment(b.attachment, e.code) : e.attachment;
+  db.prepare('UPDATE fund_entries SET amount=?, note=?, attachment=? WHERE id=?').run(amount, note, attachment, e.id);
+  log(req, 'fund_entry.update', 'fund_entry', e.id, { amount, note, attachment: attachment !== e.attachment });
+})));
+
 function transition(req, res, from, fn) {
-  const e = getEntry(req.params.id);
+  const e = entryFor(req, req.params.id);
   if (!e) return fail(res, 'Không tìm thấy bút toán', 404);
   if (e.status !== from) bad('Bút toán không ở trạng thái cho phép thao tác này');
   fn(e);
@@ -289,14 +339,14 @@ function fundPeriod(fundId, from, to) {
 }
 
 router.get('/funds/:id/report', requirePerm('fund.view'), wrap((req, res) => {
-  const f = getFund(req.params.id);
+  const f = fundFor(req, req.params.id);
   if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
   const { from, to } = rangeOf(req.query);
   ok(res, { fund: f, ...fundPeriod(f.id, from, to) });
 }));
 
 router.get('/funds/:id/report/export', requirePerm('report.export'), wrap((req, res) => {
-  const f = getFund(req.params.id);
+  const f = fundFor(req, req.params.id);
   if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
   const { from, to } = rangeOf(req.query);
   const { entries } = fundPeriod(f.id, from, to);
