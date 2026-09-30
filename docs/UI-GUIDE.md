@@ -59,3 +59,24 @@ Class names are stable. Tests and views depend on them.
 - POS touch targets are at least 36–44px: the qty buttons, quick cash buttons, the delete button and the pay button.
 - The layout must work at 375, 768, 1024 and 1440px. Below 820px the sidebar becomes a drawer. The page never scrolls horizontally; only tables do.
 - The public report page (`report.css`) uses the same palette with flat colours: no gradients and no animated backgrounds.
+
+## Fund book screen (`public/js/views/funds.js`, `.fd-*` in `style.css`)
+
+The screen follows the treasurer's daily work, not the database tables.
+
+- **Fund picker:** each fund is a `.fd-chip` showing its name and balance. On a phone the chips scroll sideways and the scrollbar is hidden.
+- **Figures:** balance, income this month, spending this month, and the number of open tasks. Each uses the `.stat` colour for its meaning. On a phone the balance takes the whole first row.
+- **Actions:**
+  - "Thu tiền" (record income) is the one primary button.
+  - "Lập phiếu chi" (new expense) is a normal button.
+  - Rarely used actions (adjustment, edit fund) sit in the "Thêm" `<details>` menu.
+  - On a phone, a fixed `.fd-bar` at the bottom holds Thu tiền and Phiếu chi.
+- **Tabs:**
+  - **Việc cần làm (to do):** one card per item, showing what is missing and the next action. A disabled button explains itself in its title.
+  - **Sổ thu chi (ledger):** income is `+` in green and spending is `−` in red. The source and the "has photo" flag appear as a subline, and a row opens its details. On a phone each row becomes a card, so nothing scrolls sideways.
+  - **Báo cáo (report):** loads this month straight away and has quick ranges in a `.seg` switch.
+- **Money input:**
+  - A text field with `inputmode="numeric"` that formats thousands as you type.
+  - Quick amount buttons.
+  - Parse the value with `parseMoney` before sending.
+- **Receipt photo:** a `.fd-drop` area with a preview. Tapping it opens the phone camera or gallery.

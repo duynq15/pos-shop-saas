@@ -428,7 +428,30 @@ function seedExtras(conn, pool, catIds, rnd, between, now) {
 // Mỗi cộng đồng: Quỹ chung + một chương trình công đức, có thu tiền mặt / VietQR, một khoản chi đã duyệt,
 // một khoản chờ duyệt. Ghi thẳng DB (không qua API) nên phải tự giữ đúng luật: người duyệt khác người lập,
 // chi không vượt tồn, khoản chi có ảnh chứng từ.
-const TINY_JPEG = Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=', 'base64');
+// Ảnh chứng từ mẫu: PNG thật 240x320 (giấy biên nhận có các dòng kẻ), dựng bằng zlib, không cần thư viện ảnh.
+function receiptPng() {
+  const zlib = require('zlib');
+  const w = 240, h = 320;
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) {
+    raw[y * (w * 3 + 1)] = 0;
+    for (let x = 0; x < w; x++) {
+      const line = y > 40 && y % 24 === 0 && x > 20 && x < (y % 48 ? 220 : 160);
+      const head = y > 14 && y < 30 && x > 60 && x < 180;
+      const v = head ? 60 : line ? 150 : 250;
+      raw.fill(v, y * (w * 3 + 1) + 1 + x * 3, y * (w * 3 + 1) + 4 + x * 3);
+    }
+  }
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type), data]);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(td));
+    return Buffer.concat([len, td, crc]);
+  };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+const RECEIPT_PNG = receiptPng();
 const DONORS = ['Ông Nguyễn Văn Thành', 'Bà Lê Thị Hoa', 'Gia đình anh Tuấn', 'Chị Phạm Thu Hà', 'Ông Trần Văn Bảy', 'Bà Võ Thị Mai', 'Anh Đỗ Minh Khoa', 'Cô Hồ Thị Lan'];
 function seedFunds(code, c) {
   const conn = db.getTenantDb(code);
@@ -469,8 +492,8 @@ function seedFunds(code, c) {
     const spend = (days, amount, note, status) => {
       const d = new Date(Date.now() - days * 86400000);
       const ecode = entryCode('PC', d);
-      const file = `${ecode}-seed.jpg`;
-      fs.writeFileSync(path.join(dir, file), TINY_JPEG);
+      const file = `${ecode}-seed.png`;
+      fs.writeFileSync(path.join(dir, file), RECEIPT_PNG);
       insEntry.run(ecode, fid, 'out', amount, 'cash', null, null, 0, note, file, status, tq.id, tq.full_name, fmtDate(d),
         status === 'approved' ? dy.id : null, status === 'approved' ? dy.full_name : null, status === 'approved' ? fmtDate(new Date(d.getTime() + 86400000)) : null);
     };
