@@ -432,7 +432,6 @@ const TINY_JPEG = Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP///////////////
 const DONORS = ['Ông Nguyễn Văn Thành', 'Bà Lê Thị Hoa', 'Gia đình anh Tuấn', 'Chị Phạm Thu Hà', 'Ông Trần Văn Bảy', 'Bà Võ Thị Mai', 'Anh Đỗ Minh Khoa', 'Cô Hồ Thị Lan'];
 function seedFunds(code, c) {
   const conn = db.getTenantDb(code);
-  if (conn.prepare('SELECT COUNT(*) n FROM funds').get().n) return;
   const u = (suffix) => control.prepare('SELECT id, full_name FROM users WHERE username=?').get(`${c.code}-${suffix}`);
   const tq = u('thuquy'); const dy = u('duyet');
   const rnd = mulberry32(hash('funds-' + c.code));
@@ -445,10 +444,15 @@ function seedFunds(code, c) {
     created_by,created_by_name,created_at,approved_by,approved_by_name,approved_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   // Cùng khuôn makeCode: số thứ tự đếm riêng theo tiền tố + ngày
   const seqs = {};
-  const entryCode = (prefix, d) => { const k = prefix + fmtDate(d).slice(0, 10).replace(/-/g, ''); seqs[k] = (seqs[k] || 0) + 1; return `${k}-${pad(seqs[k], 4)}`; };
+  const entryCode = (prefix, d) => {
+    const k = prefix + fmtDate(d).slice(0, 10).replace(/-/g, '');
+    if (seqs[k] === undefined) seqs[k] = conn.prepare('SELECT COUNT(*) n FROM fund_entries WHERE code LIKE ?').get(k + '%').n;
+    seqs[k] += 1; return `${k}-${pad(seqs[k], 4)}`;
+  };
   conn.exec('BEGIN');
   for (const [fcode, name, kind, desc] of [['quy-chung', 'Quỹ chung ' + c.name, 'general', 'Chi tiêu chung, sửa đường, điện chiếu sáng'],
     ['cong-duc', 'Công đức tu sửa đình làng', 'donation', 'Chương trình công đức năm nay']]) {
+    if (conn.prepare('SELECT 1 FROM funds WHERE code=?').get(fcode)) continue; // chạy lại seed: giữ quỹ đã có
     const fid = Number(insFund.run(fcode, name, kind, acc(fcode), 'BAN QUAN LY ' + removeVietnamese(c.name).toUpperCase(), tq.id, desc, dy.id).lastInsertRowid);
     let balance = 0;
     for (let i = 0; i < 14; i++) {
@@ -487,6 +491,11 @@ function seedCommunities() {
       const token = c.type === 'village' ? require('crypto').randomBytes(16).toString('hex') : null;
       row = { id: Number(control.prepare('INSERT INTO communities(code,name,type,area,contact_name,contact_phone,note,settings,donations_token) VALUES (?,?,?,?,?,?,?,?,?)')
         .run(c.code, c.name, c.type, c.area, c.contact, '09' + pad(hash(c.code) % 1e8, 8), 'Dữ liệu mẫu', settings, token).lastInsertRowid) };
+    }
+    // Dữ liệu cũ: đã bật công khai nhưng chưa có token (token thêm ở GĐ2.9)
+    const cur = control.prepare('SELECT settings, donations_token FROM communities WHERE id=?').get(row.id);
+    if (!cur.donations_token && JSON.parse(cur.settings || '{}').public_donations) {
+      control.prepare('UPDATE communities SET donations_token=? WHERE id=?').run(require('crypto').randomBytes(16).toString('hex'), row.id);
     }
     for (const s of c.sellers) control.prepare("UPDATE tenants SET kind='seller', community_id=? WHERE code=?").run(row.id, s);
     // Sổ quỹ cộng đồng với 3 vai trò: thủ quỹ nhập, người duyệt, trưởng cộng đồng xem tổng hợp
