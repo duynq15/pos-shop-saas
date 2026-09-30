@@ -448,6 +448,22 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('closed fund takes no entries', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).ok);
   await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'active' } });
 
+  // ---------- QR quỹ (GĐ2.3 — reuse generateQR, tài khoản quỹ luôn riêng theo BR-02) ----------
+  const fund2 = await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-chung', name: 'Quỹ chung', bank_account: 'QUYCHUNG01' } });
+  ok('fund without bank_bin blocks QR', (await req('cadm', '/funds/' + fund2.data.id + '/qr')).status === 400);
+  await cj('c-approver', '/funds/' + fund2.data.id, { method: 'PATCH', body: { bank_bin: '970422', bank_name: 'MB Bank' } });
+  const staticQr = await cj('c-community_leader', '/funds/' + fund2.data.id + '/qr');
+  ok('static fund QR generated (mock)', staticQr.ok && staticQr.data.mock && !!staticQr.data.qrDataUrl);
+  ok('leader cannot request dynamic QR', (await req('c-community_leader', '/funds/' + fund2.data.id + '/qr', { method: 'POST', body: { amount: 100000 } })).status === 403);
+  const dynQr = await cj('c-treasurer', '/funds/' + fund2.data.id + '/qr', { method: 'POST', body: { amount: 250000 } });
+  ok('dynamic fund QR carries amount', dynQr.ok && dynQr.data.amount === 250000 && dynQr.data.qrCode.includes('250000'));
+  const balBefore = (await cj('cadm', '/funds/' + fund2.data.id)).data.balance;
+  const syncFund = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
+  ok('webhook routes to fund by bank account', syncFund.error === false);
+  ok('fund balance increases from webhook', (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
+  const syncFundAgain = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
+  ok('webhook fund payment idempotent', syncFundAgain.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
+
   // ---------- Phạm vi cộng đồng (GĐ1.4 — BR-07, BR-09, ERR-08) ----------
   const day = new Date().toISOString().slice(0, 10);
   // Cộng đồng B với người bán riêng: số của B không được lẫn vào A

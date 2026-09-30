@@ -3,12 +3,14 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
-const { control, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders } = require('../control');
+const { control, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders } = require('../control');
 const { ok, fail, wrap, str, round } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
 const { requirePerm } = require('../middleware');
 const { accountConflict, CONFLICT_MSG } = require('../lib/community');
 const { generateQR, getToken, bases, testCallbackUrl } = require('../payments/vietqr');
+const { vqrSettings } = require('../lib/vqr-settings');
+const funds = require('./funds');
 
 const router = express.Router();   // API phía app (đã đăng nhập), mount /api
 const webhook = express.Router();  // API mở cho VietQR gọi vào, mount /vqr
@@ -23,22 +25,6 @@ function readSettings() {
   return Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map((r) => [r.key, r.value]));
 }
 const settingsOf = (code) => db.runWith(code, readSettings);
-
-// Cấu hình VietQR hiệu dụng: ưu tiên của shop, fallback credentials dùng chung cấp nền tảng.
-function vqrSettings() {
-  const st = readSettings();
-  let p = {};
-  try { p = getPlatformSettings(); } catch { p = {}; }
-  const inherit = !st.vqr_username && !st.vqr_password && !!(p.vqr_username && p.vqr_password);
-  const isProd = process.env.NODE_ENV === 'production';
-  return {
-    ...st,
-    vqr_username: st.vqr_username || p.vqr_username || '',
-    vqr_password: st.vqr_password || p.vqr_password || '',
-    vqr_env: isProd ? 'prod' : (inherit ? (p.vqr_env || st.vqr_env || 'mock') : (st.vqr_env || 'mock')),
-    _inherited: inherit,
-  };
-}
 
 function signToken(payload) {
   const p = Buffer.from(JSON.stringify(payload)).toString('base64url');
@@ -150,14 +136,18 @@ webhook.post('/bank/api/transaction-sync', wrap((req, res) => {
   if (!pl) { console.warn('[vqr] transaction-sync: token không hợp lệ'); return res.status(401).json({ error: true, errorReason: 'INVALID_TOKEN', toastMessage: 'Invalid or expired token', object: null }); }
   const b = req.body || {};
   // Nhận diện shop theo orderId (đã ghi lúc tạo QR) -> đúng cho mọi mô hình,
-  // kể cả khi tiền về một tài khoản quản lý chung. Dự phòng: theo số TK, rồi theo token.
+  // kể cả khi tiền về một tài khoản quản lý chung. Dự phòng: theo tài khoản quỹ (GĐ2.3,
+  // luôn duy nhất theo BR-02), rồi theo số TK của tenant, rồi theo token.
   const orderIdForResolve = str(b.orderId, 20) || ((String(b.content || '').match(/P\d{10}/) || [])[0] || '');
   const mapped = getQrOrder(orderIdForResolve);
-  const code = (mapped && mapped.tenant_code) || resolveTenantByBank(b.bankaccount) || pl.t;
-  console.log(`[vqr] sync nhận: shop=${code || '?'} orderId=${b.orderId || ''} amount=${b.amount || ''} content=${b.content || ''}`);
+  const fundHit = mapped ? null : funds.resolveFundByBank(b.bankaccount);
+  const code = (mapped && mapped.tenant_code) || (fundHit && fundHit.tenantCode) || resolveTenantByBank(b.bankaccount) || pl.t;
+  console.log(`[vqr] sync nhận: shop=${code || '?'} orderId=${b.orderId || ''} amount=${b.amount || ''} content=${b.content || ''}${fundHit ? ' quỹ=' + fundHit.fundId : ''}`);
   if (!code) return res.status(400).json({ error: true, errorReason: 'TENANT_NOT_FOUND', toastMessage: 'Không xác định được cửa hàng theo tài khoản nhận tiền', object: null });
   try {
-    const r = processPayment(code, { transactionid: b.transactionid, bankaccount: b.bankaccount, amount: b.amount, content: b.content, orderId: b.orderId, transType: b.transType, raw: b });
+    const r = fundHit
+      ? funds.processFundPayment(code, fundHit.fundId, { transactionid: b.transactionid, bankaccount: b.bankaccount, amount: b.amount, content: b.content, transType: b.transType, raw: b })
+      : processPayment(code, { transactionid: b.transactionid, bankaccount: b.bankaccount, amount: b.amount, content: b.content, orderId: b.orderId, transType: b.transType, raw: b });
     res.json({ error: false, errorReason: null, toastMessage: r.message, object: { reftransactionid: r.ref } });
   } catch (e) {
     res.status(400).json({ error: true, errorReason: 'TRANSACTION_FAILED', toastMessage: e.message, object: null });

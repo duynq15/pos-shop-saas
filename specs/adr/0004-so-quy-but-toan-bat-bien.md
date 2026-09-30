@@ -23,3 +23,11 @@ Tenant cộng đồng (`kind='community'`) cần quản lý nhiều quỹ: quỹ
 - Sửa sai tạo thêm dòng thay vì sửa dòng cũ. Báo cáo phải hiển thị bút toán điều chỉnh cùng bút toán gốc.
 - Kiểm tài khoản trùng phải quét DB từng tenant. Khi số thôn lớn, cần đưa tài khoản quỹ lên `control.db`.
 - Nguồn `vietqr` chỉ do webhook ghi (GĐ2.4), không nhập tay.
+
+## Bổ sung GĐ2.3 — QR riêng cho từng quỹ (2026-09-30)
+
+- `funds` thêm `bank_bin`, `bank_name` để đủ dữ liệu dựng VietQR (`buildVietQR` cần BIN ngân hàng, không chỉ số tài khoản).
+- Không thêm bảng theo dõi đơn hàng cho quỹ (khác `qr_orders` của hóa đơn). Vì tài khoản nhận của quỹ đã bảo đảm duy nhất toàn hệ thống (BR-02), riêng số tài khoản đủ để webhook xác định đúng tenant và đúng quỹ (`resolveFundByBank`), không cần orderId.
+- Hai loại QR: `GET /funds/:id/qr` (tĩnh, không số tiền, để in dán) và `POST /funds/:id/qr` (động, có số tiền, chỉ `fund.entry`). Cả hai không tạo bút toán trước — bút toán chỉ sinh ra khi tiền thật về qua webhook, giữ nguyên tắc "khoản thu ghi sổ ngay khi có thật" của GĐ2.1.
+- `processFundPayment` dùng lại bảng `vietqr_transactions` sẵn có để chống xử lý trùng theo `transactionid`, không cần bảng riêng.
+- Thiếu (để sau): không lưu trước người ủng hộ/ghi chú khi tạo QR động; bút toán tự động từ VietQR sẽ trống các trường này, thủ quỹ bổ sung tay khi cần.

@@ -6,10 +6,12 @@
 const express = require('express');
 const db = require('../db');
 const { control, audit } = require('../control');
-const { ok, fail, wrap, bad, int, str } = require('../lib/util');
+const { ok, fail, wrap, bad, int, str, round } = require('../lib/util');
 const { makeCode } = require('../lib/codes');
 const { bankAccountOf } = require('../lib/community');
 const { requirePerm } = require('../middleware');
+const { generateQR } = require('../payments/vietqr');
+const { vqrSettings } = require('../lib/vqr-settings');
 
 const router = express.Router();
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -53,6 +55,8 @@ function fundInput(b, current = {}) {
     name: b.name !== undefined ? str(b.name, 160) : current.name,
     kind: b.kind !== undefined ? b.kind : current.kind || 'general',
     bank_account: b.bank_account !== undefined ? normAccount(str(b.bank_account, 40)) || null : current.bank_account ?? null,
+    bank_bin: b.bank_bin !== undefined ? str(b.bank_bin, 20) || null : current.bank_bin ?? null,
+    bank_name: b.bank_name !== undefined ? str(b.bank_name, 80) || null : current.bank_name ?? null,
     account_holder: b.account_holder !== undefined ? str(b.account_holder, 120) || null : current.account_holder ?? null,
     manager_user_id: b.manager_user_id !== undefined ? (b.manager_user_id ? Number(b.manager_user_id) : null) : current.manager_user_id ?? null,
     description: b.description !== undefined ? str(b.description, 1000) || null : current.description ?? null,
@@ -91,8 +95,8 @@ router.post('/funds', requirePerm('fund.manage'), wrap((req, res) => {
   const v = fundInput(b);
   checkManager(req, v.manager_user_id);
   if (fundAccountTaken(v.bank_account)) bad('Tài khoản nhận của quỹ phải là tài khoản riêng, không trùng cửa hàng hay quỹ khác (BR-02)');
-  const r = db.prepare(`INSERT INTO funds(code,name,kind,bank_account,account_holder,manager_user_id,description,start_date,end_date,status,created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(code, v.name, v.kind, v.bank_account, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, req.user.id);
+  const r = db.prepare(`INSERT INTO funds(code,name,kind,bank_account,bank_bin,bank_name,account_holder,manager_user_id,description,start_date,end_date,status,created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code, v.name, v.kind, v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, req.user.id);
   const f = getFund(r.lastInsertRowid);
   log(req, 'fund.create', 'fund', f.id, { code, name: v.name });
   ok(res, f);
@@ -104,10 +108,36 @@ router.patch('/funds/:id', requirePerm('fund.manage'), wrap((req, res) => {
   const v = fundInput(req.body || {}, cur);
   checkManager(req, v.manager_user_id);
   if (v.bank_account !== cur.bank_account && fundAccountTaken(v.bank_account, cur.id)) bad('Tài khoản nhận của quỹ phải là tài khoản riêng, không trùng cửa hàng hay quỹ khác (BR-02)');
-  db.prepare(`UPDATE funds SET name=?,kind=?,bank_account=?,account_holder=?,manager_user_id=?,description=?,start_date=?,end_date=?,status=? WHERE id=?`)
-    .run(v.name, v.kind, v.bank_account, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, cur.id);
+  db.prepare(`UPDATE funds SET name=?,kind=?,bank_account=?,bank_bin=?,bank_name=?,account_holder=?,manager_user_id=?,description=?,start_date=?,end_date=?,status=? WHERE id=?`)
+    .run(v.name, v.kind, v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, cur.id);
   log(req, 'fund.update', 'fund', cur.id, req.body);
   ok(res, getFund(cur.id));
+}));
+
+/* ===================== QR (GĐ2.3 — reuse generateQR, tài khoản quỹ luôn riêng theo BR-02) ===================== */
+function fundQrSettings(f) {
+  return { ...vqrSettings(), bank_account: f.bank_account, bank_bin: f.bank_bin, bank_name: f.bank_name || '' };
+}
+
+// QR tĩnh để in dán: không mã hóa số tiền.
+router.get('/funds/:id/qr', requirePerm('fund.view'), wrap(async (req, res) => {
+  const f = getFund(req.params.id);
+  if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
+  if (!f.bank_account || !f.bank_bin) bad('Quỹ chưa cấu hình tài khoản ngân hàng (số tài khoản + mã ngân hàng)');
+  const q = await generateQR(fundQrSettings(f), req.tenant.code, { content: f.name });
+  ok(res, { ...q, fund_id: f.id, bank_name: f.bank_name, account_holder: f.account_holder });
+}));
+
+// QR động yêu cầu một số tiền cụ thể. Không tạo bút toán trước; chỉ ghi sổ khi tiền thật về (webhook).
+router.post('/funds/:id/qr', requirePerm('fund.entry'), wrap(async (req, res) => {
+  const f = getFund(req.params.id);
+  if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
+  if (f.status !== 'active') bad('Quỹ đã đóng');
+  if (!f.bank_account || !f.bank_bin) bad('Quỹ chưa cấu hình tài khoản ngân hàng (số tài khoản + mã ngân hàng)');
+  const amount = int((req.body || {}).amount);
+  if (amount <= 0) bad('Số tiền không hợp lệ');
+  const q = await generateQR(fundQrSettings(f), req.tenant.code, { amount, content: f.name });
+  ok(res, { ...q, fund_id: f.id, amount });
 }));
 
 /* ===================== BÚT TOÁN ===================== */
@@ -196,4 +226,52 @@ router.post('/fund-entries/:id/reject', requirePerm('fund.approve'), wrap((req, 
   log(req, 'fund_entry.reject', 'fund_entry', e.id, { reason });
 })));
 
+/* ===================== Webhook VietQR (dùng bởi src/routes/vietqr.js) ===================== */
+// Tài khoản của quỹ luôn duy nhất toàn hệ thống (BR-02), nên tài khoản đủ để xác định
+// tenant + quỹ, không cần bảng theo dõi đơn hàng như luồng hóa đơn.
+function resolveFundByBank(account) {
+  const acc = normAccount(account);
+  if (!acc) return null;
+  for (const t of control.prepare("SELECT code FROM tenants WHERE kind='community'").all()) {
+    const hit = db.runWith(t.code, (conn) => conn.prepare('SELECT id FROM funds WHERE bank_account=?').get(acc));
+    if (hit) return { tenantCode: t.code, fundId: hit.id };
+  }
+  return null;
+}
+
+// p: { transactionid, bankaccount, amount, content, transType, raw }. Khoản thu ghi sổ ngay (approved),
+// khớp nguyên tắc đã chốt ở GĐ2.1: tiền đã về quỹ thì ghi nhận luôn, không qua duyệt.
+function processFundPayment(code, fundId, p) {
+  return db.runWith(code, () => {
+    const txnId = str(p.transactionid, 80) || 'AUTO-' + Date.now();
+    const amount = round(p.amount);
+    const bank = str(p.bankaccount, 40);
+    const content = str(p.content, 60);
+    const transType = str(p.transType, 2) || 'C';
+    const raw = JSON.stringify(p.raw || {});
+    if (db.prepare('SELECT 1 FROM vietqr_transactions WHERE transactionid=?').get(txnId)) {
+      return { ref: '', message: 'Giao dịch đã xử lý trước đó', paid: true };
+    }
+    const insTxn = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`);
+    const f = getFund(fundId);
+    if (!f || f.status !== 'active') {
+      insTxn.run(txnId, null, bank, amount, content, '', transType, 0, 'Quỹ không hoạt động', raw);
+      return { ref: '', message: 'Quỹ không hoạt động', paid: false };
+    }
+    if (transType !== 'C') {
+      insTxn.run(txnId, null, bank, amount, content, '', transType, 0, 'Không phải giao dịch tiền vào', raw);
+      return { ref: '', message: 'Không phải giao dịch tiền vào', paid: false };
+    }
+    const entryCode = makeCode(db, 'PT', 'fund_entries');
+    db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,note,status,created_by_name,approved_by_name,approved_at)
+      VALUES (?,?,'in',?,'vietqr',?,?,'approved',?,?,datetime('now','localtime'))`)
+      .run(entryCode, f.id, amount, txnId, content, 'VietQR', 'Hệ thống (VietQR)');
+    insTxn.run(txnId, null, bank, amount, content, '', transType, 1, 'Đã ghi vào quỹ ' + f.name, raw);
+    return { ref: entryCode, message: 'Đã ghi vào quỹ ' + f.name, paid: true };
+  });
+}
+
 module.exports = router;
+module.exports.resolveFundByBank = resolveFundByBank;
+module.exports.processFundPayment = processFundPayment;

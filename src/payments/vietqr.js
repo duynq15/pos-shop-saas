@@ -47,10 +47,10 @@ async function generateQR(settings, tenantCode, { amount, orderId, content }) {
     userBankName: removeVietnamese(settings.account_holder || settings.shop_name || 'POS SHOP').slice(0, 50),
     content: msg,
     qrType: 0,
-    amount: String(Math.round(amount)),
     orderId,
     transType: 'C',
   };
+  if (amount) body.amount = String(Math.round(amount)); // bỏ trống cho QR tĩnh không cố định số tiền
   if (settings.vqr_terminal_code) body.terminalCode = settings.vqr_terminal_code;
   const r = await fetch(b.qr, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));

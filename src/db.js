@@ -289,6 +289,8 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     name TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','donation')),
     bank_account TEXT,
+    bank_bin TEXT,
+    bank_name TEXT,
     account_holder TEXT,
     manager_user_id INTEGER,
     description TEXT,
