@@ -8,12 +8,13 @@ const path = require('path');
 const express = require('express');
 const db = require('../db');
 const { control, audit } = require('../control');
-const { ok, fail, wrap, bad, int, str, round } = require('../lib/util');
+const { ok, fail, wrap, bad, int, str, round, today } = require('../lib/util');
 const { makeCode } = require('../lib/codes');
 const { bankAccountOf } = require('../lib/community');
 const { requirePerm } = require('../middleware');
 const { generateQR } = require('../payments/vietqr');
 const { vqrSettings } = require('../lib/vqr-settings');
+const { sendXlsx } = require('../lib/xlsx');
 
 const router = express.Router();
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -256,6 +257,51 @@ router.post('/fund-entries/:id/reject', requirePerm('fund.approve'), wrap((req, 
     .run(req.user.id, req.user.full_name || req.user.username, reason, e.id);
   log(req, 'fund_entry.reject', 'fund_entry', e.id, { reason });
 })));
+
+/* ===================== Báo cáo kỳ (GĐ2.7 — BR-12: không chốt sổ, luôn tính lại theo kỳ) ===================== */
+const rangeOf = (q) => { const f = q.from || today(); const t = q.to || f; return { from: f, to: t }; };
+const SRC_LABEL = { vietqr: 'VietQR', manual: 'Chuyển khoản khác', cash: 'Tiền mặt' };
+const TYPE_LABEL = { in: 'Thu', out: 'Chi', adjust: 'Điều chỉnh' };
+
+function fundPeriod(fundId, from, to) {
+  if (!DAY.test(from) || !DAY.test(to) || from > to) bad('Khoảng ngày không hợp lệ');
+  const opening = Number(db.prepare(`SELECT COALESCE(SUM(CASE type WHEN 'out' THEN -amount ELSE amount END),0) b
+    FROM fund_entries WHERE fund_id=? AND status='approved' AND date(created_at)<date(?)`).get(fundId, from).b);
+  const sums = db.prepare(`SELECT
+      COALESCE(SUM(CASE WHEN type='in' AND source IN ('vietqr','manual') THEN amount END),0) income_bank,
+      COALESCE(SUM(CASE WHEN type='in' AND source='cash' THEN amount END),0) income_cash,
+      COALESCE(SUM(CASE WHEN type='out' THEN amount END),0) expense,
+      COALESCE(SUM(CASE WHEN type='adjust' THEN amount END),0) adjust
+    FROM fund_entries WHERE fund_id=? AND status='approved' AND date(created_at)>=date(?) AND date(created_at)<=date(?)`)
+    .get(fundId, from, to);
+  const entries = db.prepare(`SELECT * FROM fund_entries WHERE fund_id=? AND status='approved'
+    AND date(created_at)>=date(?) AND date(created_at)<=date(?) ORDER BY created_at, id`).all(fundId, from, to);
+  const closing = opening + sums.income_bank + sums.income_cash + sums.adjust - sums.expense;
+  return { from, to, opening_balance: opening, income_bank: sums.income_bank, income_cash: sums.income_cash,
+    expense: sums.expense, adjust: sums.adjust, closing_balance: closing, entries };
+}
+
+router.get('/funds/:id/report', requirePerm('fund.view'), wrap((req, res) => {
+  const f = getFund(req.params.id);
+  if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
+  const { from, to } = rangeOf(req.query);
+  ok(res, { fund: f, ...fundPeriod(f.id, from, to) });
+}));
+
+router.get('/funds/:id/report/export', requirePerm('report.export'), wrap((req, res) => {
+  const f = getFund(req.params.id);
+  if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
+  const { from, to } = rangeOf(req.query);
+  const { entries } = fundPeriod(f.id, from, to);
+  const rows = entries.map((e) => ({
+    'Ngày': e.created_at, 'Mã chứng từ': e.code, 'Loại': TYPE_LABEL[e.type],
+    'Nguồn': SRC_LABEL[e.source] || e.source,
+    'Số tiền': e.type === 'out' ? -e.amount : e.amount,
+    'Người nộp': e.anonymous ? 'Người hảo tâm' : (e.payer_name || ''),
+    'Ghi chú': e.note || '', 'Người lập': e.created_by_name || '', 'Người duyệt': e.approved_by_name || '',
+  }));
+  sendXlsx(res, `so-quy-${f.code}-${from}_${to}`, rows, { sheet: 'So quy' });
+}));
 
 /* ===================== Webhook VietQR (dùng bởi src/routes/vietqr.js) ===================== */
 // Tài khoản của quỹ luôn duy nhất toàn hệ thống (BR-02), nên tài khoản đủ để xác định

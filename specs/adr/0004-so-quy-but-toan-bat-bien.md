@@ -40,3 +40,9 @@ Tenant cộng đồng (`kind='community'`) cần quản lý nhiều quỹ: quỹ
 - File lưu tại `data/tenants/<mã>/attachments/<mã chứng từ>.<đuôi>`. Tên file luôn do server đặt theo mã chứng từ, không lấy từ input, nên không cần chặn path traversal.
 - Không có endpoint sửa ảnh sau khi tạo — khớp nguyên tắc bất biến của bút toán.
 - `res.sendFile` cần `dotfiles: 'allow'` vì `DATA_DIR` có thể nằm dưới thư mục chấm, cùng lý do đã gặp ở `backup.js`.
+
+## Bổ sung GĐ2.7 — tồn quỹ và báo cáo kỳ (2026-09-30)
+
+- `GET /funds/:id/report?from&to`: không có bảng hay cờ "chốt sổ" nào — mỗi lần gọi tính lại từ `fund_entries` (BR-12). Tồn đầu kỳ = tổng approved trước `from`; trong kỳ tách `income_bank` (nguồn `vietqr`+`manual`) và `income_cash` (`cash`); tồn cuối kỳ = đầu kỳ + thu ngân hàng + thu tiền mặt + điều chỉnh − chi.
+- `GET /funds/:id/report/export`: xuất Excel bằng `sendXlsx` có sẵn, không thêm code dựng file. Quyền `report.export` giữ nguyên phân quyền hiện tại (chủ tài khoản + thủ quỹ).
+- Không dựng PDF phía server: `lib/pdf.js` chỉ render được từ một URL công khai (Playwright), không hợp với báo cáo nội bộ cần đăng nhập. Màn hình thủ quỹ (GĐ2.8) dùng `window.print()` + CSS `@media print` — cách đã dùng cho hóa đơn và trang công khai — thay vì route PDF mới.

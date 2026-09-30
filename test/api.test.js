@@ -456,6 +456,17 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('oversize attachment rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, attachment: bigB64 } })).ok);
   ok('entry without attachment 404', (await req('c-treasurer', '/fund-entries/' + out.data.id + '/attachment')).status === 404);
 
+  // ---------- Báo cáo kỳ (GĐ2.7 — BR-12: không chốt sổ) ----------
+  const fundDay = new Date().toISOString().slice(0, 10);
+  const rep = await cj('c-community_leader', '/funds/' + fid + '/report?from=' + fundDay + '&to=' + fundDay);
+  ok('period report matches balance', rep.ok && rep.data.opening_balance === 0 && rep.data.income_cash === 600000
+    && rep.data.income_bank === 0 && rep.data.expense === 200000 && rep.data.adjust === -50000 && rep.data.closing_balance === 350000);
+  ok('empty range returns opening as closing', (await cj('cadm', '/funds/' + fid + '/report?from=2000-01-01&to=2000-01-01')).data.closing_balance === 0);
+  ok('inverted range rejected', !(await cj('cadm', '/funds/' + fid + '/report?from=' + fundDay + '&to=2000-01-01')).ok);
+  ok('leader cannot export (no report.export)', (await req('c-community_leader', '/funds/' + fid + '/report/export?from=' + fundDay + '&to=' + fundDay)).status === 403);
+  const expRes = await req('c-treasurer', '/funds/' + fid + '/report/export?from=' + fundDay + '&to=' + fundDay);
+  ok('export xlsx', expRes.status === 200 && (expRes.headers.get('content-type') || '').includes('spreadsheetml'));
+
   await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'closed' } });
   ok('closed fund takes no entries', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).ok);
   await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'active' } });
