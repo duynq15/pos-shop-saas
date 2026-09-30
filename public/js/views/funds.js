@@ -1,6 +1,6 @@
 // Màn hình sổ quỹ (GĐ2.8): chọn quỹ, số liệu nhanh, việc cần làm, sổ thu chi, báo cáo kỳ.
 // Bố cục theo việc hằng ngày của thủ quỹ: thu tiền là thao tác chính; duyệt chi gom vào "Việc cần làm".
-import { $, esc, nf, money, today, monthStart, modal, closeModal, toast, printHTML } from '../util.js';
+import { $, esc, nf, money, today, monthStart, modal, closeModal, toast, printHTML, BANKS } from '../util.js';
 import { api } from '../store.js';
 import { auth, can } from '../auth.js';
 import { icon } from '../icons.js';
@@ -377,8 +377,8 @@ async function openFundForm(f) {
         <option value="closed" ${d.status === 'closed' ? 'selected' : ''}>Đã đóng (không nhận thêm)</option></select></label>` : ''}
       <div class="full fd-section">Tài khoản nhận tiền (riêng của quỹ)</div>
       <label class="fld">Số tài khoản<input class="field" id="fd-f-account" inputmode="numeric" value="${esc(d.bank_account || '')}"></label>
-      <label class="fld">Mã ngân hàng (BIN)<input class="field" id="fd-f-bin" inputmode="numeric" value="${esc(d.bank_bin || '')}" placeholder="MB: 970422"></label>
-      <label class="fld">Tên ngân hàng<input class="field" id="fd-f-bankname" value="${esc(d.bank_name || '')}"></label>
+      <label class="fld">Ngân hàng<select class="field" id="fd-f-bin"><option value="">Chọn ngân hàng</option>
+        ${BANKS.map(([bin, n]) => `<option value="${bin}" ${bin === d.bank_bin ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>
       <label class="fld">Chủ tài khoản<input class="field" id="fd-f-holder" value="${esc(d.account_holder || '')}"></label>
     </div>
     <div class="modal-actions"><button class="btn" id="fd-f-close">Hủy</button><button class="btn primary" id="fd-f-save">Lưu quỹ</button></div>`, { focus: '#fd-f-name' });
@@ -386,7 +386,7 @@ async function openFundForm(f) {
   $('#fd-f-save').onclick = async () => {
     const body = {
       name: $('#fd-f-name').value, kind: $('#fd-f-kind').value, bank_account: $('#fd-f-account').value,
-      bank_bin: $('#fd-f-bin').value, bank_name: $('#fd-f-bankname').value, account_holder: $('#fd-f-holder').value,
+      bank_bin: $('#fd-f-bin').value, bank_name: BANKS.find((b) => b[0] === $('#fd-f-bin').value)?.[1] || '', account_holder: $('#fd-f-holder').value,
       manager_user_id: $('#fd-f-manager').value || null,
     };
     if (isNew) body.code = $('#fd-f-code').value; else body.status = $('#fd-f-status').value;

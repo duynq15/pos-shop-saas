@@ -362,7 +362,7 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.locator('#fd-f-code').fill('ui-quy-chung');
     await quy.pg.locator('#fd-f-name').fill('Quỹ UI');
     await quy.pg.locator('#fd-f-account').fill('UIQUYACC');
-    await quy.pg.locator('#fd-f-bin').fill('970422');
+    await quy.pg.locator('#fd-f-bin').selectOption('970422');
     await quy.pg.locator('#fd-f-save').click(); await quy.pg.waitForTimeout(500);
     ok('Fund created and listed', (await quy.pg.locator('#fd-tabs').innerText()).includes('Quỹ UI'));
     await quy.pg.locator('#fd-in').click(); await quy.pg.waitForTimeout(300);

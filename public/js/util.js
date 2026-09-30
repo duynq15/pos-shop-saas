@@ -24,6 +24,15 @@ export const addDays = (d, n) => {
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
 };
 export const monthStart = () => today().slice(0, 8) + '01';
+// Ngân hàng Việt Nam: [mã BIN NAPAS, tên]. BIN cần để dựng VietQR (cùng số tài khoản có thể có ở nhiều ngân hàng).
+export const BANKS = [
+  ['970436', 'Vietcombank'], ['970415', 'VietinBank'], ['970418', 'BIDV'], ['970405', 'Agribank'], ['970422', 'MB Bank'], ['970407', 'Techcombank'],
+  ['970416', 'ACB'], ['970432', 'VPBank'], ['970423', 'TPBank'], ['970403', 'Sacombank'], ['970437', 'HDBank'], ['970441', 'VIB'], ['970443', 'SHB'],
+  ['970426', 'MSB'], ['970448', 'OCB'], ['970431', 'Eximbank'], ['970429', 'SCB'], ['970400', 'SaigonBank'], ['970409', 'BacABank'], ['970438', 'BaoVietBank'],
+  ['970449', 'LPBank'], ['970452', 'KienLongBank'], ['970454', 'VietCapitalBank'], ['970425', 'ABBank'], ['970419', 'NCB'], ['970428', 'NamABank'],
+  ['970427', 'VietABank'], ['970430', 'PGBank'], ['970412', 'PVcomBank'], ['970414', 'Oceanbank'], ['970433', 'VietBank'], ['970440', 'SeABank'],
+  ['546034', 'CAKE'], ['546035', 'Ubank'], ['963388', 'Timo'],
+];
 export const fmtDT = (s) => (s ? String(s).slice(0, 16) : '');
 
 export const debounce = (fn, ms = 250) => {
