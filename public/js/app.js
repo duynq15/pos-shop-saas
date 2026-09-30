@@ -12,6 +12,7 @@ import usersView from './views/users.js';
 import settings from './views/settings.js';
 import { platformViews } from './views/platform.js';
 import communityView from './views/community.js';
+import fundsView from './views/funds.js';
 import { icon } from './icons.js';
 document.querySelectorAll('[data-icon]').forEach((el) => { el.innerHTML = icon(el.dataset.icon); });
 
@@ -43,6 +44,7 @@ const VIEWS = [
   { mod: vietqr, perm: 'report.view', subOnly: true },
   { mod: promotions, perm: 'promo.manage', kinds: POS_KINDS },
   { mod: communityView, perm: 'community.report', kinds: ['community'] },
+  { mod: fundsView, perm: 'fund.view', kinds: ['community'] },
   { mod: usersView, perm: 'user.manage' },
   { mod: settings, perm: 'settings.edit' },
   // Menu quản trị nền tảng: hiện khi có một trong các quyền của menu (GĐ1.7)

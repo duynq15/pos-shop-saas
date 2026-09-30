@@ -355,6 +355,28 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('Community tenant has community menu', navs.includes('community'));
     await quy.pg.evaluate(() => window.showView('community')); await quy.pg.waitForTimeout(700);
     ok('Community summary renders', (await quy.pg.locator('#cm-stats .stat').count()) === 4);
+    // ---------- Sổ quỹ (GĐ2.8) ----------
+    ok('Funds menu present', navs.includes('funds'));
+    await quy.pg.evaluate(() => window.showView('funds')); await quy.pg.waitForTimeout(500);
+    await quy.pg.locator('#fd-new-fund').click(); await quy.pg.waitForTimeout(300);
+    await quy.pg.locator('#fd-f-code').fill('ui-quy-chung');
+    await quy.pg.locator('#fd-f-name').fill('Quỹ UI');
+    await quy.pg.locator('#fd-f-account').fill('UIQUYACC');
+    await quy.pg.locator('#fd-f-bin').fill('970422');
+    await quy.pg.locator('#fd-f-save').click(); await quy.pg.waitForTimeout(500);
+    ok('Fund created and listed', (await quy.pg.locator('#fd-tabs').innerText()).includes('Quỹ UI'));
+    await quy.pg.locator('#fd-in').click(); await quy.pg.waitForTimeout(300);
+    await quy.pg.locator('#fd-e-amount').fill('50000');
+    await quy.pg.locator('#fd-e-payer').fill('Bà Năm');
+    await quy.pg.locator('#fd-e-save').click(); await quy.pg.waitForTimeout(500);
+    const balTxt = await quy.pg.locator('#fd-body .stat.primary .v').first().innerText();
+    ok('Cash income updates balance', balTxt.includes('50.000'), balTxt);
+    ok('Ledger shows the entry', (await quy.pg.locator('#fd-ledger-body').innerText()).includes('Bà Năm'));
+    await quy.pg.locator('#fd-qr').click(); await quy.pg.waitForTimeout(600);
+    ok('Static fund QR renders', (await quy.pg.locator('#fd-qr-body img').count()) === 1);
+    await quy.pg.locator('#fd-qr-close').click(); await quy.pg.waitForTimeout(200);
+    await quy.pg.locator('#fd-rp-view').click(); await quy.pg.waitForTimeout(400);
+    ok('Period report renders', (await quy.pg.locator('#fd-rp-stats .stat').count()) === 6);
     await quy.c.close();
   } catch (e) { R.push('EXCEPTION: ' + e.message.split('\n')[0]); }
   R.push('--- JS errors: ' + (errors.length ? errors.join(' || ') : 'none'));

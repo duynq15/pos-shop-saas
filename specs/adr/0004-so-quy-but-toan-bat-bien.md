@@ -46,3 +46,11 @@ Tenant cộng đồng (`kind='community'`) cần quản lý nhiều quỹ: quỹ
 - `GET /funds/:id/report?from&to`: không có bảng hay cờ "chốt sổ" nào — mỗi lần gọi tính lại từ `fund_entries` (BR-12). Tồn đầu kỳ = tổng approved trước `from`; trong kỳ tách `income_bank` (nguồn `vietqr`+`manual`) và `income_cash` (`cash`); tồn cuối kỳ = đầu kỳ + thu ngân hàng + thu tiền mặt + điều chỉnh − chi.
 - `GET /funds/:id/report/export`: xuất Excel bằng `sendXlsx` có sẵn, không thêm code dựng file. Quyền `report.export` giữ nguyên phân quyền hiện tại (chủ tài khoản + thủ quỹ).
 - Không dựng PDF phía server: `lib/pdf.js` chỉ render được từ một URL công khai (Playwright), không hợp với báo cáo nội bộ cần đăng nhập. Màn hình thủ quỹ (GĐ2.8) dùng `window.print()` + CSS `@media print` — cách đã dùng cho hóa đơn và trang công khai — thay vì route PDF mới.
+
+## Bổ sung GĐ2.8 — màn hình thủ quỹ (2026-09-30)
+
+- Một view `public/js/views/funds.js` (`id: 'funds'`), đăng ký `kinds: ['community']`, theo đúng khuôn các view khác (`community.js`, `promotions.js`): chọn quỹ bằng tab, số dư + hành động, khoản chờ duyệt, sổ thu chi có lọc, báo cáo kỳ.
+- Bỏ trường "người phụ trách" khỏi form quỹ dù đã nêu trong đề xuất: `/api/users` cần quyền `user.manage` mà `approver` (người có `fund.manage`) lại không có, nên dropdown sẽ lỗi 403 với đúng vai trò cần dùng nó. Trường `manager_user_id` vẫn còn ở API, thêm UI khi có endpoint tra cứu người dùng phù hợp quyền.
+- Ảnh chứng từ: đọc file qua `FileReader` thành `data:` URL trước khi gửi, khớp thiết kế backend GĐ2.5 (không multipart).
+- "In" báo cáo dùng lại `printHTML()` có sẵn (đổ bảng vào `#print-area`), không thêm CSS in mới.
+- Test UI: tạo quỹ, thu tiền mặt cập nhật số dư, sổ thu chi hiển thị, QR tĩnh render ảnh, báo cáo kỳ hiện đủ 6 chỉ số. (Không test luồng duyệt trong UI vì chỉ có một tài khoản chủ đăng nhập — ERR-06 chặn tự duyệt; luồng duyệt đã có test API đầy đủ.)
