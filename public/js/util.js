@@ -33,6 +33,17 @@ export const BANKS = [
   ['970427', 'VietABank'], ['970430', 'PGBank'], ['970412', 'PVcomBank'], ['970414', 'Oceanbank'], ['970433', 'VietBank'], ['970440', 'SeABank'],
   ['546034', 'CAKE'], ['546035', 'Ubank'], ['963388', 'Timo'],
 ];
+// Ô chọn ngân hàng có tìm kiếm: <input list> + <datalist> gốc của trình duyệt, gõ "vietcom", "mb", "970422" đều lọc được.
+// ponytail: lọc chữ con theo tên + BIN; muốn tìm theo tên đầy đủ ("Quân đội") thì thêm cột bí danh vào BANKS.
+// name: tên đã lưu, dùng khi BIN cũ nhập tay bị sai định dạng.
+export const bankField = (id, bin, name) => `<input class="field" id="${id}" list="${id}-list" autocomplete="off" placeholder="Gõ để tìm, ví dụ: MB, Vietcom, BIDV"
+  value="${esc((BANKS.find((b) => b[0] === bin || b[1] === name) || [])[1] || '')}"><datalist id="${id}-list">${BANKS.map(([b, n]) => `<option value="${n}">${b}</option>`).join('')}</datalist>`;
+// Trả [bin, tên] theo nội dung ô; rỗng -> null; gõ không khớp -> undefined.
+export function bankOf(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (!v) return null;
+  return BANKS.find(([b, n]) => n.toLowerCase() === v || b === v);
+}
 export const fmtDT = (s) => (s ? String(s).slice(0, 16) : '');
 
 export const debounce = (fn, ms = 250) => {

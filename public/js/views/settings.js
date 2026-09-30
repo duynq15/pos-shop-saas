@@ -1,4 +1,4 @@
-import { $, $$, esc, toast, modal, closeModal, setCurrency, fmtDT, BANKS } from '../util.js';
+import { $, $$, esc, toast, modal, closeModal, setCurrency, fmtDT, bankField, bankOf } from '../util.js';
 import { api, state, loadSettings, loadPriceLists } from '../store.js';
 import { showLanInfo } from './lan.js';
 import { isProd } from '../auth.js';
@@ -31,7 +31,7 @@ export default {
 
   <div class="card">
     <h3>Tài khoản nhận chuyển khoản (VietQR)</h3>
-    <label class="fld">Ngân hàng<select class="field" data-s="bank_bin" id="bank-select"></select></label>
+    <label class="fld">Ngân hàng<span id="bank-slot"></span></label>
     <div class="form-grid">
       <label class="fld">Số tài khoản<input class="field" data-s="bank_account" placeholder="VD: 0123456789"></label>
       <label class="fld">Chủ tài khoản<input class="field" data-s="account_holder" placeholder="NGUYEN VAN A"></label>
@@ -132,7 +132,7 @@ export default {
 
   async show() {
     await Promise.all([loadSettings(), loadPriceLists()]);
-    $('#bank-select').innerHTML = BANKS.map(([bin, n]) => `<option value="${bin}">${n}</option>`).join('');
+    $('#bank-slot').innerHTML = bankField('bank-select', state.settings.bank_bin, state.settings.bank_name);
     $('#pl-select').innerHTML = state.priceLists.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
     for (const el of $$('[data-s]')) {
       if (el.type === 'checkbox') el.checked = state.settings[el.dataset.s] === '1';
@@ -178,7 +178,10 @@ async function onBackupClick(e) {
 async function save() {
   const body = {};
   for (const el of $$('[data-s]')) body[el.dataset.s] = el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value;
-  body.bank_name = BANKS.find((b) => b[0] === body.bank_bin)?.[1] || '';
+  const bank = bankOf($('#bank-select').value);
+  if (bank === undefined) { toast('Chọn ngân hàng trong danh sách gợi ý', true); $('#bank-select').focus(); return; }
+  body.bank_bin = bank ? bank[0] : '';
+  body.bank_name = bank ? bank[1] : '';
   try {
     state.settings = await api('/api/settings', { method: 'PUT', body });
     setCurrency(state.settings.currency || '₫');

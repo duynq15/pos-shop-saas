@@ -523,6 +523,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   // ---------- QR quỹ (GĐ2.3 — reuse generateQR, tài khoản quỹ luôn riêng theo BR-02) ----------
   const fund2 = await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-chung', name: 'Quỹ chung', bank_account: 'QUYCHUNG01' } });
   ok('fund without bank_bin blocks QR', (await req('cadm', '/funds/' + fund2.data.id + '/qr')).status === 400);
+  ok('bank BIN must be 6 digits', !(await cj('c-approver', '/funds/' + fund2.data.id, { method: 'PATCH', body: { bank_bin: 'MB: 970422' } })).ok);
   await cj('c-approver', '/funds/' + fund2.data.id, { method: 'PATCH', body: { bank_bin: '970422', bank_name: 'MB Bank' } });
   const staticQr = await cj('c-community_leader', '/funds/' + fund2.data.id + '/qr');
   ok('static fund QR has no amount', staticQr.ok && !!staticQr.data.qrDataUrl && !/54\d\d\d/.test(staticQr.data.qrCode.split('5303704')[1].split('5802VN')[0]) && staticQr.data.qrCode.includes('QUYCHUNG01'));

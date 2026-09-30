@@ -87,6 +87,7 @@ function fundInput(b, current = {}) {
   if (!v.name) bad('Tên quỹ không được để trống');
   if (!['general', 'donation'].includes(v.kind)) bad('Loại quỹ không hợp lệ');
   if (!['active', 'closed'].includes(v.status)) bad('Trạng thái quỹ không hợp lệ');
+  if (v.bank_bin && !/^\d{6}$/.test(v.bank_bin)) bad('Mã ngân hàng không hợp lệ, chọn ngân hàng trong danh sách');
   for (const d of [v.start_date, v.end_date]) if (d && !DAY.test(d)) bad('Ngày không hợp lệ');
   if (v.start_date && v.end_date && v.start_date > v.end_date) bad('Ngày kết thúc phải sau ngày bắt đầu');
   return v;
