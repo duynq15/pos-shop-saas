@@ -444,6 +444,18 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('BR-04: no delete route', (await req('cadm', '/fund-entries/' + out.data.id, { method: 'DELETE' })).status === 404);
   const list = await cj('c-community_leader', '/funds/' + fid + '/entries?type=out&status=approved');
   ok('entries filter', list.ok && list.data.entries.length === 1 && list.data.entries[0].id === out.data.id);
+
+  // ---------- Ảnh chứng từ (GĐ2.5) ----------
+  const tinyJpeg = 'data:image/jpeg;base64,' + Buffer.from('anh-chung-tu').toString('base64');
+  const outWithImg = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 5000, note: 'Mua giấy', attachment: tinyJpeg } });
+  ok('expense entry with attachment', outWithImg.ok && !!outWithImg.data.attachment);
+  const imgRes = await req('c-treasurer', '/fund-entries/' + outWithImg.data.id + '/attachment');
+  ok('attachment downloads', imgRes.status === 200 && (await imgRes.text()) === 'anh-chung-tu');
+  ok('bad attachment format rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, attachment: 'data:text/plain;base64,aGk=' } })).ok);
+  const bigB64 = 'data:image/jpeg;base64,' + Buffer.alloc(5.2 * 1024 * 1024, 'a').toString('base64');
+  ok('oversize attachment rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, attachment: bigB64 } })).ok);
+  ok('entry without attachment 404', (await req('c-treasurer', '/fund-entries/' + out.data.id + '/attachment')).status === 404);
+
   await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'closed' } });
   ok('closed fund takes no entries', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).ok);
   await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'active' } });

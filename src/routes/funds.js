@@ -3,6 +3,8 @@
 // Sổ quỹ cộng đồng (GĐ2.1–2.2 — FR-04, FR-12 → FR-15, BR-03, BR-04, BR-05, SEC-04, ERR-06).
 // Chỉ tenant kind=community dùng. Khoản thu ghi sổ ngay; khoản chi và điều chỉnh đi luồng
 // draft → submitted → approved / rejected, người duyệt khác người lập, tồn quỹ không được âm.
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const db = require('../db');
 const { control, audit } = require('../control');
@@ -34,6 +36,23 @@ const getFund = (id) => {
   return f ? { ...f, balance: balanceOf(f.id) } : null;
 };
 const getEntry = (id) => db.prepare('SELECT * FROM fund_entries WHERE id=?').get(Number(id));
+
+// Ảnh chứng từ (GĐ2.5 — dữ liệu base64 trong body JSON, không thêm thư viện multipart).
+const ATTACH_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const ATTACH_MAX = 5 * 1024 * 1024; // 5MB sau giải mã
+function saveAttachment(dataUrl, code) {
+  const m = /^data:(image\/[a-z]+);base64,([a-zA-Z0-9+/=]+)$/.exec(String(dataUrl || ''));
+  if (!m) bad('Ảnh chứng từ không hợp lệ');
+  const ext = ATTACH_MIME[m[1]];
+  if (!ext) bad('Chỉ nhận ảnh JPEG, PNG hoặc WebP');
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length > ATTACH_MAX) bad('Ảnh chứng từ tối đa 5MB');
+  const dir = path.join(db.DATA_DIR, 'attachments');
+  fs.mkdirSync(dir, { recursive: true });
+  const filename = code + '.' + ext;
+  fs.writeFileSync(path.join(dir, filename), buf);
+  return filename;
+}
 
 // Tài khoản nhận của quỹ phải riêng: không trùng tài khoản của bất kỳ tenant nào, không trùng quỹ khác (quyết định 0.3, BR-02).
 // ponytail: quét DB mọi tenant cộng đồng mỗi lần lưu; đủ cho vài chục thôn, nhiều hơn thì đưa tài khoản quỹ lên control.db.
@@ -176,16 +195,28 @@ router.post('/funds/:id/entries', requirePerm('fund.entry'), wrap((req, res) => 
   const status = type === 'in' ? 'approved' : 'draft';
   const bankRef = type === 'in' && source === 'manual' ? str(b.bank_ref, 80) || null : null;
   if (bankRef && db.prepare('SELECT 1 FROM fund_entries WHERE bank_ref=?').get(bankRef)) bad('Giao dịch ngân hàng này đã được ghi sổ');
+  const code = makeCode(db, PREFIX[type], 'fund_entries');
+  const attachment = b.attachment ? saveAttachment(b.attachment, code) : null;
   const now = status === 'approved' ? "datetime('now','localtime')" : 'NULL';
-  const r = db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,payer_name,anonymous,note,ref_entry_id,status,created_by,created_by_name,approved_by,approved_by_name,approved_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,${now})`).run(
-    makeCode(db, PREFIX[type], 'fund_entries'), f.id, type, amount, source, bankRef,
-    type === 'in' ? str(b.payer_name, 120) || null : null, type === 'in' && b.anonymous ? 1 : 0, note, ref ? ref.id : null, status,
+  const r = db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,payer_name,anonymous,note,ref_entry_id,attachment,status,created_by,created_by_name,approved_by,approved_by_name,approved_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,${now})`).run(
+    code, f.id, type, amount, source, bankRef,
+    type === 'in' ? str(b.payer_name, 120) || null : null, type === 'in' && b.anonymous ? 1 : 0, note, ref ? ref.id : null, attachment, status,
     req.user.id, req.user.full_name || req.user.username,
     status === 'approved' ? req.user.id : null, status === 'approved' ? req.user.full_name || req.user.username : null);
   const e = getEntry(r.lastInsertRowid);
   log(req, 'fund_entry.create', 'fund_entry', e.id, { code: e.code, type, amount });
   ok(res, e);
+}));
+
+router.get('/fund-entries/:id/attachment', requirePerm('fund.view'), wrap((req, res) => {
+  const e = getEntry(req.params.id);
+  if (!e || !e.attachment) return fail(res, 'Không có ảnh chứng từ', 404);
+  // dotfiles: 'allow' — DATA_DIR có thể nằm dưới thư mục chấm (giống backup.js); tên file
+  // luôn do server đặt theo mã chứng từ nên không có rủi ro path traversal.
+  res.sendFile(path.join(db.DATA_DIR, 'attachments', e.attachment), { dotfiles: 'allow' }, (err) => {
+    if (err && !res.headersSent) fail(res, 'Không tìm thấy ảnh', 404);
+  });
 }));
 
 function transition(req, res, from, fn) {

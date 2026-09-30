@@ -31,3 +31,12 @@ Tenant cộng đồng (`kind='community'`) cần quản lý nhiều quỹ: quỹ
 - Hai loại QR: `GET /funds/:id/qr` (tĩnh, không số tiền, để in dán) và `POST /funds/:id/qr` (động, có số tiền, chỉ `fund.entry`). Cả hai không tạo bút toán trước — bút toán chỉ sinh ra khi tiền thật về qua webhook, giữ nguyên tắc "khoản thu ghi sổ ngay khi có thật" của GĐ2.1.
 - `processFundPayment` dùng lại bảng `vietqr_transactions` sẵn có để chống xử lý trùng theo `transactionid`, không cần bảng riêng.
 - Thiếu (để sau): không lưu trước người ủng hộ/ghi chú khi tạo QR động; bút toán tự động từ VietQR sẽ trống các trường này, thủ quỹ bổ sung tay khi cần.
+
+## Bổ sung GĐ2.5 — ảnh chứng từ (2026-09-30)
+
+- `fund_entries` thêm cột `attachment` (tên file, không lưu đường dẫn).
+- Không thêm thư viện multipart. Ảnh gửi qua body JSON dạng `data:image/jpeg;base64,...`, dùng `express.json({limit:'8mb'})` sẵn có.
+- Chỉ nhận JPEG/PNG/WebP, tối đa 5MB sau giải mã.
+- File lưu tại `data/tenants/<mã>/attachments/<mã chứng từ>.<đuôi>`. Tên file luôn do server đặt theo mã chứng từ, không lấy từ input, nên không cần chặn path traversal.
+- Không có endpoint sửa ảnh sau khi tạo — khớp nguyên tắc bất biến của bút toán.
+- `res.sendFile` cần `dotfiles: 'allow'` vì `DATA_DIR` có thể nằm dưới thư mục chấm, cùng lý do đã gặp ở `backup.js`.

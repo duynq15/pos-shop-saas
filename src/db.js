@@ -316,6 +316,7 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     anonymous INTEGER NOT NULL DEFAULT 0,
     note TEXT,
     ref_entry_id INTEGER REFERENCES fund_entries(id),
+    attachment TEXT,
     status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','submitted','approved','rejected')),
     created_by INTEGER,
     created_by_name TEXT,
