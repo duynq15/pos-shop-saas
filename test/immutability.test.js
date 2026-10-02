@@ -28,6 +28,16 @@ db.runWith('default', (c) => {
   ok('recon: edit blocked', blocked(() => c.exec('UPDATE fund_reconciliations SET diff=5')));
   ok('recon: delete blocked', blocked(() => c.exec('DELETE FROM fund_reconciliations')));
 });
+// makeCode: số tiếp theo = số lớn nhất + 1, không phải đếm dòng (dãy có lỗ hổng không gây trùng mã)
+{
+  const { makeCode } = require('../src/lib/codes');
+  const d = new Date(2026, 9, 2);
+  db.runWith('default', (c) => {
+    for (const x of ['HD20261002-0001', 'HD20261002-0007']) c.prepare("INSERT INTO invoices(code,type,subtotal,total,payment_method,status) VALUES (?,'sale',0,0,'cash','paid')").run(x);
+    ok('makeCode: gap in sequence does not reuse a code', makeCode(c, 'HD', 'invoices', 'code', d) === 'HD20261002-0008');
+    ok('makeCode: other prefix starts at 0001', makeCode(c, 'NT', 'invoices', 'code', d) === 'NT20261002-0001');
+  });
+}
 control.prepare("INSERT INTO audit_logs(action) VALUES ('test.immut')").run();
 ok('audit: update blocked', blocked(() => control.exec("UPDATE audit_logs SET action='x' WHERE action='test.immut'")));
 ok('audit: delete blocked', blocked(() => control.exec("DELETE FROM audit_logs WHERE action='test.immut'")));
