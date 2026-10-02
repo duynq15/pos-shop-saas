@@ -5,9 +5,10 @@ const db = require('../db');
 const { ok, fail, wrap, bad, round, num, str, bool } = require('../lib/util');
 const { priceCart } = require('../lib/pricing');
 const { makeCode } = require('../lib/codes');
-const { nextPaymentRef } = require('../control');
+const { nextPaymentRef, audit } = require('../control');
 const { getSettings } = require('./admin');
 const { requirePerm } = require('../middleware');
+const { categoryFor } = require('./community');
 
 const router = express.Router();
 const settings = () => getSettings();
@@ -105,6 +106,12 @@ router.post('/invoices', requirePerm('pos.sell'), wrap((req, res) => {
   const items = Array.isArray(b.items) ? b.items : [];
   if (!items.length) bad('Hóa đơn chưa có sản phẩm');
 
+  // Hạng mục (GĐ4.3, AC-02-2): chỉ hạng mục đang dùng của đúng cộng đồng mình
+  let cat = null;
+  if (b.item_category_id) {
+    cat = categoryFor(req, b.item_category_id);
+    if (!cat) bad('Hạng mục không có trong danh mục của cộng đồng');
+  }
   const priced = priceCart(db, b);
   const s = settings();
   const method = type === 'return' ? PAID_SAFE(b.payment_method === 'mixed' ? 'cash' : b.payment_method) : (b.payment_method || 'cash');
@@ -117,11 +124,11 @@ router.post('/invoices', requirePerm('pos.sell'), wrap((req, res) => {
     const prefix = type === 'return' ? s.return_prefix || 'TH' : s.invoice_prefix || 'HD';
     const code = makeCode(db, prefix, 'invoices');
     const paymentRef = type === 'sale' ? nextPaymentRef(db) : null;
-    const r = db.prepare(`INSERT INTO invoices(code,type,parent_id,subtotal,item_discount,order_discount,discount,net_amount,vat_amount,total,payment_method,paid_amount,change_amount,price_list_id,promo_order_id,payment_ref,customer_name,customer_phone,note,status)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    const r = db.prepare(`INSERT INTO invoices(code,type,parent_id,subtotal,item_discount,order_discount,discount,net_amount,vat_amount,total,payment_method,paid_amount,change_amount,price_list_id,promo_order_id,payment_ref,customer_name,customer_phone,note,status,item_category_id,item_category_name)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       code, type, b.parent_id ? Number(b.parent_id) : null, priced.subtotal, priced.item_discount, priced.order_discount, priced.discount,
       priced.net_amount || 0, priced.vat_amount || 0, priced.total, method, paid.tendered, paid.change, priced.price_list_id, priced.promo_order_id, paymentRef,
-      str(b.customer_name, 120) || null, str(b.customer_phone, 40) || null, str(b.note, 500) || null, status);
+      str(b.customer_name, 120) || null, str(b.customer_phone, 40) || null, str(b.note, 500) || null, status, cat ? cat.id : null, cat ? cat.name : null);
     const invId = Number(r.lastInsertRowid);
 
     const insItem = db.prepare(`INSERT INTO invoice_items(invoice_id,product_id,name,barcode,unit_id,unit_name,conversion,qty,base_qty,price,cost_price,discount,promo_id,promo_name,line_total,note)
@@ -140,6 +147,20 @@ router.post('/invoices', requirePerm('pos.sell'), wrap((req, res) => {
     db.exec('COMMIT');
     ok(res, getInvoice(invId));
   } catch (e) { db.exec('ROLLBACK'); throw e; }
+}));
+
+// Gắn / đổi hạng mục của giao dịch bán (GĐ4.1, AC-02-1). Hạng mục là nhãn, không đổi tiền; mỗi lần đổi ghi nhật ký.
+router.post('/invoices/:id/category', requirePerm('pos.sell'), wrap((req, res) => {
+  const inv = db.prepare("SELECT id, code, type, status, item_category_id, item_category_name FROM invoices WHERE id=?").get(Number(req.params.id));
+  if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
+  if (inv.type !== 'sale' || inv.status === 'cancelled') bad('Chỉ gắn hạng mục cho giao dịch bán còn hiệu lực');
+  const cid = (req.body || {}).item_category_id;
+  const cat = cid ? categoryFor(req, cid) : null;
+  if (cid && !cat) bad('Hạng mục không có trong danh mục của cộng đồng');
+  db.prepare('UPDATE invoices SET item_category_id=?, item_category_name=? WHERE id=?').run(cat ? cat.id : null, cat ? cat.name : null, inv.id);
+  audit({ tenantId: req.user.tenant_id, userId: req.user.id, username: req.user.username, action: 'invoice.category', entity: 'invoice', entityId: inv.id,
+    detail: JSON.stringify({ code: inv.code, from: inv.item_category_name, to: cat ? cat.name : null }), ip: req.ip });
+  ok(res, getInvoice(inv.id));
 }));
 
 function getInvoice(id) {

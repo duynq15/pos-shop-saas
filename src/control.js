@@ -41,6 +41,20 @@ CREATE TABLE IF NOT EXISTS communities (
   created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
+-- Danh mục hạng mục hàng dùng chung của cộng đồng (GĐ4.3 — FR-10, BR-11). Trưởng thôn quản lý;
+-- người bán chỉ chọn. Không xóa hạng mục đã dùng, chỉ tạm ẩn (status='hidden').
+CREATE TABLE IF NOT EXISTS community_categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  community_id INTEGER NOT NULL REFERENCES communities(id),
+  name TEXT NOT NULL,
+  -- Khóa so trùng: chữ thường Unicode (NOCASE của SQLite chỉ xử lý ASCII, "CỦ" ≠ "củ")
+  name_key TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','hidden')),
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_comm_cat_key ON community_categories(community_id, name_key);
+
 -- Loại cộng đồng cấu hình được (GĐ1.6, NFR-05, US-13). Nhãn vai trò hiển thị theo loại
 CREATE TABLE IF NOT EXISTS community_types (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

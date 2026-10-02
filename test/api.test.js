@@ -848,6 +848,42 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const logs = await rootJ('/platform/staff');
   ok('staff list hides password', logs.ok && !JSON.stringify(logs.data).includes('password_hash'));
 
+  // ---------- GĐ4.3: hạng mục hàng dùng chung (FR-10, FR-11, BR-11, AC-02-1, AC-02-2) ----------
+  {
+    // Thôn A: người duyệt (community.categories) quản lý; người bán A (seller-a) chỉ chọn
+    const mk = await cj('c-approver', '/community/categories', { method: 'POST', body: { name: 'Rau củ' } });
+    ok('BR-11: approver creates category', mk.ok && mk.data.some((c) => c.name === 'Rau củ'));
+    await cj('c-approver', '/community/categories', { method: 'POST', body: { name: 'Thịt cá' } });
+    ok('BR-11: duplicate name rejected (case-insensitive)', !(await cj('c-approver', '/community/categories', { method: 'POST', body: { name: 'rau CỦ' } })).ok);
+    ok('BR-11: seller cannot create category', (await req('sel', '/community/categories', { method: 'POST', body: { name: 'Tự thêm' } })).status === 403);
+    ok('BR-11: seller owner cannot rename category', (await req('sel', '/community/categories/' + mk.data[0].id, { method: 'PATCH', body: { name: 'Đổi' } })).status === 403);
+    ok('BR-11: treasurer cannot create category', (await req('c-treasurer', '/community/categories', { method: 'POST', body: { name: 'X' } })).status === 403);
+    const selCats = (await (await req('sel', '/community/categories')).json()).data;
+    const rau = selCats.find((c) => c.name === 'Rau củ'); const thit = selCats.find((c) => c.name === 'Thịt cá');
+    ok('seller sees own community categories', !!rau && !!thit);
+    // Thôn B có danh mục riêng; người bán A không dùng được
+    await rootJ('/platform/tenants', { method: 'POST', body: { code: 'quy-b', name: 'Quỹ B', owner_username: 'quybown', owner_password: '123456', kind: 'community', community_id: comB.data.id } });
+    await req('qb', '/auth/login', { method: 'POST', body: { username: 'quybown', password: '123456' } });
+    const catB = (await (await req('qb', '/community/categories', { method: 'POST', body: { name: 'Hàng thôn B' } })).json()).data.find((c) => c.name === 'Hàng thôn B');
+    ok('BR-11: seller B does not see A categories', !(await (await req('selb', '/community/categories')).json()).data.some((c) => c.name === 'Rau củ'));
+    const crossInv = await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'Rau', price: 3000, qty: 1 }], payment_method: 'cash', paid_amount: 3000, item_category_id: catB.id } })).json();
+    ok('AC-02-2: seller cannot use another community category', !crossInv.ok);
+    const withCat = await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'Rau', price: 3000, qty: 1 }], payment_method: 'cash', paid_amount: 3000, item_category_id: rau.id } })).json();
+    ok('AC-02-1: sale stored with category id + name', withCat.ok && withCat.data.item_category_id === rau.id && withCat.data.item_category_name === 'Rau củ');
+    const re = await (await req('sel', '/invoices/' + withCat.data.id + '/category', { method: 'POST', body: { item_category_id: thit.id } })).json();
+    ok('AC-02-1: seller can change category later', re.ok && re.data.item_category_name === 'Thịt cá');
+    ok('AC-02-2: change to foreign category rejected', !(await (await req('sel', '/invoices/' + withCat.data.id + '/category', { method: 'POST', body: { item_category_id: catB.id } })).json()).ok);
+    // Đổi tên hạng mục: hóa đơn cũ giữ tên lúc bán
+    await cj('c-approver', '/community/categories/' + thit.id, { method: 'PATCH', body: { name: 'Thịt, cá tươi' } });
+    ok('rename keeps old invoice label', (await (await req('sel', '/invoices/' + withCat.data.id)).json()).data.item_category_name === 'Thịt cá');
+    // Ẩn: không chọn được nữa, nhưng không xóa
+    await cj('c-approver', '/community/categories/' + rau.id, { method: 'PATCH', body: { status: 'hidden' } });
+    ok('hidden category not offered to sellers', !(await (await req('sel', '/community/categories')).json()).data.some((c) => c.id === rau.id));
+    ok('hidden category cannot be used', !(await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'R', price: 1000, qty: 1 }], payment_method: 'cash', paid_amount: 1000, item_category_id: rau.id } })).json()).ok);
+    ok('approver still sees hidden with all=1', (await cj('c-approver', '/community/categories?all=1')).data.some((c) => c.id === rau.id && c.status === 'hidden'));
+    ok('shop outside any community has no categories', (await api('/community/categories')).data.length === 0);
+  }
+
   for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg', '/report.html', '/report.css', '/js/report.js']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);
   console.log(R.join('\n'));
   const pass = R.filter((x) => x.startsWith('PASS')).length;

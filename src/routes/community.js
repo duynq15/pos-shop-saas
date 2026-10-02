@@ -4,9 +4,9 @@
 // Chỉ trả số tổng; không có trường nào theo từng người bán.
 const express = require('express');
 const db = require('../db');
-const { control } = require('../control');
-const { ok, fail, wrap } = require('../lib/util');
-const { requirePerm } = require('../middleware');
+const { control, audit } = require('../control');
+const { ok, fail, wrap, bad, str, int } = require('../lib/util');
+const { requirePerm, can } = require('../middleware');
 
 const router = express.Router();
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -50,5 +50,60 @@ router.get('/community/summary', requirePerm('community.report'), wrap((req, res
   ok(res, { community_id: req.tenant.community_id, from, to, ...sum });
 }));
 
+/* ===================== Hạng mục hàng dùng chung (GĐ4.3 — FR-10, BR-11, AC-02-2) ===================== */
+// Danh mục thuộc cộng đồng (control.db). Mọi tenant trong cộng đồng đọc được; chỉ community.categories sửa.
+const catLog = (req, action, id, detail) => audit({ tenantId: req.user.tenant_id, userId: req.user.id, username: req.user.username,
+  action, entity: 'community_category', entityId: id, detail: JSON.stringify(detail), ip: req.ip });
+const nameKey = (v) => String(v).normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+const myCommunity = (req) => (req.tenant && req.tenant.community_id) || null;
+const categoriesOf = (communityId, all) => control.prepare(`SELECT id, name, sort_order, status FROM community_categories
+  WHERE community_id=?${all ? '' : " AND status='active'"} ORDER BY status, sort_order, name`).all(communityId);
+// Hạng mục hợp lệ cho tenant hiện tại: thuộc đúng cộng đồng và đang dùng. Dùng khi người bán gắn hạng mục.
+function categoryFor(req, id) {
+  const cid = myCommunity(req);
+  if (!cid || !id) return null;
+  return control.prepare("SELECT id, name FROM community_categories WHERE id=? AND community_id=? AND status='active'").get(Number(id), cid) || null;
+}
+
+router.get('/community/categories', wrap((req, res) => {
+  const cid = myCommunity(req);
+  if (!cid) return ok(res, []);
+  ok(res, categoriesOf(cid, req.tenant.kind === 'community' && can(req, 'community.categories') && req.query.all === '1'));
+}));
+
+// Sửa danh mục: chỉ tenant cộng đồng (trưởng thôn / người được ủy quyền). Chủ tenant người bán có quyền '*'
+// nên phải chặn theo loại tenant, không chỉ theo quyền (BR-11: người bán chỉ chọn).
+const manageCategories = (req, res, next) => (req.tenant && req.tenant.kind === 'community'
+  ? requirePerm('community.categories')(req, res, next) : fail(res, 'Chỉ trưởng thôn quản lý danh mục hạng mục', 403));
+
+router.post('/community/categories', manageCategories, wrap((req, res) => {
+  const cid = myCommunity(req);
+  if (!cid) return fail(res, 'Chỉ tài khoản thuộc cộng đồng mới quản lý hạng mục', 403);
+  const name = str((req.body || {}).name, 60);
+  if (!name) bad('Nhập tên hạng mục');
+  if (control.prepare('SELECT 1 FROM community_categories WHERE community_id=? AND name_key=?').get(cid, nameKey(name))) bad('Hạng mục đã có');
+  const max = control.prepare('SELECT COALESCE(MAX(sort_order),0) m FROM community_categories WHERE community_id=?').get(cid).m;
+  const r = control.prepare('INSERT INTO community_categories(community_id,name,name_key,sort_order) VALUES (?,?,?,?)').run(cid, name, nameKey(name), max + 1);
+  catLog(req, 'category.create', r.lastInsertRowid, { name });
+  ok(res, categoriesOf(cid, true));
+}));
+
+router.patch('/community/categories/:id', manageCategories, wrap((req, res) => {
+  const cid = myCommunity(req);
+  const cur = cid && control.prepare('SELECT * FROM community_categories WHERE id=? AND community_id=?').get(Number(req.params.id), cid);
+  if (!cur) return fail(res, 'Không tìm thấy hạng mục', 404);
+  const b = req.body || {};
+  const name = b.name !== undefined ? str(b.name, 60) : cur.name;
+  if (!name) bad('Nhập tên hạng mục');
+  if (control.prepare('SELECT 1 FROM community_categories WHERE community_id=? AND name_key=? AND id<>?').get(cid, nameKey(name), cur.id)) bad('Hạng mục đã có');
+  const status = b.status !== undefined ? b.status : cur.status;
+  if (!['active', 'hidden'].includes(status)) bad('Trạng thái không hợp lệ');
+  const sort = b.sort_order !== undefined ? int(b.sort_order) : cur.sort_order;
+  control.prepare('UPDATE community_categories SET name=?, name_key=?, status=?, sort_order=? WHERE id=?').run(name, nameKey(name), status, sort, cur.id);
+  catLog(req, 'category.update', cur.id, { from: { name: cur.name, status: cur.status }, to: { name, status } });
+  ok(res, categoriesOf(cid, true));
+}));
+
 module.exports = router;
 module.exports.communityScope = communityScope;
+module.exports.categoryFor = categoryFor;
