@@ -118,9 +118,12 @@ function processPayment(code, p) {
       ins.run(txnId, null, bank, amount, content, orderId, transType, 0, 'Không tìm thấy hóa đơn', raw);
       return { ref: '', message: 'Không tìm thấy hóa đơn theo mã đối soát', paid: false };
     }
-    if (inv.status === 'paid') {
-      ins.run(txnId, inv.id, bank, amount, content, orderId, transType, 1, 'Hóa đơn đã thanh toán trước đó', raw);
-      return { ref: orderId, message: 'Hóa đơn đã thanh toán', paid: true };
+    // Chỉ hóa đơn đang chờ chuyển khoản mới được xác nhận. Hóa đơn đã thanh toán (khách chuyển trùng) hay đã hủy
+    // (hàng đã trả về kho) thì giữ nguyên, tiền vào hàng chờ phân loại để chủ cửa hàng xử lý (hoàn tiền / thu khác).
+    if (inv.status !== 'pending') {
+      const why = inv.status === 'paid' ? 'Hóa đơn đã thanh toán trước đó, tiền về thêm lần nữa' : 'Hóa đơn đã hủy, tiền về sau khi hủy';
+      ins.run(txnId, inv.id, bank, amount, content, orderId, transType, 0, why, raw);
+      return { ref: orderId, message: why, paid: inv.status === 'paid' };
     }
     if (amount !== inv.total) {
       ins.run(txnId, inv.id, bank, amount, content, orderId, transType, 0, `Số tiền không khớp (nhận ${amount}, cần ${inv.total})`, raw);

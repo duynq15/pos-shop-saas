@@ -304,6 +304,21 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const noIdInv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'NoId', price: 4000, qty: 1 }], payment_method: 'transfer' } })).json();
   await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 4000, content: noIdInv.data.payment_ref, orderId: noIdInv.data.payment_ref, transType: 'C' }) });
   ok('ERR-02: webhook without transactionid does not mark invoice paid', (await (await req('iso', '/invoices/' + noIdInv.data.id + '/payment-status')).json()).data.paid === false);
+  // Tiền về cho hóa đơn đã hủy / đã thanh toán: không đổi hóa đơn, không tính doanh thu, vào hàng chờ
+  {
+    const cInv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Hủy', price: 2500, qty: 1 }], payment_method: 'transfer' } })).json();
+    await req('iso', '/invoices/' + cInv.data.id + '/cancel', { method: 'POST', body: { reason: 'khách đổi ý' } });
+    await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 2500, content: cInv.data.payment_ref, orderId: cInv.data.payment_ref, transactionid: 'LATE-CANCEL', transType: 'C' }) });
+    ok('payment after cancel does not revive the invoice', (await (await req('iso', '/invoices/' + cInv.data.id)).json()).data.status === 'cancelled');
+    await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 3000, content: dupInv.data.payment_ref, orderId: dupInv.data.payment_ref, transactionid: 'PAID-TWICE', transType: 'C' }) });
+    const q0 = (await (await req('iso', '/vietqr/unclassified')).json()).data.items.map((x) => x.transactionid);
+    ok('late or second payment goes to the queue, not sales', q0.includes('LATE-CANCEL') && q0.includes('PAID-TWICE'));
+    for (const id of ['LATE-CANCEL', 'PAID-TWICE']) {
+      const row = (await (await req('iso', '/vietqr/unclassified')).json()).data.items.find((x) => x.transactionid === id);
+      await req('iso', '/vietqr/transactions/' + row.id + '/classify', { method: 'POST', body: { category: 'other', reason: 'Sẽ hoàn tiền cho khách' } });
+    }
+  }
+
   // ---------- GĐ3.2: hàng chờ phân loại (ERR-03) ----------
   const qInv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Chờ khớp', price: 8800, qty: 1 }], payment_method: 'transfer' } })).json();
   await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 8800, content: 'chuyen tien quen ghi ma', transType: 'C', transactionid: 'Q-1' }) });
