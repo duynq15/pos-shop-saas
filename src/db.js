@@ -396,6 +396,15 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     WHERE dup_of IS NULL AND transactionid IS NOT NULL AND transactionid <> ''
       AND id > (SELECT MIN(v2.id) FROM vietqr_transactions v2 WHERE v2.transactionid = vietqr_transactions.transactionid)`);
   conn.exec("CREATE UNIQUE INDEX IF NOT EXISTS uq_vqr_txn ON vietqr_transactions(transactionid) WHERE dup_of IS NULL AND transactionid IS NOT NULL AND transactionid <> ''");
+  // GĐ3.3 (FR-09, ERR-07): giao dịch ngân hàng đã nhận không xóa, không đổi số tiền / mã / tài khoản / thời điểm.
+  // Chỉ được đổi các cột phân loại và đối soát (invoice_id, matched, note, category, dup_of).
+  conn.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_vqr_no_delete BEFORE DELETE ON vietqr_transactions
+      BEGIN SELECT RAISE(ABORT, 'Không được xóa giao dịch ngân hàng (BR-04)'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_vqr_locked BEFORE UPDATE ON vietqr_transactions
+      WHEN NEW.transactionid IS NOT OLD.transactionid OR NEW.amount IS NOT OLD.amount OR NEW.bank_account IS NOT OLD.bank_account
+        OR NEW.trans_type IS NOT OLD.trans_type OR NEW.content IS NOT OLD.content OR NEW.raw_json IS NOT OLD.raw_json OR NEW.created_at IS NOT OLD.created_at
+      BEGIN SELECT RAISE(ABORT, 'Giao dịch ngân hàng không sửa được, chỉ phân loại (BR-04)'); END;`);
   ensureColumn('invoice_items', 'unit_id', 'INTEGER');
   ensureColumn('invoice_items', 'unit_name', 'TEXT');
   ensureColumnWithDefault('invoice_items', 'conversion', 'REAL DEFAULT 1', '1');

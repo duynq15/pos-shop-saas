@@ -125,6 +125,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_logs(tenant_id, id);
+-- GĐ3.3 (SEC-05): nhật ký thao tác không sửa, không xóa được
+CREATE TRIGGER IF NOT EXISTS trg_audit_no_update BEFORE UPDATE ON audit_logs
+  BEGIN SELECT RAISE(ABORT, 'Nhật ký không sửa được (SEC-05)'); END;
+CREATE TRIGGER IF NOT EXISTS trg_audit_no_delete BEFORE DELETE ON audit_logs
+  BEGIN SELECT RAISE(ABORT, 'Nhật ký không xóa được (SEC-05)'); END;
 
 CREATE TABLE IF NOT EXISTS platform_settings (
   key TEXT PRIMARY KEY,
