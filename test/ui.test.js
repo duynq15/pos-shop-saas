@@ -314,6 +314,8 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('Root sees community card', await root.pg.locator('#pc-card').isVisible());
     const cm = await rapi('/api/platform/communities', { code: 'ui-thon', name: 'Thôn UI', type: 'village', area: 'Xã UI' });
     const qt = await rapi('/api/platform/tenants', { code: 'ui-quy', name: 'Quỹ thôn UI', kind: 'community', community_id: cm.data.id, owner_username: 'uiquy', owner_password: 'uiquy123' });
+    // GĐ4: một người bán trong thôn UI, có tài khoản riêng để tạo QR
+    await rapi('/api/platform/tenants', { code: 'ui-seller', name: 'Người bán UI', kind: 'seller', community_id: cm.data.id, owner_username: 'uiseller', owner_password: 'uiseller1' });
     await root.pg.reload(); await root.pg.waitForSelector('#pf-body tr[data-id]'); await root.pg.waitForTimeout(500);
     const pfText = await root.pg.locator('#pf-body').innerText();
     await go(root.pg, 'platform-communities', '#pc-body tr[data-id]');
@@ -399,7 +401,29 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.setViewportSize({ width: 400, height: 820 }); await quy.pg.waitForTimeout(300);
     ok('Funds: no horizontal overflow 400px', !(await quy.pg.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
     ok('Funds: mobile action bar visible', await quy.pg.locator('.fd-bar').isVisible());
+    // Trưởng thôn (chủ tenant quỹ) thêm hạng mục cho người bán chọn
+    await quy.pg.evaluate(() => window.showView('community')); await quy.pg.waitForTimeout(600);
+    for (const n of ['Rau củ', 'Đồ uống']) { await quy.pg.fill('#cm-cat-name', n); await quy.pg.click('#cm-cat-form button[type=submit]'); await quy.pg.waitForTimeout(400); }
+    ok('Community categories card adds items', (await quy.pg.locator('#cm-cat-body tr').count()) === 2);
     await quy.c.close();
+
+    // ================= GĐ4: Nhận tiền nhanh (người bán, điện thoại) =================
+    const sl = await loginAs('uiseller', 'uiseller1', '.view.active');
+    await sl.pg.evaluate(() => fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bank_account: 'UISELLER01', bank_bin: '970422', bank_name: 'MB Bank', vqr_enabled: '1', vqr_env: 'mock' }) }));
+    await sl.pg.setViewportSize({ width: 390, height: 844 });
+    await sl.pg.reload(); await sl.pg.waitForTimeout(1200);
+    ok('Seller opens on Nhận tiền', await sl.pg.evaluate(() => document.querySelector('.view.active')?.id) === 'view-quickpay');
+    ok('Seller sees community categories', (await sl.pg.locator('#qp-cats .qp-cat').allInnerTexts()).includes('Rau củ'));
+    await sl.pg.click('#qp-quick [data-q="50000"]');
+    await sl.pg.locator('#qp-cats .qp-cat', { hasText: 'Rau củ' }).click();
+    await sl.pg.waitForSelector('#qp-pay img', { timeout: 5000 });
+    ok('Two taps to a QR with the amount', (await sl.pg.locator('.qp-pay-amt').innerText()).includes('50.000'));
+    await sl.pg.click('#qp-sim'); await sl.pg.waitForTimeout(4000);
+    ok('Paid state shown after webhook', (await sl.pg.locator('#qp-pay.ok').count()) === 1);
+    await sl.pg.click('#qp-done'); await sl.pg.waitForTimeout(600);
+    ok('Today list shows the sale with its category', (await sl.pg.locator('#qp-list').innerText()).includes('Rau củ'));
+    ok('Quick pay: no horizontal overflow 390px', !(await sl.pg.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
+    await sl.c.close();
   } catch (e) { R.push('EXCEPTION: ' + e.message.split('\n')[0]); }
   R.push('--- JS errors: ' + (errors.length ? errors.join(' || ') : 'none'));
   console.log(R.join('\n'));

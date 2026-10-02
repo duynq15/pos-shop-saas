@@ -505,6 +505,39 @@ function seedFunds(code, c) {
   conn.exec('COMMIT');
 }
 
+/* ===================== Hạng mục dùng chung + giao dịch nhận tiền nhanh (GĐ4) ===================== */
+const CATS = ['Rau củ', 'Thịt cá', 'Tạp hóa', 'Đồ uống', 'Ăn uống', 'Dịch vụ'];
+function seedCategories(communityId, c) {
+  const key = (v) => String(v).normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+  const ins = control.prepare('INSERT OR IGNORE INTO community_categories(community_id,name,name_key,sort_order) VALUES (?,?,?,?)');
+  CATS.forEach((n, i) => ins.run(communityId, n, key(n), i + 1));
+  const cats = control.prepare("SELECT id, name FROM community_categories WHERE community_id=? AND status='active' ORDER BY sort_order").all(communityId);
+  // Mỗi người bán của cộng đồng: ~40 lần nhận tiền nhanh trong 20 ngày, ~15% chưa gắn hạng mục (ERR-04)
+  for (const code of c.sellers) {
+    const conn = db.getTenantDb(code);
+    if (conn.prepare("SELECT COUNT(*) n FROM invoices WHERE item_category_id IS NOT NULL").get().n) continue;
+    const rnd = mulberry32(hash('qp-' + code));
+    const insInv = conn.prepare(`INSERT INTO invoices(code,type,subtotal,discount,net_amount,total,payment_method,paid_amount,change_amount,status,item_category_id,item_category_name,created_at)
+      VALUES (?,'sale',?,0,?,?,'transfer',?,0,'paid',?,?,?)`);
+    const insItem = conn.prepare('INSERT INTO invoice_items(invoice_id,name,qty,base_qty,price,line_total) VALUES (?,?,1,1,?,?)');
+    const insPay = conn.prepare("INSERT INTO invoice_payments(invoice_id,method,amount,note) VALUES (?,'transfer',?,'Nhận tiền nhanh')");
+    const seqs = {};
+    conn.exec('BEGIN');
+    for (let i = 0; i < 40; i++) {
+      const d = new Date(Date.now() - Math.floor(rnd() * 20) * 86400000); d.setHours(6 + Math.floor(rnd() * 13), Math.floor(rnd() * 60), 0, 0);
+      const ymd = fmtDate(d).slice(0, 10).replace(/-/g, '');
+      if (seqs[ymd] === undefined) seqs[ymd] = conn.prepare('SELECT COUNT(*) n FROM invoices WHERE code LIKE ?').get('NT' + ymd + '%').n;
+      const invCode = `NT${ymd}-${pad(++seqs[ymd], 4)}`;
+      const amount = (Math.round(rnd() * 39) + 1) * 5000;
+      const cat = rnd() < 0.15 ? null : cats[Math.floor(rnd() * cats.length)];
+      const id = Number(insInv.run(invCode, amount, amount, amount, amount, cat ? cat.id : null, cat ? cat.name : null, fmtDate(d)).lastInsertRowid);
+      insItem.run(id, cat ? cat.name : 'Bán hàng', amount, amount);
+      insPay.run(id, amount);
+    }
+    conn.exec('COMMIT');
+  }
+}
+
 /* ===================== Cộng đồng và nhân sự nền tảng ===================== */
 function seedCommunities() {
   for (const c of COMMUNITIES) {
@@ -533,6 +566,7 @@ function seedCommunities() {
     addUser(t.id, `${c.code}-duyet`, `${lb.approver_label || 'Người duyệt'} ${c.name}`, 'approver');
     addUser(t.id, `${c.code}-truong`, `${lb.leader_label || 'Trưởng'} ${c.name}`, 'community_leader');
     seedFunds(fundCode, c);
+    seedCategories(row.id, c);
   }
   for (const [u, name, role] of [['vanhanh', 'Nhân viên vận hành', 'platform_ops'], ['hotro', 'Nhân viên hỗ trợ', 'platform_support'],
     ['kythuat', 'Kỹ sư VietQR', 'platform_tech'], ['ql-thon-a', 'Cán bộ phụ trách Thôn An Phú', 'platform_community']]) addUser(null, u, name, role);
