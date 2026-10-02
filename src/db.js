@@ -392,6 +392,13 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   // GĐ3.4 (ERR-02): mỗi mã giao dịch ngân hàng chỉ ghi một lần. Dòng trùng có sẵn ở DB cũ không xóa (BR-04):
   // giữ dòng đầu, các dòng sau đánh dấu dup_of = id dòng đầu và không tính vào báo cáo.
   ensureColumn('vietqr_transactions', 'dup_of', 'INTEGER');
+  // GĐ3.1 (FR-08, BR-01): mỗi giao dịch thuộc đúng một loại. Suy ra lúc ghi; không chắc thì 'unclassified' (ERR-03).
+  ensureColumn('vietqr_transactions', 'category', "TEXT DEFAULT 'unclassified' CHECK (category IN ('sale','fund','donation','other','refund','unclassified'))");
+  ensureColumn('vietqr_transactions', 'classified_by', 'TEXT');
+  ensureColumn('vietqr_transactions', 'classified_at', 'TEXT');
+  // Dữ liệu cũ: khớp hóa đơn -> sale, tiền ra -> refund, còn lại chờ phân loại
+  conn.exec(`UPDATE vietqr_transactions SET category = CASE WHEN trans_type='D' THEN 'refund' WHEN matched=1 AND invoice_id IS NOT NULL THEN 'sale' ELSE 'unclassified' END
+    WHERE category IS NULL`);
   conn.exec(`UPDATE vietqr_transactions SET dup_of = (SELECT MIN(v2.id) FROM vietqr_transactions v2 WHERE v2.transactionid = vietqr_transactions.transactionid)
     WHERE dup_of IS NULL AND transactionid IS NOT NULL AND transactionid <> ''
       AND id > (SELECT MIN(v2.id) FROM vietqr_transactions v2 WHERE v2.transactionid = vietqr_transactions.transactionid)`);
@@ -405,6 +412,10 @@ function ensureSchema(conn, { withDemo = false } = {}) {
       WHEN NEW.transactionid IS NOT OLD.transactionid OR NEW.amount IS NOT OLD.amount OR NEW.bank_account IS NOT OLD.bank_account
         OR NEW.trans_type IS NOT OLD.trans_type OR NEW.content IS NOT OLD.content OR NEW.raw_json IS NOT OLD.raw_json OR NEW.created_at IS NOT OLD.created_at
       BEGIN SELECT RAISE(ABORT, 'Giao dịch ngân hàng không sửa được, chỉ phân loại (BR-04)'); END;`);
+  // Đã phân loại xong thì không phân loại lại (sửa sai qua hủy hóa đơn / bút toán điều chỉnh)
+  conn.exec(`CREATE TRIGGER IF NOT EXISTS trg_vqr_classified BEFORE UPDATE OF category ON vietqr_transactions
+    WHEN OLD.category IS NOT NULL AND OLD.category <> 'unclassified' AND NEW.category IS NOT OLD.category
+    BEGIN SELECT RAISE(ABORT, 'Giao dịch đã phân loại, không đổi được (BR-04)'); END;`);
   ensureColumn('invoice_items', 'unit_id', 'INTEGER');
   ensureColumn('invoice_items', 'unit_name', 'TEXT');
   ensureColumnWithDefault('invoice_items', 'conversion', 'REAL DEFAULT 1', '1');

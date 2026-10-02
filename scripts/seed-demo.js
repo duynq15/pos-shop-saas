@@ -412,9 +412,10 @@ function seedExtras(conn, pool, catIds, rnd, between, now) {
 
   // Giao dịch VietQR 60 ngày gần nhất: khớp hóa đơn chuyển khoản, vài giao dịch không khớp và hoàn tiền
   const account = conn.prepare("SELECT value FROM settings WHERE key='bank_account'").get().value;
-  const insTx = conn.prepare('INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)');
+  const insTx = conn.prepare("INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,created_at,category) VALUES (?,?,?,?,?,?,?,?,?,?,CASE WHEN ?='D' THEN 'refund' WHEN ?=1 THEN 'sale' ELSE 'unclassified' END)");
   let txSeq = hash(account) % 1e6, txns = 0;
-  const tx = (...a) => { insTx.run('FT' + pad(txSeq++, 10), ...a); txns++; };
+  // a = [invoice_id, account, amount, content, order_id, trans_type, matched, note, created_at]
+  const tx = (...a) => { insTx.run('FT' + pad(txSeq++, 10), ...a, a[5], a[6]); txns++; };
   for (const inv of conn.prepare("SELECT id,total,payment_ref,created_at FROM invoices WHERE type='sale' AND status='paid' AND payment_method='transfer' AND created_at>=?").all(fmtDate(daysAgo(60)))) {
     tx(inv.id, account, inv.total, `${inv.payment_ref} thanh toan hoa don`, inv.payment_ref, 'C', 1, null, inv.created_at);
     if (rnd() < 0.04) tx(null, account, Math.round(inv.total * between(0.2, 1) / 1000) * 1000, 'CK chuyen tien', null, 'C', 0, 'Không tìm thấy hóa đơn', inv.created_at);

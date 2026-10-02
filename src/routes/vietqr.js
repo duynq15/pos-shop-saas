@@ -106,8 +106,11 @@ function processPayment(code, p) {
       if (m) inv = db.prepare('SELECT * FROM invoices WHERE payment_ref=? AND type=?').get(m[0], 'sale');
     }
     // ON CONFLICT DO NOTHING + index duy nhất: hai lần gửi đồng thời cùng mã chỉ ghi được một dòng
-    const ins = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json)
-      VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
+    const insRaw = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json,category)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
+    // Loại suy từ kết quả khớp: chỉ 'sale' khi đã gắn hóa đơn và khớp; tiền ra là 'refund'; còn lại chờ phân loại
+    const ins = { run: (id, invId, bk, amt, ct, oid, tt, matched, note, rj) =>
+      insRaw.run(id, invId, bk, amt, ct, oid, tt, matched, note, rj, tt === 'D' ? 'refund' : matched ? 'sale' : 'unclassified') };
 
     if (!inv) {
       ins.run(txnId, null, bank, amount, content, orderId, transType, 0, 'Không tìm thấy hóa đơn', raw);
@@ -295,7 +298,7 @@ function txList(req, paged) {
   const holder = (db.prepare("SELECT value FROM settings WHERE key='account_holder'").get() || {}).value || '';
 
   const qrOrders = getQrOrders(req.tenant.code, from, to);
-  const txns = db.prepare(`SELECT transactionid, invoice_id, bank_account, amount, content, order_id, trans_type, matched, note, created_at
+  const txns = db.prepare(`SELECT id, transactionid, invoice_id, bank_account, amount, content, order_id, trans_type, matched, note, category, created_at
     FROM vietqr_transactions WHERE dup_of IS NULL AND date(created_at)>=date(?) AND date(created_at)<=date(?) ORDER BY id DESC LIMIT 3000`).all(from, to);
 
   const ids = [...new Set([...qrOrders.map((o) => o.invoice_id), ...txns.map((t) => t.invoice_id)].filter(Boolean))];
@@ -317,6 +320,7 @@ function txList(req, paged) {
       content: t.content || '', type: t.trans_type === 'D' ? 'Hoàn tiền' : 'QR giao dịch',
       note: t.note || '', order_id: t.order_id || '',
       invoice_code: t.invoice_id ? (codeMap.get(t.invoice_id) || '') : '', status: st,
+      id: t.id, category: t.category || 'unclassified',
     });
   }
   for (const o of qrOrders) {

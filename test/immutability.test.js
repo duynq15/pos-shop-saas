@@ -16,6 +16,11 @@ db.runWith('default', (c) => {
   let reclass = false;
   try { c.exec("UPDATE vietqr_transactions SET matched=1, note='Đã phân loại' WHERE transactionid='IMM-1'"); reclass = true; } catch { /* ghi nhận ở dưới */ }
   ok('vqr: classification columns still editable', reclass);
+  c.exec("UPDATE vietqr_transactions SET category='sale' WHERE transactionid='IMM-1'");
+  ok('vqr: classified transaction cannot be reclassified', blocked(() => c.exec("UPDATE vietqr_transactions SET category='fund' WHERE transactionid='IMM-1'")));
+  c.prepare("INSERT INTO vietqr_transactions(transactionid,amount,trans_type) VALUES ('IMM-2',1,'C')").run();
+  ok('vqr: rows inserted without category default to unclassified (ERR-03)', c.prepare("SELECT category FROM vietqr_transactions WHERE transactionid='IMM-2'").get().category === 'unclassified');
+  ok('vqr: unknown category rejected', (() => { try { c.exec("UPDATE vietqr_transactions SET category='xyz' WHERE transactionid='IMM-2'"); return false; } catch { return true; } })());
 });
 control.prepare("INSERT INTO audit_logs(action) VALUES ('test.immut')").run();
 ok('audit: update blocked', blocked(() => control.exec("UPDATE audit_logs SET action='x' WHERE action='test.immut'")));

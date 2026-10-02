@@ -298,6 +298,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   await Promise.all([1, 2, 3, 4].map(() => fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: dupBody })));
   const dupTx = (await (await req('iso', '/reports/vietqr?from=2000-01-01&to=2999-12-31&q=DUP-RACE')).json()).data;
   ok('ERR-02: concurrent duplicate webhook stored once', dupTx.items.filter((x) => x.transactionid === 'DUP-RACE').length === 1);
+  ok('FR-08: matched invoice payment classified as sale', (await (await req('iso', '/vietqr/transactions?from=2000-01-01&to=2999-12-31&q=DUP-RACE')).json()).data.items[0].category === 'sale');
   const dupPays = (await (await req('iso', '/invoices/' + dupInv.data.id)).json()).data.payments || [];
   ok('ERR-02: invoice paid once', dupPays.length === 1);
   const noIdInv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'NoId', price: 4000, qty: 1 }], payment_method: 'transfer' } })).json();
@@ -579,6 +580,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const balBefore = (await cj('cadm', '/funds/' + fund2.data.id)).data.balance;
   const syncFund = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
   ok('webhook routes to fund by bank account', syncFund.error === false);
+  ok('FR-08: income into a general fund classified as fund', (await (await req('cadm', '/vietqr/transactions?from=2000-01-01&to=2999-12-31&q=FUND-TXN-1')).json()).data.items[0].category === 'fund');
   const syncFundShop = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 999000, content: 'gia mao', transType: 'C', transactionid: 'FUND-FORGED' }) })).json();
   ok('GĐ3.0: shop token cannot book into a fund', syncFundShop.errorReason === 'TENANT_MISMATCH');
   ok('fund balance increases from webhook', (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
