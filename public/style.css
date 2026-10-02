@@ -288,6 +288,20 @@ table.grid{width:100%;border-collapse:collapse;min-width:560px}
 }
 
 /* ===================== Print ===================== */
+/* ===================== Ô chọn có tìm kiếm (combobox) ===================== */
+.combo{position:relative;margin-top:6px}
+label.fld .combo .field{margin-top:0}
+.combo .field{width:100%;padding-right:32px;background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%23475569' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='7' cy='7' r='4.5'/%3E%3Cpath d='m10.5 10.5 3 3'/%3E%3C/svg%3E") no-repeat right 10px center}
+.combo-list{position:absolute;z-index:60;left:0;right:0;top:calc(100% + 4px);margin:0;padding:4px;list-style:none;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow-lg);font-weight:400}
+.combo-list.up{top:auto;bottom:calc(100% + 4px)}
+.combo-list li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px;border-radius:5px;cursor:pointer;color:var(--text);font-size:14px}
+.combo-list li .b{margin-left:auto;color:var(--muted);font-size:12px;font-weight:400;font-variant-numeric:tabular-nums}
+.combo-list li:hover,.combo-list li.active{background:var(--primary-soft);color:var(--primary)}
+.combo-list li[aria-selected="true"]{font-weight:600}
+.combo-list li[aria-selected="true"]::after{content:"✓";color:var(--primary)}
+.combo-list li.none{cursor:default;color:var(--muted);justify-content:center}
+.combo-list li.none:hover{background:none;color:var(--muted)}
+
 /* ===================== Sổ quỹ (GĐ2.8) ===================== */
 .fd-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
 .fd-chip{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:160px;padding:10px 14px;border:1px solid var(--line);border-radius:var(--radius);background:#fff;cursor:pointer;font-family:inherit;text-align:left;box-shadow:var(--shadow);transition:border-color var(--ease),background var(--ease)}
