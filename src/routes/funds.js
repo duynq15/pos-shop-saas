@@ -425,6 +425,22 @@ function processFundPayment(code, fundId, p) {
   });
 }
 
+// GĐ3.2: thủ quỹ ghi một giao dịch chưa phân loại vào quỹ. Gọi trong transaction của route phân loại.
+function bookUnclassified(req, t, fundId, by) {
+  const f = fundFor(req, fundId);
+  if (!f) throw Object.assign(new Error('Không tìm thấy quỹ'), { code: 404 });
+  if (f.status !== 'active') throw Object.assign(new Error('Quỹ đã đóng'), { code: 400 });
+  if (!amountOk(t.amount)) throw Object.assign(new Error('Số tiền giao dịch không hợp lệ'), { code: 400 });
+  if (db.prepare('SELECT 1 FROM fund_entries WHERE bank_ref=?').get(t.transactionid)) throw Object.assign(new Error('Giao dịch này đã có trong sổ quỹ'), { code: 400 });
+  const code = makeCode(db, 'PT', 'fund_entries');
+  db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,note,status,created_by,created_by_name,approved_by,approved_by_name,approved_at)
+    VALUES (?,?,'in',?,'vietqr',?,?,'approved',?,?,?,?,datetime('now','localtime'))`)
+    .run(code, f.id, t.amount, t.transactionid, t.content || 'Phân loại từ hàng chờ', req.user.id, by, req.user.id, by);
+  log(req, 'fund_entry.create', 'fund_entry', null, { code, from_transaction: t.transactionid, amount: t.amount });
+  return { fund: f, code, category: f.kind === 'donation' ? 'donation' : 'fund' };
+}
+
 module.exports = router;
+module.exports.bookUnclassified = bookUnclassified;
 module.exports.resolveFundByBank = resolveFundByBank;
 module.exports.processFundPayment = processFundPayment;

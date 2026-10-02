@@ -187,16 +187,51 @@ async function loadTodo(f) {
   const { entries: submitted } = await api(`/api/funds/${f.id}/entries?status=submitted`);
   let drafts = [];
   if (can('fund.entry')) drafts = (await api(`/api/funds/${f.id}/entries?status=draft`)).entries.filter((e) => e.created_by === auth.user.id);
+  // GĐ3.2: tiền vào tài khoản quỹ nhưng chưa ghi được sổ (quỹ đóng, không rõ quỹ…) chờ thủ quỹ phân loại.
+  // Hàng chờ chung của cộng đồng nên hiện ở mọi quỹ.
+  let queue = [];
+  if (can('fund.entry')) { try { queue = (await api('/api/vietqr/unclassified')).items; } catch { queue = []; } }
   todo = [...drafts, ...submitted];
-  const actionable = drafts.length + (can('fund.approve') ? submitted.filter((e) => e.created_by !== auth.user.id).length : 0);
+  const actionable = queue.length + drafts.length + (can('fund.approve') ? submitted.filter((e) => e.created_by !== auth.user.id).length : 0);
   $('#fd-m-todo').textContent = actionable ? `${actionable} việc` : 'Không có';
   $('#fd-todo-count').textContent = actionable || '';
-  $('#fd-pending-body').innerHTML = todo.map(taskCard).join('') || `<div class="card fd-empty">
+  $('#fd-pending-body').innerHTML = queue.map(queueCard).join('') + todo.map(taskCard).join('') || `<div class="card fd-empty">
     <p><b>Không có việc cần làm.</b></p>
-    <p class="muted">${can('fund.approve') ? 'Khoản chi do thủ quỹ gửi sẽ hiện ở đây để bạn duyệt.' : 'Phiếu chi nháp và khoản đang chờ duyệt sẽ hiện ở đây.'}</p></div>`;
+    <p class="muted">${can('fund.approve') ? 'Khoản chi do thủ quỹ gửi sẽ hiện ở đây để bạn duyệt.' : 'Phiếu chi nháp, khoản đang chờ duyệt và tiền vào chưa rõ quỹ sẽ hiện ở đây.'}</p></div>`;
   $('#fd-pending-body').onclick = (ev) => {
+    const q = ev.target.closest('[data-queue]');
+    if (q) return openQueueClassify(queue.find((x) => String(x.id) === q.dataset.queue), f);
     const b = ev.target.closest('[data-act]'); if (!b) return;
     taskAction(f, b.dataset.act, todo.find((x) => String(x.id) === b.dataset.id));
+  };
+}
+
+function queueCard(t) {
+  return `<div class="fd-task">
+    <div class="fd-task-main">
+      <div class="fd-task-amt">${signedMoney(t.amount)}</div>
+      <div>${esc(t.content || 'Chuyển khoản không có nội dung')}</div>
+      <div class="meta">VietQR · ${esc(t.transactionid)} · TK ${esc(t.bank_account || '')} · ${esc((t.created_at || '').slice(0, 16))}${t.age_days ? ` · đã ${t.age_days} ngày` : ''}</div>
+    </div>
+    <div class="fd-task-side"><span class="badge pending">Tiền vào chưa rõ quỹ</span>
+      <div class="acts"><button class="btn primary" data-queue="${t.id}">Ghi vào quỹ</button></div></div>
+  </div>`;
+}
+
+function openQueueClassify(t, current) {
+  if (!t) return;
+  const active = funds.filter((x) => x.status === 'active');
+  modal(`<h2>Ghi tiền vào quỹ</h2>
+    <p class="muted" style="margin:-8px 0 14px">${money(t.amount)} · ${esc(t.transactionid)} · ${esc((t.created_at || '').slice(0, 16))}<br>Nội dung: ${esc(t.content || '—')}</p>
+    <label class="fld">Quỹ nhận *<select class="field" id="fd-q-fund">${active.map((x) => `<option value="${x.id}" ${x.id === current.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+    <p class="muted" style="font-size:12.5px">Ghi xong là khoản thu đã ghi sổ, không đổi quỹ được nữa. Sai thì lập bút toán điều chỉnh.</p>
+    <div class="modal-actions"><button class="btn" id="fd-q-cancel">Hủy</button><button class="btn primary" id="fd-q-ok">Ghi sổ</button></div>`);
+  $('#fd-q-cancel').onclick = closeModal;
+  $('#fd-q-ok').onclick = async () => {
+    try {
+      await api(`/api/vietqr/transactions/${t.id}/classify`, { method: 'POST', body: { fund_id: Number($('#fd-q-fund').value) } });
+      toast(`Đã ghi ${money(t.amount)} vào quỹ`); closeModal(); await loadFunds();
+    } catch (e) { toast(e.message, true); }
   };
 }
 

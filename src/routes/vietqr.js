@@ -312,7 +312,7 @@ function txList(req, paged) {
   const rows = [];
   const used = new Set();
   for (const t of txns) {
-    const st = t.trans_type === 'D' ? 'refund' : (t.matched === 1 ? 'success' : 'unmatched');
+    const st = t.trans_type === 'D' ? 'refund' : (t.category && t.category !== 'unclassified' ? 'success' : 'unmatched');
     if (t.order_id && orderMap.has(t.order_id)) used.add(t.order_id);
     rows.push({
       ref: t.transactionid || '', amount: Number(t.amount) || 0, time: t.created_at,
@@ -372,6 +372,71 @@ router.get('/vietqr/transactions/export', requirePerm('report.export'), wrap((re
     'Trạng thái': label[r.status] || r.status,
   }));
   sendXlsx(res, `giao-dich-vietqr-${from}_${to}`, out, { sheet: 'Giao dich VietQR' });
+}));
+
+/* ===================== Hàng chờ phân loại (GĐ3.2 — ERR-03, FR-08) ===================== */
+// Giao dịch tiền vào chưa xác định được loại không vào báo cáo cho đến khi có người phân loại.
+// Cửa hàng: gắn với hóa đơn đang chờ chuyển khoản cùng số tiền, hoặc ghi là "thu khác".
+//   Quyền invoice.cancel (chủ, quản lý): gắn giao dịch = xác nhận đã nhận tiền, thu ngân không tự làm.
+// Cộng đồng: thủ quỹ chọn quỹ để ghi sổ (sinh bút toán thu approved, bank_ref = mã giao dịch).
+const auditOf = (req, action, id, detail) => audit({ tenantId: req.user.tenant_id, userId: req.user.id, username: req.user.username,
+  action, entity: 'vietqr_transaction', entityId: id, detail: JSON.stringify(detail), ip: req.ip });
+const getTxn = (id) => db.prepare("SELECT * FROM vietqr_transactions WHERE id=? AND dup_of IS NULL").get(Number(id));
+const isCommunity = (req) => req.tenant && req.tenant.kind === 'community';
+const classifyPerm = (req, res, next) => {
+  const perm = isCommunity(req) ? 'fund.entry' : 'invoice.cancel';
+  return requirePerm(perm)(req, res, next);
+};
+
+router.get('/vietqr/unclassified', classifyPerm, wrap((req, res) => {
+  const items = db.prepare(`SELECT id, transactionid, bank_account, amount, content, order_id, note, created_at,
+      CAST((julianday('now','localtime') - julianday(created_at)) AS INTEGER) AS age_days
+    FROM vietqr_transactions WHERE dup_of IS NULL AND category='unclassified' AND trans_type='C' ORDER BY id DESC LIMIT 500`).all();
+  // Gợi ý: hóa đơn chờ chuyển khoản cùng số tiền (cửa hàng) hoặc danh sách quỹ đang hoạt động (cộng đồng)
+  const options = isCommunity(req)
+    ? { funds: db.prepare("SELECT id, name, kind FROM funds WHERE status='active' ORDER BY id").all() }
+    : { invoices: db.prepare(`SELECT id, code, total, customer_name, created_at FROM invoices
+        WHERE type='sale' AND status='pending' ORDER BY id DESC LIMIT 200`).all() };
+  ok(res, { items, ...options });
+}));
+
+router.post('/vietqr/transactions/:id/classify', classifyPerm, wrap((req, res) => {
+  const t = getTxn(req.params.id);
+  if (!t) return fail(res, 'Không tìm thấy giao dịch', 404);
+  if (t.category !== 'unclassified' || t.trans_type !== 'C') return fail(res, 'Giao dịch đã được phân loại');
+  const b = req.body || {};
+  const by = req.user.full_name || req.user.username;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (isCommunity(req)) {
+      const r = funds.bookUnclassified(req, t, Number(b.fund_id), by);
+      db.prepare("UPDATE vietqr_transactions SET category=?, matched=1, note=?, classified_by=?, classified_at=datetime('now','localtime') WHERE id=?")
+        .run(r.category, 'Đã ghi vào quỹ ' + r.fund.name, by, t.id);
+      auditOf(req, 'vqr.classify', t.id, { transactionid: t.transactionid, fund_id: r.fund.id, entry: r.code });
+    } else if (b.invoice_id) {
+      const inv = db.prepare("SELECT * FROM invoices WHERE id=? AND type='sale'").get(Number(b.invoice_id));
+      if (!inv) throw Object.assign(new Error('Không tìm thấy hóa đơn'), { code: 404 });
+      if (inv.status !== 'pending') throw Object.assign(new Error('Chỉ gắn được với hóa đơn đang chờ chuyển khoản'), { code: 400 });
+      if (inv.total !== t.amount) throw Object.assign(new Error(`Số tiền không khớp hóa đơn (giao dịch ${t.amount}, hóa đơn ${inv.total})`), { code: 400 });
+      db.prepare("UPDATE invoices SET status='paid', paid_amount=total, change_amount=0 WHERE id=?").run(inv.id);
+      if (!db.prepare('SELECT COUNT(*) c FROM invoice_payments WHERE invoice_id=?').get(inv.id).c) {
+        db.prepare('INSERT INTO invoice_payments(invoice_id,method,amount,note) VALUES (?,?,?,?)').run(inv.id, 'transfer', inv.total, 'VietQR ' + t.transactionid + ' (phân loại tay)');
+      }
+      db.prepare("UPDATE vietqr_transactions SET category='sale', matched=1, invoice_id=?, note=?, classified_by=?, classified_at=datetime('now','localtime') WHERE id=?")
+        .run(inv.id, 'Gắn hóa đơn ' + inv.code, by, t.id);
+      auditOf(req, 'vqr.classify', t.id, { transactionid: t.transactionid, invoice: inv.code });
+    } else if (b.category === 'other') {
+      const reason = str(b.reason, 300);
+      if (!reason) throw Object.assign(new Error('Ghi lý do khi đánh dấu là thu khác'), { code: 400 });
+      db.prepare("UPDATE vietqr_transactions SET category='other', note=?, classified_by=?, classified_at=datetime('now','localtime') WHERE id=?")
+        .run('Thu khác: ' + reason, by, t.id);
+      auditOf(req, 'vqr.classify', t.id, { transactionid: t.transactionid, category: 'other', reason });
+    } else {
+      throw Object.assign(new Error('Chọn hóa đơn để gắn, hoặc đánh dấu là thu khác'), { code: 400 });
+    }
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  ok(res, getTxn(t.id));
 }));
 
 module.exports = { router, webhook, processPayment };
