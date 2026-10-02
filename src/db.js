@@ -416,6 +416,8 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     "CASE WHEN trans_type='D' THEN 'refund' WHEN matched=1 AND invoice_id IS NOT NULL THEN 'sale' ELSE 'unclassified' END");
   ensureColumn('vietqr_transactions', 'classified_by', 'TEXT');
   ensureColumn('vietqr_transactions', 'classified_at', 'TEXT');
+  // GĐ3.7 (AC-01-3): thời điểm ngân hàng ghi nhận, nếu webhook có gửi. Chưa có thì độ trễ không đo được.
+  ensureColumn('vietqr_transactions', 'bank_time', 'TEXT');
   conn.exec(`UPDATE vietqr_transactions SET dup_of = (SELECT MIN(v2.id) FROM vietqr_transactions v2 WHERE v2.transactionid = vietqr_transactions.transactionid)
     WHERE dup_of IS NULL AND transactionid IS NOT NULL AND transactionid <> ''
       AND id > (SELECT MIN(v2.id) FROM vietqr_transactions v2 WHERE v2.transactionid = vietqr_transactions.transactionid)`);
