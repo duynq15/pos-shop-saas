@@ -202,10 +202,13 @@ async function loadTodo(f) {
 
 function taskCard(e) {
   const mine = e.created_by === auth.user.id;
+  const closed = funds.find((x) => x.id === e.fund_id)?.status === 'closed';
   const missing = e.type === 'out' && !e.attachment;
   let acts = '';
   let state = '';
-  if (e.status === 'draft') {
+  if (closed) {
+    state = '<span class="badge">Quỹ đã đóng</span>';
+  } else if (e.status === 'draft') {
     state = missing ? '<span class="badge pending">Thiếu ảnh chứng từ</span>' : '<span class="badge">Nháp, chưa gửi</span>';
     acts = `<button class="btn" data-act="edit" data-id="${e.id}">${missing ? 'Thêm ảnh' : 'Sửa'}</button>
       <button class="btn primary" data-act="submit" data-id="${e.id}" ${missing ? 'disabled title="Cần ảnh chứng từ trước"' : ''}>Gửi duyệt</button>`;
@@ -371,16 +374,24 @@ async function openFundForm(f) {
       <label class="fld">Loại<select class="field" id="fd-f-kind">
         <option value="general" ${d.kind === 'general' ? 'selected' : ''}>Quỹ chung</option>
         <option value="donation" ${d.kind === 'donation' ? 'selected' : ''}>Công đức (được công khai)</option></select></label>
-      <label class="fld">Thủ quỹ phụ trách<select class="field" id="fd-f-manager">${tOpts}</select></label>
+      <label class="fld">Thủ quỹ phụ trách<select class="field" id="fd-f-manager">${tOpts}</select>
+        <span class="muted fd-field-hint" id="fd-f-manager-hint"></span></label>
       ${!isNew ? `<label class="fld">Trạng thái<select class="field" id="fd-f-status">
         <option value="active" ${d.status === 'active' ? 'selected' : ''}>Đang hoạt động</option>
-        <option value="closed" ${d.status === 'closed' ? 'selected' : ''}>Đã đóng (không nhận thêm)</option></select></label>` : ''}
+        <option value="closed" ${d.status === 'closed' ? 'selected' : ''}>Đã đóng (quyết toán xong)</option></select>
+        <span class="muted fd-field-hint">Đóng khi đã xử lý hết khoản nháp / chờ duyệt. Sau khi đóng không nhập, duyệt hay sửa được nữa.</span></label>` : ''}
       <div class="full fd-section">Tài khoản nhận tiền (riêng của quỹ)</div>
       <label class="fld">Số tài khoản<input class="field" id="fd-f-account" inputmode="numeric" value="${esc(d.bank_account || '')}"></label>
       <label class="fld">Ngân hàng${bankField('fd-f-bin', d.bank_bin, d.bank_name)}</label>
       <label class="fld">Chủ tài khoản<input class="field" id="fd-f-holder" value="${esc(d.account_holder || '')}"></label>
     </div>
     <div class="modal-actions"><button class="btn" id="fd-f-close">Hủy</button><button class="btn primary" id="fd-f-save">Lưu quỹ</button></div>`, { focus: '#fd-f-name' });
+  // Nhắc khi có từ 2 thủ quỹ mà quỹ chưa giao ai (BR-08)
+  const hint = () => {
+    $('#fd-f-manager-hint').textContent = !$('#fd-f-manager').value && treasurers.length > 1
+      ? `Quỹ chưa giao: cả ${treasurers.length} thủ quỹ đều xem và nhập được.` : '';
+  };
+  $('#fd-f-manager').onchange = hint; hint();
   $('#fd-f-close').onclick = closeModal;
   $('#fd-f-save').onclick = async () => {
     const bank = bankOf($('#fd-f-bin').value);

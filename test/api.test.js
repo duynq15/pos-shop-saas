@@ -499,9 +499,25 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: false } } });
   ok('disabled flag 404 even with valid token', (await fetch(ROOT + '/public/api/donations/' + donToken)).status === 404);
 
-  await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'closed' } });
+  // Đóng quỹ = quyết toán: còn khoản dở thì không cho đóng; đã đóng thì không duyệt / sửa gì nữa.
+  // Dọn các khoản dở do test phía trên để lại, như người duyệt phải làm thật trước khi đóng.
+  for (const st of ['draft', 'submitted']) {
+    for (const e of (await cj('cadm', '/funds/' + fid + '/entries?status=' + st)).data.entries) {
+      if (st === 'draft') await cj('c-treasurer', '/fund-entries/' + e.id + '/submit', { method: 'POST' });
+      await cj('c-approver', '/fund-entries/' + e.id + '/reject', { method: 'POST', body: { reason: 'dọn trước khi đóng' } });
+    }
+  }
+  const openDraft = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, note: 'dở', attachment: receipt } });
+  const closeBlocked = await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'closed' } });
+  ok('cannot close fund with open entries', !closeBlocked.ok && /Còn 1 khoản/.test(closeBlocked.error), closeBlocked.error);
+  await cj('c-treasurer', '/fund-entries/' + openDraft.data.id + '/submit', { method: 'POST' });
+  await cj('c-approver', '/fund-entries/' + openDraft.data.id + '/reject', { method: 'POST', body: { reason: 'đóng quỹ' } });
+  ok('close fund once nothing is open', (await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'closed' } })).data?.status === 'closed');
   ok('closed fund takes no entries', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).ok);
+  ok('closed fund: no transitions on its entries', !(await cj('c-treasurer', '/fund-entries/' + openDraft.data.id + '/submit', { method: 'POST' })).ok);
+  ok('closed fund: donor can still be anonymised (FR-20)', (await cj('c-treasurer', '/fund-entries/' + cashIn.data.id + '/anonymous', { method: 'POST', body: { anonymous: false } })).ok);
   await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'active' } });
+  ok('reopen allowed', (await cj('c-treasurer', '/funds/' + fid)).data.status === 'active');
 
   // ---------- Ca biên và tấn công thử (rà soát GĐ1–2) ----------
   ok('amount over 100 billion rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1e20 } })).ok);

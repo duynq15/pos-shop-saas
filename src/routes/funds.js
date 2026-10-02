@@ -159,9 +159,15 @@ router.patch('/funds/:id', requirePerm('fund.manage'), wrap((req, res) => {
   const v = fundInput(req.body || {}, cur);
   checkManager(req, v.manager_user_id);
   if (v.bank_account !== cur.bank_account && fundAccountTaken(v.bank_account, cur.id)) bad('Tài khoản nhận của quỹ phải là tài khoản riêng, không trùng cửa hàng hay quỹ khác (BR-02)');
+  // Đóng quỹ = quyết toán xong: phải xử lý hết khoản nháp / chờ duyệt trước, để số liệu sau khi đóng không đổi nữa
+  if (v.status === 'closed' && cur.status !== 'closed') {
+    const open = db.prepare("SELECT COUNT(*) n FROM fund_entries WHERE fund_id=? AND status IN ('draft','submitted')").get(cur.id).n;
+    if (open) bad(`Còn ${open} khoản nháp hoặc chờ duyệt. Duyệt, từ chối hoặc để người lập xử lý trước khi đóng quỹ`);
+  }
   db.prepare(`UPDATE funds SET name=?,kind=?,bank_account=?,bank_bin=?,bank_name=?,account_holder=?,manager_user_id=?,description=?,start_date=?,end_date=?,status=? WHERE id=?`)
     .run(v.name, v.kind, v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, cur.id);
-  log(req, 'fund.update', 'fund', cur.id, req.body);
+  const action = v.status === cur.status ? 'fund.update' : v.status === 'closed' ? 'fund.close' : 'fund.reopen';
+  log(req, action, 'fund', cur.id, req.body);
   ok(res, getFund(cur.id));
 }));
 
@@ -259,6 +265,7 @@ router.post('/fund-entries/:id/anonymous', requirePerm('fund.anonymize'), wrap((
   const e = entryFor(req, req.params.id);
   if (!e) return fail(res, 'Không tìm thấy bút toán', 404);
   if (e.type !== 'in') bad('Chỉ khoản thu mới ẩn / hiện tên được');
+  // Ẩn tên theo yêu cầu người đóng góp vẫn cho phép sau khi đóng quỹ: chỉ đổi hiển thị, không đổi số liệu (FR-20)
   const anonymous = (req.body || {}).anonymous ? 1 : 0;
   db.prepare('UPDATE fund_entries SET anonymous=? WHERE id=?').run(anonymous, e.id);
   log(req, anonymous ? 'fund_entry.hide_name' : 'fund_entry.show_name', 'fund_entry', e.id, { code: e.code });
@@ -279,9 +286,13 @@ router.patch('/fund-entries/:id', requirePerm('fund.entry'), wrap((req, res) => 
   log(req, 'fund_entry.update', 'fund_entry', e.id, { amount, note, attachment: attachment !== e.attachment });
 })));
 
+const fundClosed = (e) => db.prepare('SELECT status FROM funds WHERE id=?').get(e.fund_id).status === 'closed';
+const CLOSED_MSG = 'Quỹ đã đóng, mở lại quỹ nếu cần ghi tiếp';
+
 function transition(req, res, from, fn) {
   const e = entryFor(req, req.params.id);
   if (!e) return fail(res, 'Không tìm thấy bút toán', 404);
+  if (fundClosed(e)) bad(CLOSED_MSG);
   if (e.status !== from) bad('Bút toán không ở trạng thái cho phép thao tác này');
   fn(e);
   ok(res, getEntry(e.id));

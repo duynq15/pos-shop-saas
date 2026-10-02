@@ -101,3 +101,17 @@ Chưa xử lý, để GĐ3:
 - Webhook định tuyến theo số tài khoản, bất kể token là của tenant nào. Ai lộ thông tin đăng nhập webhook của một cửa hàng thì giả được khoản thu vào quỹ.
 - Lỗ hổng này có từ trước GĐ2 và cũng áp dụng cho hóa đơn. Test hiện có đang cố ý giữ hành vi đó.
 - Xử lý cùng phần chống ghi trùng và đối soát (3.5, 3.6).
+
+## Quyết định đóng quỹ và phân công thủ quỹ (2026-10-02)
+
+Hai điểm [NEED DECISION] ở trên đã được chủ dự án duyệt.
+
+- **Đóng quỹ là quyết toán xong.**
+  - Quỹ còn khoản nháp hoặc chờ duyệt thì không đóng được. API trả "Còn N khoản…" để người duyệt xử lý hết trước.
+  - Quỹ đã đóng thì không nhận bút toán mới. Bút toán của quỹ cũng không gửi, duyệt, từ chối hay sửa được nữa, nên số liệu sau khi đóng không đổi (BR-12).
+  - Riêng việc ẩn / hiện tên người đóng góp vẫn làm được, vì chỉ đổi cách hiển thị, không đổi số liệu (FR-20).
+  - Muốn ghi tiếp thì mở lại quỹ. Nhật ký phân biệt `fund.close`, `fund.reopen` và `fund.update`.
+- **Không bắt buộc giao quỹ cho thủ quỹ.**
+  - Thôn thí điểm chỉ có một thủ quỹ.
+  - Khi cộng đồng có từ hai thủ quỹ, form quỹ nhắc "Quỹ chưa giao: cả N thủ quỹ đều xem và nhập được".
+  - Muốn bắt buộc thì bỏ nhánh `manager_user_id IS NULL` trong `SCOPE_SQL` và `canSeeFund`.
