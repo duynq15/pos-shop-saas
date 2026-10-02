@@ -1,7 +1,7 @@
 // Nhận tiền nhanh cho người bán nhỏ (GĐ4.1, 4.4 — FR-03, FR-11, NFR-02, AC-01-1, AC-01-3, AC-02-1).
 // Ba chạm: nhập số tiền → chạm hạng mục → khách quét QR. Mỗi lần nhận tiền là một hóa đơn chuyển khoản
 // một dòng hàng tự do, nên webhook, chống trùng, hàng chờ và báo cáo dùng lại nguyên vẹn.
-import { $, esc, nf, money, today, modal, closeModal, toast } from '../util.js';
+import { $, esc, nf, money, today, monthStart, modal, closeModal, toast } from '../util.js';
 import { api, state } from '../store.js';
 import { isProd, can } from '../auth.js';
 import { icon } from '../icons.js';
@@ -13,7 +13,8 @@ let amount = 0;
 let timer = null;
 
 const short = (n) => (n >= 1e6 ? `${n / 1e6}tr` : `${n / 1e3}k`);
-const stop = () => { if (timer) { clearInterval(timer); timer = null; } window.__onModalClose = null; };
+const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
+const refresh = () => { loadToday(); loadReport(document.querySelector('#qp-rp-range .seg-btn.active')?.dataset.r || 'month'); };
 
 export default {
   id: 'quickpay',
@@ -39,6 +40,15 @@ export default {
     <h3>Hôm nay <span class="muted" id="qp-sum"></span></h3>
     <div id="qp-list"></div>
   </div>
+  <div class="card qp-report">
+    <h3>Doanh thu</h3>
+    <div class="seg" id="qp-rp-range">
+      <button class="seg-btn active" data-r="month">Tháng này</button><button class="seg-btn" data-r="last">Tháng trước</button><button class="seg-btn" data-r="year">Năm nay</button>
+    </div>
+    <div class="qp-rp-total" id="qp-rp-total"></div>
+    <div id="qp-rp-cats"></div>
+    <details class="qp-rp-days"><summary>Theo ngày</summary><div id="qp-rp-days"></div></details>
+  </div>
 </div>`;
     const input = $('#qp-amount');
     input.addEventListener('input', () => {
@@ -57,6 +67,11 @@ export default {
     };
     $('#qp-static').onclick = openStaticQr;
     $('#qp-list').onclick = (e) => { const r = e.target.closest('[data-inv]'); if (r) openRetag(Number(r.dataset.inv)); };
+    $('#qp-rp-range').onclick = (e) => {
+      const b = e.target.closest('[data-r]'); if (!b) return;
+      document.querySelectorAll('#qp-rp-range .seg-btn').forEach((x) => x.classList.toggle('active', x === b));
+      loadReport(b.dataset.r);
+    };
   },
 
   async show() {
@@ -66,6 +81,7 @@ export default {
     $('#qp-step').textContent = cats.length ? 'Chạm hạng mục để hiện mã QR' : 'Bấm để hiện mã QR';
     setTimeout(() => $('#qp-amount').focus(), 50);
     loadToday();
+    loadReport(document.querySelector('#qp-rp-range .seg-btn.active')?.dataset.r || 'month');
   },
 };
 
@@ -105,10 +121,10 @@ async function charge(catId) {
       $('#qp-wait').innerHTML = `${icon('check')} Đã nhận ${money(inv.total)}`;
       $('#qp-cancel')?.remove(); $('#qp-sim')?.remove();
       $('#qp-amount').value = ''; amount = 0;
-      loadToday();
+      refresh();
     }
   };
-  window.__onModalClose = () => { stop(); loadToday(); };
+  window.__onModalClose = () => { stop(); refresh(); };
   $('#qp-done').onclick = closeModal;
   if ($('#qp-cancel')) $('#qp-cancel').onclick = async () => {
     try { await api(`/api/invoices/${inv.id}/cancel`, { method: 'POST', body: { reason: 'Khách không chuyển' } }); toast('Đã hủy giao dịch'); closeModal(); }
@@ -156,7 +172,7 @@ async function openRetag(id) {
     const b = e.target.closest('[data-set]'); if (!b) return;
     try {
       await api(`/api/invoices/${id}/category`, { method: 'POST', body: { item_category_id: Number(b.dataset.set) || null } });
-      toast('Đã cập nhật hạng mục'); closeModal(); loadToday();
+      toast('Đã cập nhật hạng mục'); closeModal(); refresh();
     } catch (err) { toast(err.message, true); }
   };
 }
@@ -180,4 +196,27 @@ async function openStaticQr() {
       <p>Quét mã để chuyển khoản</p></div>`;
     window.print();
   };
+}
+
+/* ---------------- Báo cáo người bán (GĐ4.5 — FR-16, ERR-04) ---------------- */
+function rangeOf(r) {
+  const d = new Date(); const p = (x) => String(x).padStart(2, '0');
+  const ymd = (x) => `${x.getFullYear()}-${p(x.getMonth() + 1)}-${p(x.getDate())}`;
+  if (r === 'last') return { from: ymd(new Date(d.getFullYear(), d.getMonth() - 1, 1)), to: ymd(new Date(d.getFullYear(), d.getMonth(), 0)), by: 'day' };
+  if (r === 'year') return { from: `${d.getFullYear()}-01-01`, to: today(), by: 'month' };
+  return { from: monthStart(), to: today(), by: 'day' };
+}
+async function loadReport(r) {
+  const q = rangeOf(r);
+  try {
+    const d = await api(`/api/reports/seller?from=${q.from}&to=${q.to}&by=${q.by}`);
+    $('#qp-rp-total').innerHTML = `<b>${money(d.revenue)}</b><span class="muted">${d.sales} lần bán</span>`;
+    const max = Math.max(1, ...d.categories.map((c) => Math.abs(c.revenue)));
+    $('#qp-rp-cats').innerHTML = d.categories.map((c) => `<div class="qp-bar ${c.uncategorized ? 'none' : ''}">
+        <span class="n">${esc(c.name)}</span><span class="v">${money(c.revenue)}</span>
+        <span class="track"><span class="fill" style="width:${Math.round(Math.abs(c.revenue) / max * 100)}%"></span></span></div>`).join('')
+      || '<p class="muted" style="text-align:center">Chưa có doanh thu trong kỳ</p>';
+    $('#qp-rp-days').innerHTML = d.periods.slice().reverse().map((p) => `<div class="qp-day"><span>${esc(p.period)}</span><span class="muted">${p.sales} lần</span><b>${money(p.revenue)}</b></div>`).join('')
+      || '<p class="muted">Không có dữ liệu</p>';
+  } catch (e) { $('#qp-rp-cats').innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
 }

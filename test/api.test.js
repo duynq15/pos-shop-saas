@@ -908,6 +908,28 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
     ok('created invoice: paid, transfer, right amount and label', scInv.status === 'paid' && scInv.total === 25000 && scInv.payment_method === 'transfer' && scInv.item_category_name === 'Thịt, cá tươi' && scInv.payments.length === 1);
     const after = (await (await req('sel', '/reports/summary?from=2000-01-01&to=2999-12-31')).json()).data;
     ok('static-QR sale counts in revenue', JSON.stringify(after) !== JSON.stringify(before));
+
+    // ---------- GĐ4.5: báo cáo người bán (FR-16, AC-03-1, AC-03-2, ERR-04) ----------
+    const all = '?from=2000-01-01&to=2999-12-31';
+    const rep = (await (await req('sel', '/reports/seller' + all)).json()).data;
+    const sumCats = rep.categories.reduce((s, c) => s + c.revenue, 0);
+    ok('AC-03-2: categories add up to total revenue', rep.revenue > 0 && sumCats === rep.revenue, sumCats + ' vs ' + rep.revenue);
+    ok('ERR-04: uncategorised line present', rep.categories.some((c) => c.uncategorized && c.name === 'Chưa gắn hạng mục'));
+    ok('AC-03-1: periods add up to total revenue', rep.periods.reduce((s, p) => s + p.revenue, 0) === rep.revenue);
+    const sum = (await (await req('sel', '/reports/summary' + all)).json()).data;
+    ok('AC-03-1: seller report total = POS summary revenue (sales − returns)', rep.revenue === sum.revenue, JSON.stringify([rep.revenue, sum.revenue]));
+    const mon = (await (await req('sel', '/reports/seller' + all + '&by=month')).json()).data;
+    ok('by month buckets YYYY-MM', mon.periods.every((p) => /^\d{4}-\d{2}$/.test(p.period)) && mon.revenue === rep.revenue);
+    // Trả hàng một giao dịch có hạng mục: trừ vào đúng hạng mục đó
+    const rInv = await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'Cá', price: 40000, qty: 1 }], payment_method: 'cash', paid_amount: 40000, item_category_id: thit.id } })).json();
+    const beforeRet = (await (await req('sel', '/reports/seller' + all)).json()).data.categories.find((c) => c.name === 'Thịt, cá tươi' || c.name === 'Thịt cá');
+    await req('sel', '/invoices', { method: 'POST', body: { type: 'return', parent_id: rInv.data.id, items: [{ name: 'Cá', price: 40000, qty: 1 }], payment_method: 'cash', paid_amount: 40000 } });
+    const afterRet = (await (await req('sel', '/reports/seller' + all)).json()).data;
+    const catAfter = afterRet.categories.find((c) => c.name === beforeRet.name);
+    ok('return subtracts from its original category', catAfter.revenue === beforeRet.revenue - 40000 && afterRet.categories.reduce((s, c) => s + c.revenue, 0) === afterRet.revenue,
+      JSON.stringify([beforeRet.revenue, catAfter && catAfter.revenue]));
+    ok('AC-03-3: seller B report excludes seller A', !(await (await req('selb', '/reports/seller' + all)).json()).data.categories.some((c) => c.name === 'Rau củ' || c.name === beforeRet.name));
+    ok('seller report rejects inverted range', !(await (await req('sel', '/reports/seller?from=2026-12-31&to=2026-01-01')).json()).ok);
   }
 
   for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg', '/report.html', '/report.css', '/js/report.js']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);

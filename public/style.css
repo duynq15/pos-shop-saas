@@ -329,10 +329,12 @@ label.fld .combo .field{margin-top:0}
 .qp-foot{display:flex;justify-content:center;margin:12px 0}
 .qp-today{margin-top:8px}
 .qp-today h3{display:flex;justify-content:space-between;gap:8px}
-.qp-row{display:grid;grid-template-columns:48px 1fr auto 56px;gap:10px;align-items:center;width:100%;min-height:48px;padding:8px 4px;border:0;border-bottom:1px solid var(--line);background:none;font:inherit;text-align:left;cursor:pointer}
+.qp-row{display:grid;grid-template-columns:44px minmax(0,1fr) auto 52px;gap:10px;align-items:center;width:100%;min-height:48px;padding:8px 4px;border:0;border-bottom:1px solid var(--line);background:none;font:inherit;text-align:left;cursor:pointer}
 .qp-row:last-child{border-bottom:0}
 .qp-row:hover{background:var(--primary-soft)}
 .qp-row .t{color:var(--muted);font-variant-numeric:tabular-nums}
+.qp-row .c{text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qp-row .a{text-align:right}
 .qp-row .a{font-weight:600;font-variant-numeric:tabular-nums}
 .qp-row .s{font-size:12px;color:var(--muted);text-align:right}
 .qp-pay{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
@@ -342,6 +344,20 @@ label.fld .combo .field{margin-top:0}
 .qp-wait.slow{background:var(--danger-soft);color:var(--danger);font-weight:500}
 .qp-pay.ok .qp-wait{background:var(--ok-soft);color:var(--ok);font-size:18px;display:flex;align-items:center;gap:8px}
 .qp-pay.ok img{opacity:.25}
+.qp-report{margin-top:12px}
+.qp-report .seg{margin-bottom:12px}
+.qp-rp-total{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px}
+.qp-rp-total b{font:700 26px/1.2 var(--font-head);color:var(--heading);font-variant-numeric:tabular-nums}
+.qp-bar{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:6px 0}
+.qp-bar .n{font-weight:500}
+.qp-bar .v{font-weight:600;font-variant-numeric:tabular-nums}
+.qp-bar .track{grid-column:1/-1;height:8px;border-radius:4px;background:#F1F5F9;overflow:hidden}
+.qp-bar .fill{display:block;height:100%;background:var(--primary);border-radius:4px}
+.qp-bar.none .n{color:var(--muted);font-style:italic}
+.qp-bar.none .fill{background:var(--line-2)}
+.qp-rp-days{margin-top:10px}
+.qp-rp-days summary{cursor:pointer;color:var(--primary);font-weight:500;padding:6px 0}
+.qp-day{display:grid;grid-template-columns:1fr auto auto;gap:12px;padding:6px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
 @media (max-width:420px){ .qp-quick{grid-template-columns:repeat(3,1fr)} .qp-amount{font-size:34px} }
 
 /* ===================== Sổ quỹ (GĐ2.8) ===================== */

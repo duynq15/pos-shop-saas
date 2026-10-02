@@ -422,6 +422,7 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('Paid state shown after webhook', (await sl.pg.locator('#qp-pay.ok').count()) === 1);
     await sl.pg.click('#qp-done'); await sl.pg.waitForTimeout(600);
     ok('Today list shows the sale with its category', (await sl.pg.locator('#qp-list').innerText()).includes('Rau củ'));
+    ok('Seller report lists categories incl. sale just made', (await sl.pg.locator('#qp-rp-cats').innerText()).includes('Rau củ'));
     ok('Quick pay: no horizontal overflow 390px', !(await sl.pg.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
     await sl.c.close();
   } catch (e) { R.push('EXCEPTION: ' + e.message.split('\n')[0]); }
