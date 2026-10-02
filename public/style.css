@@ -99,7 +99,8 @@ label.fld .field{margin-top:6px;font-size:14px;font-weight:400;color:var(--text)
 .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
 .toolbar .field{width:auto}
 .toolbar .grow{flex:1;min-width:220px}
-.tabs{display:flex;gap:24px;border-bottom:1px solid var(--line);margin-bottom:16px;overflow:auto}
+.tabs{display:flex;gap:24px;border-bottom:1px solid var(--line);margin-bottom:16px;overflow:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
 .tab{border:0;border-bottom:2px solid transparent;background:transparent;padding:10px 0;margin-bottom:-1px;cursor:pointer;font-size:14px;font-weight:500;color:var(--muted);transition:color var(--ease);white-space:nowrap;font-family:inherit}
 .tab:hover{color:var(--text)}
 .tab.active{color:var(--primary);border-bottom-color:var(--primary)}
@@ -288,6 +289,9 @@ table.grid{width:100%;border-collapse:collapse;min-width:560px}
 }
 
 /* ===================== Print ===================== */
+/* Dòng chờ phân loại bấm được cả dòng (điện thoại không phải cuộn ngang tới nút) */
+.grid tr.vqt-pending{cursor:pointer}
+.grid tr.vqt-pending:hover td{background:var(--primary-soft)}
 .alert-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;padding:10px 14px;margin-bottom:10px;border:1px solid var(--warn-line);border-left:3px solid var(--warn);border-radius:var(--radius);background:var(--warn-soft);color:var(--text);font-size:13.5px}
 .alert-bar b{color:var(--warn)}
 .alert-bar.duplicate_txn,.alert-bar.webhook_silent{border-color:var(--danger-line);border-left-color:var(--danger);background:var(--danger-soft)}

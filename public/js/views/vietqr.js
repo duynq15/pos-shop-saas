@@ -152,8 +152,8 @@ async function load() {
 function renderStats(s) {
   const cards = [
     [icon('card'), 'Tất cả GD', num(s.total_count) + ' GD', money(s.total_amount), 'Doanh thu', 'primary'],
-    [icon('check'), 'GD đã hoạch toán', num(s.success_count) + ' GD', money(s.success_amount), 'Doanh thu', 'ok'],
-    [icon('clock'), 'GD chưa hoạch toán', num(s.unmatched_count) + ' GD', money(s.unmatched_amount), 'Doanh thu', 'warn'],
+    [icon('check'), 'GD đã hạch toán', num(s.success_count) + ' GD', money(s.success_amount), 'Doanh thu', 'ok'],
+    [icon('clock'), 'GD chưa hạch toán', num(s.unmatched_count) + ' GD', money(s.unmatched_amount), 'Doanh thu', 'warn'],
     [icon('undo'), 'GD hoàn tiền', num(s.refund_count) + ' GD', money(s.refund_amount), 'Chi phí', 'danger'],
   ];
   const el = $('#vqt-stats'); if (!el) return;
@@ -175,7 +175,8 @@ function renderRows(items, page, size) {
     const refund = r.status === 'refund';
     const amt = `${refund ? '- ' : '+ '}${num(r.amount)}`;
     const type = r.type === 'Hoàn tiền' ? '<span class="badge return">Hoàn tiền</span>' : '<span class="badge sale">QR giao dịch</span>';
-    return `<tr>
+    const canCls = r.status === 'unmatched' && r.id && can('invoice.cancel');
+    return `<tr${canCls ? ` class="vqt-pending" data-classify="${r.id}" title="Bấm để phân loại"` : ''}>
       <td>${(page - 1) * size + i + 1}</td>
       <td>${r.ref ? `<code>${esc(r.ref)}</code>` : '<span class="muted">—</span>'}</td>
       <td class="r" style="color:${refund ? 'var(--danger)' : 'var(--ok)'};font-weight:600">${amt}</td>
@@ -186,7 +187,7 @@ function renderRows(items, page, size) {
       <td>${type}</td>
       <td>${r.order_id ? `<code>${esc(r.order_id)}</code>` : '—'}</td>
       <td><span class="${cls}">${label}</span>${r.status === 'success' && CAT[r.category] ? `<span class="sub">${CAT[r.category]}</span>` : ''}</td>
-      <td class="r">${r.status === 'unmatched' && r.id && can('invoice.cancel') ? `<button class="btn sm primary" data-classify="${r.id}">Phân loại</button>` : ''}</td>
+      <td class="r vqt-act">${r.status === 'unmatched' && r.id && can('invoice.cancel') ? `<button class="btn sm primary" data-classify="${r.id}">Phân loại</button>` : ''}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="11" class="empty">Chưa có giao dịch</td></tr>';
   rowsCache = items || [];
