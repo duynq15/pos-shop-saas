@@ -389,6 +389,13 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   ensureColumn('funds', 'bank_bin', 'TEXT');
   ensureColumn('funds', 'bank_name', 'TEXT');
   ensureColumn('fund_entries', 'attachment', 'TEXT');
+  // GĐ3.4 (ERR-02): mỗi mã giao dịch ngân hàng chỉ ghi một lần. Dòng trùng có sẵn ở DB cũ không xóa (BR-04):
+  // giữ dòng đầu, các dòng sau đánh dấu dup_of = id dòng đầu và không tính vào báo cáo.
+  ensureColumn('vietqr_transactions', 'dup_of', 'INTEGER');
+  conn.exec(`UPDATE vietqr_transactions SET dup_of = (SELECT MIN(v2.id) FROM vietqr_transactions v2 WHERE v2.transactionid = vietqr_transactions.transactionid)
+    WHERE dup_of IS NULL AND transactionid IS NOT NULL AND transactionid <> ''
+      AND id > (SELECT MIN(v2.id) FROM vietqr_transactions v2 WHERE v2.transactionid = vietqr_transactions.transactionid)`);
+  conn.exec("CREATE UNIQUE INDEX IF NOT EXISTS uq_vqr_txn ON vietqr_transactions(transactionid) WHERE dup_of IS NULL AND transactionid IS NOT NULL AND transactionid <> ''");
   ensureColumn('invoice_items', 'unit_id', 'INTEGER');
   ensureColumn('invoice_items', 'unit_name', 'TEXT');
   ensureColumnWithDefault('invoice_items', 'conversion', 'REAL DEFAULT 1', '1');

@@ -397,7 +397,7 @@ function processFundPayment(code, fundId, p) {
       return { ref: '', message: 'Giao dịch đã xử lý trước đó', paid: true };
     }
     const insTxn = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`);
+      VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
     const f = getFund(fundId);
     if (!f || f.status !== 'active') {
       insTxn.run(txnId, null, bank, amount, content, '', transType, 0, 'Quỹ không hoạt động', raw);
@@ -408,12 +408,15 @@ function processFundPayment(code, fundId, p) {
       return { ref: '', message: 'Không phải giao dịch tiền vào', paid: false };
     }
     const entryCode = makeCode(db, 'PT', 'fund_entries');
-    db.exec('BEGIN');
+    db.exec('BEGIN IMMEDIATE');
     try {
+    if (!insTxn.run(txnId, null, bank, amount, content, '', transType, 1, 'Đã ghi vào quỹ ' + f.name, raw).changes) {
+      db.exec('ROLLBACK');
+      return { ref: '', message: 'Giao dịch đã xử lý trước đó', paid: true };
+    }
     db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,note,status,created_by_name,approved_by_name,approved_at)
       VALUES (?,?,'in',?,'vietqr',?,?,'approved',?,?,datetime('now','localtime'))`)
       .run(entryCode, f.id, amount, txnId, content, 'VietQR', 'Hệ thống (VietQR)');
-    insTxn.run(txnId, null, bank, amount, content, '', transType, 1, 'Đã ghi vào quỹ ' + f.name, raw);
     db.exec('COMMIT');
     } catch (e) { db.exec('ROLLBACK'); throw e; }
     return { ref: entryCode, message: 'Đã ghi vào quỹ ' + f.name, paid: true };

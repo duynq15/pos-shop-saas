@@ -82,7 +82,9 @@ function resolveTenantByBank(account) {
 // p: { transactionid, bankaccount, amount, content, orderId, transType, raw }
 function processPayment(code, p) {
   return db.runWith(code, () => {
-    const txnId = str(p.transactionid, 80) || 'AUTO-' + Date.now();
+    // Không có mã giao dịch ngân hàng thì không chống trùng được: chỉ lưu để đối soát, không xác nhận hóa đơn (ERR-02)
+    const txnId = str(p.transactionid, 80);
+    if (!txnId) return { ref: '', message: 'Thiếu mã giao dịch ngân hàng, không ghi nhận', paid: false };
     const orderId = str(p.orderId, 20) || str(p.content, 23);
     const amount = round(p.amount);
     const bank = str(p.bankaccount, 40);
@@ -103,8 +105,9 @@ function processPayment(code, p) {
       const m = String(orderId + ' ' + content).match(/P\d{10}/);
       if (m) inv = db.prepare('SELECT * FROM invoices WHERE payment_ref=? AND type=?').get(m[0], 'sale');
     }
+    // ON CONFLICT DO NOTHING + index duy nhất: hai lần gửi đồng thời cùng mã chỉ ghi được một dòng
     const ins = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`);
+      VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
 
     if (!inv) {
       ins.run(txnId, null, bank, amount, content, orderId, transType, 0, 'Không tìm thấy hóa đơn', raw);
@@ -118,10 +121,18 @@ function processPayment(code, p) {
       ins.run(txnId, inv.id, bank, amount, content, orderId, transType, 0, `Số tiền không khớp (nhận ${amount}, cần ${inv.total})`, raw);
       return { ref: orderId, message: `Số tiền không khớp (nhận ${amount}, cần ${inv.total})`, paid: false, mismatch: true };
     }
-    db.prepare("UPDATE invoices SET status='paid', paid_amount=total, change_amount=0 WHERE id=?").run(inv.id);
-    const hasPay = db.prepare('SELECT COUNT(*) c FROM invoice_payments WHERE invoice_id=?').get(inv.id).c;
-    if (!hasPay) db.prepare('INSERT INTO invoice_payments(invoice_id,method,amount,note) VALUES (?,?,?,?)').run(inv.id, 'transfer', inv.total, 'VietQR ' + txnId);
-    ins.run(txnId, inv.id, bank, amount, content, orderId, transType, 1, 'Đã thanh toán', raw);
+    // Ghi giao dịch trước; mã đã có (gửi lặp) thì dừng, không xác nhận hóa đơn lần hai. Cả khối trong một transaction.
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (!ins.run(txnId, inv.id, bank, amount, content, orderId, transType, 1, 'Đã thanh toán', raw).changes) {
+        db.exec('ROLLBACK');
+        return { ref: orderId, message: 'Giao dịch đã xử lý trước đó', paid: true };
+      }
+      db.prepare("UPDATE invoices SET status='paid', paid_amount=total, change_amount=0 WHERE id=?").run(inv.id);
+      const hasPay = db.prepare('SELECT COUNT(*) c FROM invoice_payments WHERE invoice_id=?').get(inv.id).c;
+      if (!hasPay) db.prepare('INSERT INTO invoice_payments(invoice_id,method,amount,note) VALUES (?,?,?,?)').run(inv.id, 'transfer', inv.total, 'VietQR ' + txnId);
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
     return { ref: orderId, message: 'Đã ghi nhận thanh toán', paid: true };
   });
 }
@@ -285,7 +296,7 @@ function txList(req, paged) {
 
   const qrOrders = getQrOrders(req.tenant.code, from, to);
   const txns = db.prepare(`SELECT transactionid, invoice_id, bank_account, amount, content, order_id, trans_type, matched, note, created_at
-    FROM vietqr_transactions WHERE date(created_at)>=date(?) AND date(created_at)<=date(?) ORDER BY id DESC LIMIT 3000`).all(from, to);
+    FROM vietqr_transactions WHERE dup_of IS NULL AND date(created_at)>=date(?) AND date(created_at)<=date(?) ORDER BY id DESC LIMIT 3000`).all(from, to);
 
   const ids = [...new Set([...qrOrders.map((o) => o.invoice_id), ...txns.map((t) => t.invoice_id)].filter(Boolean))];
   const codeMap = new Map();

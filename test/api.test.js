@@ -292,6 +292,17 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const syncRouteG = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 1000, content: isoInv.data.payment_ref, orderId: isoInv.data.payment_ref, transactionid: 'ROUTE-1G', transType: 'C' }) })).json();
   const isoStatusG = await (await req('iso', '/invoices/' + isoInv.data.id + '/payment-status')).json();
   ok('webhook routes by bank account (platform token)', syncRouteG.error === false && isoStatusG.data.paid === true);
+  // GĐ3.4 (ERR-02): cùng mã giao dịch gửi đồng thời chỉ ghi một dòng, hóa đơn chỉ có một lần thanh toán
+  const dupInv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Dup', price: 3000, qty: 1 }], payment_method: 'transfer' } })).json();
+  const dupBody = JSON.stringify({ bankaccount: 'BANKISO', amount: 3000, content: dupInv.data.payment_ref, orderId: dupInv.data.payment_ref, transactionid: 'DUP-RACE', transType: 'C' });
+  await Promise.all([1, 2, 3, 4].map(() => fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: dupBody })));
+  const dupTx = (await (await req('iso', '/reports/vietqr?from=2000-01-01&to=2999-12-31&q=DUP-RACE')).json()).data;
+  ok('ERR-02: concurrent duplicate webhook stored once', dupTx.items.filter((x) => x.transactionid === 'DUP-RACE').length === 1);
+  const dupPays = (await (await req('iso', '/invoices/' + dupInv.data.id)).json()).data.payments || [];
+  ok('ERR-02: invoice paid once', dupPays.length === 1);
+  const noIdInv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'NoId', price: 4000, qty: 1 }], payment_method: 'transfer' } })).json();
+  await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 4000, content: noIdInv.data.payment_ref, orderId: noIdInv.data.payment_ref, transType: 'C' }) });
+  ok('ERR-02: webhook without transactionid does not mark invoice paid', (await (await req('iso', '/invoices/' + noIdInv.data.id + '/payment-status')).json()).data.paid === false);
 
   // Định tuyến theo orderId (bản đồ QR) khi tiền về một tài khoản chung
   await req('iso', '/settings', { method: 'PUT', body: { vqr_enabled: '1', vqr_env: 'mock', bank_account: 'BANKISO' } });
@@ -600,9 +611,10 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const sumRes = await req('c-community_leader', '/community/summary?from=' + day + '&to=' + day);
   const summ = (await sumRes.json()).data;
   ok('BR-09: leader gets community summary', sumRes.status === 200 && summ.sellers === 2 && summ.community_id === com.data.id);
-  // Thôn A: seller-a (1 hóa đơn 10.000) + iso-shop đã gia nhập (3 hóa đơn 1.000 + 2.000 + 100). Hóa đơn chờ VietQR không tính.
+  // Thôn A: seller-a (1 hóa đơn 10.000) + iso-shop đã gia nhập (4 hóa đơn 1.000 + 2.000 + 3.000 + 100, hóa đơn 3.000 từ test ERR-02).
+  // Hóa đơn chờ VietQR không tính.
   ok('BR-07: converted = sellers with a paid sale', summ.converted_sellers === 2);
-  ok('summary counts only own community', summ.transactions === 4 && summ.amount === 13100);
+  ok('summary counts only own community', summ.transactions === 5 && summ.amount === 16100, JSON.stringify([summ.transactions, summ.amount]));
   ok('BR-09: summary has no per-seller data', !/seller-a|iso-shop|Người bán|Quán A/.test(JSON.stringify(summ)) && Object.values(summ).every((v) => typeof v !== 'object'));
   ok('summary rejects inverted range', (await req('c-community_leader', '/community/summary?from=' + day + '&to=2000-01-01')).status === 400);
   ok('ERR-08: seller owner cannot read community summary', (await req('sel', '/community/summary')).status === 403);
