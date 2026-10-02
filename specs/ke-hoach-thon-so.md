@@ -66,6 +66,8 @@ Kiểm thử: AC-06-1, AC-07-1, AC-07-2, AC-08-1, AC-09-1, ERR-05 (thiếu chứ
 
 ## Giai đoạn 3 — Phân loại giao dịch và bất biến (FR-08, FR-09, SEC-05, ERR-01 → ERR-03)
 
+**Đã làm (SKHGDT-3238, 2026-10-02).** Thiết kế và quyết định: `specs/adr/0005-doi-soat-va-bat-bien-giao-dich.md`. Thêm 3.0 vá token webhook chéo tenant, phát hiện khi rà soát GĐ2.
+
 | # | Việc | Chi tiết | Cỡ |
 | --- | --- | --- | --- |
 | 3.1 | Trường `category` cho giao dịch | `sale` / `fund` / `donation`; suy ra từ tenant và quỹ nhận; không tự gán khi không chắc | S |
