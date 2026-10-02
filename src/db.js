@@ -409,14 +409,13 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     CREATE TRIGGER IF NOT EXISTS trg_fund_recon_no_delete BEFORE DELETE ON fund_reconciliations
       BEGIN SELECT RAISE(ABORT, 'Biên bản đối soát không xóa được (BR-04)'); END;`);
   // GĐ3.1 (FR-08, BR-01): mỗi giao dịch thuộc đúng một loại. Suy ra lúc ghi; không chắc thì 'unclassified' (ERR-03).
-  ensureColumn('vietqr_transactions', 'category', "TEXT DEFAULT 'unclassified' CHECK (category IN ('sale','fund','donation','other','refund','unclassified'))");
+  // ADD COLUMN ... DEFAULT gán 'unclassified' cho mọi dòng cũ, nên phải suy loại ngay lúc thêm cột (chỉ chạy một lần):
+  // khớp hóa đơn -> sale, tiền ra -> refund, còn lại giữ 'unclassified' chờ phân loại.
+  ensureColumnWithDefault('vietqr_transactions', 'category',
+    "TEXT DEFAULT 'unclassified' CHECK (category IN ('sale','fund','donation','other','refund','unclassified'))",
+    "CASE WHEN trans_type='D' THEN 'refund' WHEN matched=1 AND invoice_id IS NOT NULL THEN 'sale' ELSE 'unclassified' END");
   ensureColumn('vietqr_transactions', 'classified_by', 'TEXT');
   ensureColumn('vietqr_transactions', 'classified_at', 'TEXT');
-  // GĐ3.7 (AC-01-3): thời điểm ngân hàng ghi nhận, nếu webhook có gửi. Chưa có thì độ trễ không đo được.
-  ensureColumn('vietqr_transactions', 'bank_time', 'TEXT');
-  // Dữ liệu cũ: khớp hóa đơn -> sale, tiền ra -> refund, còn lại chờ phân loại
-  conn.exec(`UPDATE vietqr_transactions SET category = CASE WHEN trans_type='D' THEN 'refund' WHEN matched=1 AND invoice_id IS NOT NULL THEN 'sale' ELSE 'unclassified' END
-    WHERE category IS NULL`);
   conn.exec(`UPDATE vietqr_transactions SET dup_of = (SELECT MIN(v2.id) FROM vietqr_transactions v2 WHERE v2.transactionid = vietqr_transactions.transactionid)
     WHERE dup_of IS NULL AND transactionid IS NOT NULL AND transactionid <> ''
       AND id > (SELECT MIN(v2.id) FROM vietqr_transactions v2 WHERE v2.transactionid = vietqr_transactions.transactionid)`);
