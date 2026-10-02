@@ -8,7 +8,7 @@ const db = require('../db');
 const { ok, fail, wrap, str } = require('../lib/util');
 const { hashPassword } = require('../lib/auth');
 const rbac = require('../lib/rbac');
-const { runChecks, openAlerts } = require('../lib/checks');
+const { runChecks, openAlerts, latency } = require('../lib/checks');
 const { isPlatform, can, inPlatformScope, platformAuthorize } = require('../middleware');
 
 const router = express.Router();
@@ -289,6 +289,13 @@ router.get('/stats', need('reports.view'), wrap((req, res) => {
 router.get('/alerts', need('reports.view'), wrap((req, res) => {
   const codes = control.prepare(`SELECT code FROM tenants t WHERE 1=1${scopeSql(req, 't.community_id')}`).all().map((t) => t.code);
   ok(res, openAlerts(codes));
+}));
+router.get('/latency', need('reports.view'), wrap((req, res) => {
+  const day = new Date().toISOString().slice(0, 10);
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '') ? req.query.from : day;
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || '') ? req.query.to : from;
+  const codes = control.prepare(`SELECT code FROM tenants t WHERE 1=1${scopeSql(req, 't.community_id')}`).all().map((t) => t.code);
+  ok(res, { from, to, ...latency(codes, from, to) });
 }));
 router.post('/alerts/run', need('tenants.manage'), wrap((req, res) => {
   const n = runChecks();

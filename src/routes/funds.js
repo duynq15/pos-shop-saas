@@ -15,6 +15,7 @@ const { requirePerm, can } = require('../middleware');
 const QRCode = require('qrcode');
 const { buildVietQR, removeVietnamese } = require('../lib/vietqr');
 const { sendXlsx } = require('../lib/xlsx');
+const { bankTime } = require('../lib/vqr-time');
 
 const router = express.Router();
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -436,10 +437,10 @@ function processFundPayment(code, fundId, p) {
       return { ref: '', message: 'Giao dịch đã xử lý trước đó', paid: true };
     }
     const f = getFund(fundId);
-    const insRaw = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json,category)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
+    const insRaw = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json,category,bank_time)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
     const insTxn = { run: (id, invId, bk, amt, ct, oid, tt, matched, note, rj) =>
-      insRaw.run(id, invId, bk, amt, ct, oid, tt, matched, note, rj, tt === 'D' ? 'refund' : matched && f ? (f.kind === 'donation' ? 'donation' : 'fund') : 'unclassified') };
+      insRaw.run(id, invId, bk, amt, ct, oid, tt, matched, note, rj, tt === 'D' ? 'refund' : matched && f ? (f.kind === 'donation' ? 'donation' : 'fund') : 'unclassified', bankTime(p.raw)) };
     if (!f || f.status !== 'active') {
       insTxn.run(txnId, null, bank, amount, content, '', transType, 0, 'Quỹ không hoạt động', raw);
       return { ref: '', message: 'Quỹ không hoạt động', paid: false };

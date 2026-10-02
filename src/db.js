@@ -412,6 +412,8 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   ensureColumn('vietqr_transactions', 'category', "TEXT DEFAULT 'unclassified' CHECK (category IN ('sale','fund','donation','other','refund','unclassified'))");
   ensureColumn('vietqr_transactions', 'classified_by', 'TEXT');
   ensureColumn('vietqr_transactions', 'classified_at', 'TEXT');
+  // GĐ3.7 (AC-01-3): thời điểm ngân hàng ghi nhận, nếu webhook có gửi. Chưa có thì độ trễ không đo được.
+  ensureColumn('vietqr_transactions', 'bank_time', 'TEXT');
   // Dữ liệu cũ: khớp hóa đơn -> sale, tiền ra -> refund, còn lại chờ phân loại
   conn.exec(`UPDATE vietqr_transactions SET category = CASE WHEN trans_type='D' THEN 'refund' WHEN matched=1 AND invoice_id IS NOT NULL THEN 'sale' ELSE 'unclassified' END
     WHERE category IS NULL`);

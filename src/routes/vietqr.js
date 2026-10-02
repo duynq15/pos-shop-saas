@@ -8,6 +8,7 @@ const { ok, fail, wrap, str, round } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
 const { requirePerm, can } = require('../middleware');
 const { openAlerts } = require('../lib/checks');
+const { bankTime } = require('../lib/vqr-time');
 const { accountConflict, CONFLICT_MSG } = require('../lib/community');
 const { generateQR, getToken, bases, testCallbackUrl } = require('../payments/vietqr');
 const funds = require('./funds');
@@ -107,11 +108,11 @@ function processPayment(code, p) {
       if (m) inv = db.prepare('SELECT * FROM invoices WHERE payment_ref=? AND type=?').get(m[0], 'sale');
     }
     // ON CONFLICT DO NOTHING + index duy nhất: hai lần gửi đồng thời cùng mã chỉ ghi được một dòng
-    const insRaw = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json,category)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
+    const insRaw = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json,category,bank_time)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
     // Loại suy từ kết quả khớp: chỉ 'sale' khi đã gắn hóa đơn và khớp; tiền ra là 'refund'; còn lại chờ phân loại
     const ins = { run: (id, invId, bk, amt, ct, oid, tt, matched, note, rj) =>
-      insRaw.run(id, invId, bk, amt, ct, oid, tt, matched, note, rj, tt === 'D' ? 'refund' : matched ? 'sale' : 'unclassified') };
+      insRaw.run(id, invId, bk, amt, ct, oid, tt, matched, note, rj, tt === 'D' ? 'refund' : matched ? 'sale' : 'unclassified', bankTime(p.raw)) };
 
     if (!inv) {
       ins.run(txnId, null, bank, amount, content, orderId, transType, 0, 'Không tìm thấy hóa đơn', raw);

@@ -82,4 +82,23 @@ const openAlerts = (codes) => (codes.length
   ? control.prepare(`SELECT * FROM alerts WHERE resolved_at IS NULL AND tenant_code IN (${codes.map(() => '?').join(',')}) ORDER BY id DESC`).all(...codes)
   : []);
 
-module.exports = { runChecks, findings, openAlerts };
+// Độ trễ ghi nhận (GĐ3.7, AC-01-3): từ thời điểm ngân hàng ghi nhận đến lúc hệ thống nhận webhook.
+// Chỉ tính giao dịch có bank_time. Mục tiêu đề xuất: 95% trong 60 giây; quá 15 phút coi là sự cố (ERR-10).
+function latency(codes, from, to) {
+  const secs = [];
+  for (const code of codes) {
+    try {
+      db.runWith(code, (c) => {
+        for (const r of c.prepare(`SELECT (julianday(created_at) - julianday(bank_time)) * 86400 s FROM vietqr_transactions
+          WHERE bank_time IS NOT NULL AND dup_of IS NULL AND date(created_at)>=date(?) AND date(created_at)<=date(?)`).all(from, to)) secs.push(Math.max(0, r.s));
+      });
+    } catch { /* tenant chưa có bảng: bỏ qua */ }
+  }
+  if (!secs.length) return { measured: 0, note: 'Chưa có giao dịch nào gửi kèm thời điểm ngân hàng ghi nhận' };
+  secs.sort((a, b) => a - b);
+  const pct = (p) => Math.round(secs[Math.min(secs.length - 1, Math.ceil(secs.length * p) - 1)]);
+  return { measured: secs.length, p50: pct(0.5), p95: pct(0.95), within_60s: +(secs.filter((x) => x <= 60).length / secs.length * 100).toFixed(1),
+    over_15m: secs.filter((x) => x > 900).length };
+}
+
+module.exports = { runChecks, findings, openAlerts, latency };

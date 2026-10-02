@@ -383,6 +383,15 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const rootJ = async (u, o) => (await req('root', u, o)).json();
   ok('alerts: tenant endpoint for owner', (await (await req('iso', '/alerts')).json()).ok === true);
   ok('alerts: platform endpoint + manual run', (await rootJ('/platform/alerts/run', { method: 'POST' })).ok && Array.isArray((await rootJ('/platform/alerts')).data));
+  {
+    const lat0 = await rootJ('/platform/latency');
+    ok('latency: no bank_time yet -> nothing measured', lat0.ok && lat0.data.measured === 0);
+    const inv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Lat', price: 1500, qty: 1 }], payment_method: 'transfer' } })).json();
+    const sent = new Date(Date.now() - 42000).toISOString();
+    await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 1500, content: inv.data.payment_ref, orderId: inv.data.payment_ref, transactionid: 'LAT-1', transType: 'C', transactiontime: sent }) });
+    const lat = await rootJ('/platform/latency');
+    ok('AC-01-3: latency measured from bank time', lat.data.measured === 1 && lat.data.p95 >= 40 && lat.data.p95 <= 60 && lat.data.within_60s === 100, JSON.stringify(lat.data));
+  }
   const com = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Thôn A', type: 'village', area: 'Xã X' } });
   ok('community create (type village)', com.ok && com.data.type === 'village' && com.data.status === 'active');
   ok('community dup code rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Trùng', type: 'village' } })).ok);
@@ -658,10 +667,10 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const sumRes = await req('c-community_leader', '/community/summary?from=' + day + '&to=' + day);
   const summ = (await sumRes.json()).data;
   ok('BR-09: leader gets community summary', sumRes.status === 200 && summ.sellers === 2 && summ.community_id === com.data.id);
-  // Thôn A: seller-a (1 hóa đơn 10.000) + iso-shop đã gia nhập (5 hóa đơn 1.000 + 2.000 + 3.000 + 8.800 + 100;
-  // 3.000 từ test ERR-02, 8.800 từ test hàng chờ phân loại). Hóa đơn chờ VietQR không tính.
+  // Thôn A: seller-a (1 hóa đơn 10.000) + iso-shop đã gia nhập (6 hóa đơn 1.000 + 2.000 + 3.000 + 8.800 + 1.500 + 100;
+  // 3.000 từ test ERR-02, 8.800 từ test hàng chờ phân loại, 1.500 từ test độ trễ). Hóa đơn chờ VietQR không tính.
   ok('BR-07: converted = sellers with a paid sale', summ.converted_sellers === 2);
-  ok('summary counts only own community', summ.transactions === 6 && summ.amount === 24900, JSON.stringify([summ.transactions, summ.amount]));
+  ok('summary counts only own community', summ.transactions === 7 && summ.amount === 26400, JSON.stringify([summ.transactions, summ.amount]));
   ok('BR-09: summary has no per-seller data', !/seller-a|iso-shop|Người bán|Quán A/.test(JSON.stringify(summ)) && Object.values(summ).every((v) => typeof v !== 'object'));
   ok('summary rejects inverted range', (await req('c-community_leader', '/community/summary?from=' + day + '&to=2000-01-01')).status === 400);
   ok('ERR-08: seller owner cannot read community summary', (await req('sel', '/community/summary')).status === 403);
