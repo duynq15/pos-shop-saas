@@ -1,6 +1,6 @@
 // Màn hình sổ quỹ (GĐ2.8): chọn quỹ, số liệu nhanh, việc cần làm, sổ thu chi, báo cáo kỳ.
 // Bố cục theo việc hằng ngày của thủ quỹ: thu tiền là thao tác chính; duyệt chi gom vào "Việc cần làm".
-import { $, esc, nf, money, today, monthStart, modal, closeModal, toast, printHTML, bankField, bankOf } from '../util.js';
+import { $, esc, nf, money, today, monthStart, modal, closeModal, toast, printHTML, bankField, bankOf, renderAlerts } from '../util.js';
 import { api } from '../store.js';
 import { auth, can } from '../auth.js';
 import { icon } from '../icons.js';
@@ -49,6 +49,7 @@ export default {
     el.innerHTML = `
 <div class="view-head"><div><h1>Sổ quỹ</h1><div class="sub">Quỹ chung và công đức của cộng đồng</div></div>
   <button class="btn hidden" id="fd-new-fund">+ Quỹ mới</button></div>
+<div id="fd-alerts"></div>
 <div class="fd-chips" id="fd-tabs" role="tablist" aria-label="Chọn quỹ"></div>
 <div id="fd-body"><div class="card fd-empty">Đang tải…</div></div>`;
     $('#fd-new-fund').onclick = () => openFundForm(null);
@@ -58,7 +59,7 @@ export default {
     };
   },
 
-  async show() { await loadFunds(); },
+  async show() { await loadFunds(); renderAlerts($('#fd-alerts'), api); },
 };
 
 async function loadFunds() {

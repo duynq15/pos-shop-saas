@@ -1,4 +1,4 @@
-import { $, esc, num, money, today, addDays, monthStart, modal, closeModal, toast } from '../util.js';
+import { $, esc, num, money, today, addDays, monthStart, modal, closeModal, toast, renderAlerts } from '../util.js';
 import { api, state } from '../store.js';
 import { can } from '../auth.js';
 import { icon } from '../icons.js';
@@ -57,6 +57,7 @@ export default {
   </div>
 </div>
 
+<div id="vqt-alerts"></div>
 <div class="stats" id="vqt-stats"></div>
 
 <div class="tabs" id="vqt-tabs"></div>
@@ -106,7 +107,7 @@ export default {
     el.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'vqt-q') { V.q = e.target.value.trim(); V.page = 1; load(); } });
   },
 
-  show() { setPreset(V.preset || 'today'); load(); },
+  show() { setPreset(V.preset || 'today'); load(); renderAlerts($('#vqt-alerts'), api); },
 };
 
 function qs(paged) {

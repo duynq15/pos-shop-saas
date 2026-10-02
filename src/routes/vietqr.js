@@ -6,7 +6,8 @@ const db = require('../db');
 const { control, audit, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders } = require('../control');
 const { ok, fail, wrap, str, round } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
-const { requirePerm } = require('../middleware');
+const { requirePerm, can } = require('../middleware');
+const { openAlerts } = require('../lib/checks');
 const { accountConflict, CONFLICT_MSG } = require('../lib/community');
 const { generateQR, getToken, bases, testCallbackUrl } = require('../payments/vietqr');
 const funds = require('./funds');
@@ -438,5 +439,9 @@ router.post('/vietqr/transactions/:id/classify', classifyPerm, wrap((req, res) =
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   ok(res, getTxn(t.id));
 }));
+
+// Cảnh báo tự kiểm của tenant (GĐ3.5): chủ / quản lý (report.view) và thủ quỹ (fund.view) xem
+router.get('/alerts', (req, res, next) => (can(req, 'report.view') || can(req, 'fund.view') ? next() : fail(res, 'Không có quyền', 403)),
+  wrap((req, res) => ok(res, openAlerts([req.tenant.code]))));
 
 module.exports = { router, webhook, processPayment };

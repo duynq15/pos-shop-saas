@@ -381,6 +381,8 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
 
   // ---------- Cộng đồng (GĐ1.1–1.2, NFR-05) + chặn tài khoản chung (GĐ0.2 — BR-02, FR-05, SEC-01) ----------
   const rootJ = async (u, o) => (await req('root', u, o)).json();
+  ok('alerts: tenant endpoint for owner', (await (await req('iso', '/alerts')).json()).ok === true);
+  ok('alerts: platform endpoint + manual run', (await rootJ('/platform/alerts/run', { method: 'POST' })).ok && Array.isArray((await rootJ('/platform/alerts')).data));
   const com = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Thôn A', type: 'village', area: 'Xã X' } });
   ok('community create (type village)', com.ok && com.data.type === 'village' && com.data.status === 'active');
   ok('community dup code rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Trùng', type: 'village' } })).ok);

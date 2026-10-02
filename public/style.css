@@ -288,6 +288,11 @@ table.grid{width:100%;border-collapse:collapse;min-width:560px}
 }
 
 /* ===================== Print ===================== */
+.alert-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;padding:10px 14px;margin-bottom:10px;border:1px solid var(--warn-line);border-left:3px solid var(--warn);border-radius:var(--radius);background:var(--warn-soft);color:var(--text);font-size:13.5px}
+.alert-bar b{color:var(--warn)}
+.alert-bar.duplicate_txn,.alert-bar.webhook_silent{border-color:var(--danger-line);border-left-color:var(--danger);background:var(--danger-soft)}
+.alert-bar.duplicate_txn b,.alert-bar.webhook_silent b{color:var(--danger)}
+
 /* ===================== Ô chọn có tìm kiếm (combobox) ===================== */
 .combo{position:relative;margin-top:6px}
 label.fld .combo .field{margin-top:0}
