@@ -503,6 +503,21 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('closed fund takes no entries', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).ok);
   await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'active' } });
 
+  // ---------- Ca biên và tấn công thử (rà soát GĐ1–2) ----------
+  ok('amount over 100 billion rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1e20 } })).ok);
+  const badJson = await fetch(B + '/funds/' + fid + '/entries', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: jars['c-treasurer'] }, body: '{bad json' });
+  ok('malformed JSON -> 400, not 500', badJson.status === 400);
+  {
+    await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 100000 } });
+    const bal = (await cj('c-treasurer', '/funds/' + fid)).data.balance;
+    const mk = async () => { const o = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: Math.ceil(bal * 0.6), note: 'race', attachment: receipt } }); await cj('c-treasurer', '/fund-entries/' + o.data.id + '/submit', { method: 'POST' }); return o.data.id; };
+    const [x1, x2] = [await mk(), await mk()];
+    const res = await Promise.all([x1, x2].map((id) => cj('c-approver', '/fund-entries/' + id + '/approve', { method: 'POST' })));
+    ok('concurrent approvals cannot overdraw', res.filter((r) => r.ok).length === 1 && (await cj('c-treasurer', '/funds/' + fid)).data.balance >= 0);
+    const loser = res[0].ok ? x2 : x1;
+    await cj('c-approver', '/fund-entries/' + loser + '/reject', { method: 'POST', body: { reason: 'race test' } });
+  }
+
   // ---------- Phạm vi thủ quỹ (BR-08, FR-02) ----------
   await req('cadm', '/users', { method: 'POST', body: { username: 'qa-treasurer2', password: '123456', role: 'treasurer' } });
   await req('c-treasurer2', '/auth/login', { method: 'POST', body: { username: 'qa-treasurer2', password: '123456' } });
@@ -536,6 +551,8 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('fund balance increases from webhook', (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
   const syncFundAgain = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
   ok('webhook fund payment idempotent', syncFundAgain.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
+  const syncNoId = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 7000, content: 'x', transType: 'C' }) })).json();
+  ok('webhook without transactionid not booked', /Thiếu mã/.test(syncNoId.toastMessage) && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
   ok('BR-02: shop cannot take a fund account', !(await api('/settings', { method: 'PUT', body: { bank_account: 'QUY CHUNG 01' } })).ok);
   const syncNeg = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: -5000, content: 'x', transType: 'C', transactionid: 'FUND-TXN-NEG' }) })).json();
   ok('webhook ignores non-positive amount', syncNeg.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
@@ -550,6 +567,14 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   // Người bán A có thêm một hóa đơn đã thanh toán
   const paidA = await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'Rau', price: 5000, qty: 2 }], payment_method: 'cash', paid_amount: 10000 } })).json();
   ok('seller A paid invoice', paidA.ok);
+  // AC-03-3: người bán A không thấy dữ liệu của người bán B, kể cả đoán id
+  const listA = await (await req('sel', '/invoices')).json();
+  const listB = await (await req('selb', '/invoices')).json();
+  const idB = listB.data.items ? listB.data.items[0].id : listB.data[0].id;
+  ok('AC-03-3: seller A list has none of B', !JSON.stringify(listA).includes('777000') && !JSON.stringify(listA).includes('Gạo'));
+  const peek = await req('sel', '/invoices/' + idB);
+  ok('AC-03-3: seller A cannot open B invoice by id', !(await peek.text()).includes('Gạo'));
+  ok('AC-03-3: seller A reports exclude B', !JSON.stringify(await (await req('sel', '/reports/summary?from=2000-01-01&to=2999-12-31')).json()).includes('777000'));
   const sumRes = await req('c-community_leader', '/community/summary?from=' + day + '&to=' + day);
   const summ = (await sumRes.json()).data;
   ok('BR-09: leader gets community summary', sumRes.status === 200 && summ.sellers === 2 && summ.community_id === com.data.id);

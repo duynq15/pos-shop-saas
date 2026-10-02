@@ -19,6 +19,9 @@ const { sendXlsx } = require('../lib/xlsx');
 const router = express.Router();
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const PREFIX = { in: 'PT', out: 'PC', adjust: 'DC' };
+// Trần mỗi bút toán: 100 tỷ đồng. Giữ tổng trong vùng số nguyên an toàn của JS và SQLite, chặn số gõ nhầm.
+const MAX_AMOUNT = 100_000_000_000;
+const amountOk = (n, signedOk) => Number.isSafeInteger(n) && Math.abs(n) <= MAX_AMOUNT && (signedOk ? n !== 0 : n > 0);
 
 // Mọi route sổ quỹ chỉ cho tenant cộng đồng (trước đây /fund-entries lọt khỏi chốt này).
 router.use(['/funds', '/fund-entries', '/fund-treasurers'], (req, res, next) => {
@@ -185,7 +188,7 @@ router.post('/funds/:id/qr', requirePerm('fund.entry'), wrap(async (req, res) =>
   if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
   if (f.status !== 'active') bad('Quỹ đã đóng');
   const amount = int((req.body || {}).amount);
-  if (amount <= 0) bad('Số tiền không hợp lệ');
+  if (!amountOk(amount)) bad('Số tiền không hợp lệ (tối đa 100 tỷ đồng)');
   ok(res, { ...(await fundQr(f, amount)), amount });
 }));
 
@@ -212,7 +215,7 @@ router.post('/funds/:id/entries', requirePerm('fund.entry'), wrap((req, res) => 
   const type = b.type;
   if (!PREFIX[type]) bad('Loại bút toán không hợp lệ');
   const amount = int(b.amount);
-  if (type === 'adjust' ? amount === 0 : amount <= 0) bad('Số tiền không hợp lệ');
+  if (!amountOk(amount, type === 'adjust')) bad('Số tiền không hợp lệ (tối đa 100 tỷ đồng)');
   const source = type === 'in' ? b.source || 'cash' : 'cash';
   if (!['cash', 'manual'].includes(source)) bad('Nguồn thu không hợp lệ');
   const note = str(b.note, 500) || null;
@@ -268,7 +271,7 @@ router.patch('/fund-entries/:id', requirePerm('fund.entry'), wrap((req, res) => 
   if (e.created_by !== req.user.id) bad('Chỉ người lập được sửa phiếu nháp');
   const b = req.body || {};
   const amount = b.amount !== undefined ? int(b.amount) : e.amount;
-  if (e.type === 'adjust' ? amount === 0 : amount <= 0) bad('Số tiền không hợp lệ');
+  if (!amountOk(amount, e.type === 'adjust')) bad('Số tiền không hợp lệ (tối đa 100 tỷ đồng)');
   const note = b.note !== undefined ? str(b.note, 500) || null : e.note;
   if (e.type === 'adjust' && !note) bad('Điều chỉnh phải ghi lý do');
   const attachment = b.attachment ? saveAttachment(b.attachment, e.code) : e.attachment;
@@ -370,7 +373,10 @@ const resolveFundByBank = (account) => fundByAccount(account);
 // khớp nguyên tắc đã chốt ở GĐ2.1: tiền đã về quỹ thì ghi nhận luôn, không qua duyệt.
 function processFundPayment(code, fundId, p) {
   return db.runWith(code, () => {
-    const txnId = str(p.transactionid, 80) || 'AUTO-' + Date.now();
+    // Webhook là dữ liệu không tin cậy: không có mã giao dịch ngân hàng thì không ghi sổ,
+    // vì không chống được ghi trùng khi ngân hàng gửi lại.
+    const txnId = str(p.transactionid, 80);
+    if (!txnId) return { ref: '', message: 'Thiếu mã giao dịch ngân hàng, không ghi sổ', paid: false };
     const amount = round(p.amount);
     const bank = str(p.bankaccount, 40);
     const content = str(p.content, 60);
@@ -386,7 +392,7 @@ function processFundPayment(code, fundId, p) {
       insTxn.run(txnId, null, bank, amount, content, '', transType, 0, 'Quỹ không hoạt động', raw);
       return { ref: '', message: 'Quỹ không hoạt động', paid: false };
     }
-    if (transType !== 'C' || amount <= 0) {
+    if (transType !== 'C' || !amountOk(amount)) {
       insTxn.run(txnId, null, bank, amount, content, '', transType, 0, 'Không phải giao dịch tiền vào', raw);
       return { ref: '', message: 'Không phải giao dịch tiền vào', paid: false };
     }

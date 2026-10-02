@@ -70,9 +70,12 @@ app.use('/api', (req, res) => fail(res, 'Không tìm thấy API: ' + req.method 
 app.use((err, req, res, next) => {
   // Response already sent: log only; passing on to finalhandler would destroy a keep-alive socket
   if (res.headersSent) return console.error(err);
+  // Lỗi của express.json (JSON hỏng, quá dung lượng) mang err.status 4xx: trả 4xx, không lộ thông báo gốc tiếng Anh
+  if (err.type === 'entity.parse.failed') return fail(res, 'Dữ liệu gửi lên không đúng định dạng JSON', 400);
+  if (err.type === 'entity.too.large') return fail(res, 'Dữ liệu gửi lên quá lớn', 413);
   const code = Number.isInteger(err.code) ? err.code : 500;
   if (code >= 500) console.error(err);
-  fail(res, err.message || 'Lỗi máy chủ', code);
+  fail(res, code >= 500 ? 'Lỗi máy chủ' : err.message, code);
 });
 
 function lanUrls() {
