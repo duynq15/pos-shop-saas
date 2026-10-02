@@ -287,13 +287,17 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const tokRoute = await (await fetch(ROOT + '/vqr/api/token_generate', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('shopA:secretA').toString('base64') } })).json();
   const syncRoute = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 1000, content: isoInv.data.payment_ref, orderId: isoInv.data.payment_ref, transactionid: 'ROUTE-1', transType: 'C' }) })).json();
   const isoStatus = await (await req('iso', '/invoices/' + isoInv.data.id + '/payment-status')).json();
-  ok('webhook routes by bank account (not token)', syncRoute.error === false && isoStatus.data.paid === true);
+  ok('GĐ3.0: tenant token cannot book into another tenant', syncRoute.errorReason === 'TENANT_MISMATCH' && isoStatus.data.paid === false);
+  // Token dùng chung của nền tảng vẫn định tuyến theo số tài khoản
+  const syncRouteG = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 1000, content: isoInv.data.payment_ref, orderId: isoInv.data.payment_ref, transactionid: 'ROUTE-1G', transType: 'C' }) })).json();
+  const isoStatusG = await (await req('iso', '/invoices/' + isoInv.data.id + '/payment-status')).json();
+  ok('webhook routes by bank account (platform token)', syncRouteG.error === false && isoStatusG.data.paid === true);
 
   // Định tuyến theo orderId (bản đồ QR) khi tiền về một tài khoản chung
   await req('iso', '/settings', { method: 'PUT', body: { vqr_enabled: '1', vqr_env: 'mock', bank_account: 'BANKISO' } });
   const isoInv2 = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Hàng test 2', price: 2000, qty: 1 }], payment_method: 'transfer' } })).json();
   await req('iso', '/invoices/' + isoInv2.data.id + '/vietqr', { method: 'POST' });
-  const syncRoute2 = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: 'ACCOUNT-KHAC', amount: 2000, content: isoInv2.data.payment_ref, orderId: isoInv2.data.payment_ref, transactionid: 'ROUTE-2', transType: 'C' }) })).json();
+  const syncRoute2 = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'ACCOUNT-KHAC', amount: 2000, content: isoInv2.data.payment_ref, orderId: isoInv2.data.payment_ref, transactionid: 'ROUTE-2', transType: 'C' }) })).json();
   const isoStatus2 = await (await req('iso', '/invoices/' + isoInv2.data.id + '/payment-status')).json();
   ok('webhook routes by orderId map (shared account)', syncRoute2.error === false && isoStatus2.data.paid === true);
 
@@ -562,15 +566,17 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const dynQr = await cj('c-treasurer', '/funds/' + fund2.data.id + '/qr', { method: 'POST', body: { amount: 250000 } });
   ok('dynamic fund QR carries amount', dynQr.ok && dynQr.data.amount === 250000 && dynQr.data.qrCode.includes('250000'));
   const balBefore = (await cj('cadm', '/funds/' + fund2.data.id)).data.balance;
-  const syncFund = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
+  const syncFund = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
   ok('webhook routes to fund by bank account', syncFund.error === false);
+  const syncFundShop = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 999000, content: 'gia mao', transType: 'C', transactionid: 'FUND-FORGED' }) })).json();
+  ok('GĐ3.0: shop token cannot book into a fund', syncFundShop.errorReason === 'TENANT_MISMATCH');
   ok('fund balance increases from webhook', (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
-  const syncFundAgain = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
+  const syncFundAgain = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
   ok('webhook fund payment idempotent', syncFundAgain.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
-  const syncNoId = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 7000, content: 'x', transType: 'C' }) })).json();
+  const syncNoId = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 7000, content: 'x', transType: 'C' }) })).json();
   ok('webhook without transactionid not booked', /Thiếu mã/.test(syncNoId.toastMessage) && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
   ok('BR-02: shop cannot take a fund account', !(await api('/settings', { method: 'PUT', body: { bank_account: 'QUY CHUNG 01' } })).ok);
-  const syncNeg = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: -5000, content: 'x', transType: 'C', transactionid: 'FUND-TXN-NEG' }) })).json();
+  const syncNeg = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: -5000, content: 'x', transType: 'C', transactionid: 'FUND-TXN-NEG' }) })).json();
   ok('webhook ignores non-positive amount', syncNeg.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
 
   // ---------- Phạm vi cộng đồng (GĐ1.4 — BR-07, BR-09, ERR-08) ----------

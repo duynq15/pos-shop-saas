@@ -3,7 +3,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
-const { control, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders } = require('../control');
+const { control, audit, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders } = require('../control');
 const { ok, fail, wrap, str, round } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
 const { requirePerm } = require('../middleware');
@@ -158,6 +158,14 @@ webhook.post('/bank/api/transaction-sync', wrap((req, res) => {
   const fundHit = mapped ? null : funds.resolveFundByBank(b.bankaccount);
   const code = (mapped && mapped.tenant_code) || (fundHit && fundHit.tenantCode) || resolveTenantByBank(b.bankaccount) || pl.t;
   console.log(`[vqr] sync nhận: shop=${code || '?'} orderId=${b.orderId || ''} amount=${b.amount || ''} content=${b.content || ''}${fundHit ? ' quỹ=' + fundHit.fundId : ''}`);
+  // GĐ3.0: token cấp bằng thông tin đăng nhập riêng của một tenant (pl.t) chỉ được ghi vào chính tenant đó.
+  // Trước đây định tuyến theo số tài khoản / orderId nên token của shop A ghi được tiền vào shop B hoặc quỹ.
+  // Token dùng chung của nền tảng (pl.t = null, VietQR gọi vào) vẫn định tuyến như cũ.
+  if (pl.t && code && code !== pl.t) {
+    console.warn(`[vqr] chặn ghi chéo tenant: token=${pl.t} đích=${code} txn=${str(b.transactionid, 80)}`);
+    audit({ action: 'vqr.cross_tenant_blocked', entity: 'tenant', entityId: code, detail: JSON.stringify({ token_tenant: pl.t, transactionid: str(b.transactionid, 80), amount: b.amount }), ip: req.ip });
+    return res.status(403).json({ error: true, errorReason: 'TENANT_MISMATCH', toastMessage: 'Token không thuộc tài khoản nhận tiền này', object: null });
+  }
   if (!code) return res.status(400).json({ error: true, errorReason: 'TENANT_NOT_FOUND', toastMessage: 'Không xác định được cửa hàng theo tài khoản nhận tiền', object: null });
   try {
     const r = fundHit
