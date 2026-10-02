@@ -882,6 +882,32 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
     ok('hidden category cannot be used', !(await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'R', price: 1000, qty: 1 }], payment_method: 'cash', paid_amount: 1000, item_category_id: rau.id } })).json()).ok);
     ok('approver still sees hidden with all=1', (await cj('c-approver', '/community/categories?all=1')).data.some((c) => c.id === rau.id && c.status === 'hidden'));
     ok('shop outside any community has no categories', (await api('/community/categories')).data.length === 0);
+
+    // ---------- GĐ4.2: QR tĩnh của người bán (FR-03, ERR-09) ----------
+    const qrOk = await (await req('sel', '/qr')).json();
+    ok('AC-01-1: seller static QR built on own account', qrOk.ok && qrOk.data.bank_account === 'SELLERA01' && !!qrOk.data.dataUrl, qrOk.error);
+    ok('static QR has no amount', !/54\d{2}/.test(qrOk.data.payload.split('5303704')[1].split('5802VN')[0]));
+    await req('selb', '/settings', { method: 'PUT', body: { bank_account: '' } });
+    const qrNone = await (await req('selb', '/qr')).json();
+    ok('ERR-09: no account -> no QR, clear message', !qrNone.ok && /Chưa khai số tài khoản/.test(qrNone.error));
+    await req('selb', '/settings', { method: 'PUT', body: { bank_account: 'SELB-01!!', bank_bin: '970422' } });
+    ok('ERR-09: malformed account -> no QR', !(await (await req('selb', '/qr')).json()).ok);
+    await req('selb', '/settings', { method: 'PUT', body: { bank_account: 'SELLERB01', bank_bin: 'MB' } });
+    ok('ERR-09: malformed bank BIN -> no QR', /Ngân hàng chưa chọn/.test((await (await req('selb', '/qr')).json()).error || ''));
+    await req('selb', '/settings', { method: 'PUT', body: { bank_account: 'SELLERB01', bank_bin: '970422' } });
+    // Tiền vào QR tĩnh: không có mã đối soát -> hàng chờ -> người bán xác nhận "Bán hàng" + hạng mục
+    const gtok = (await (await fetch(ROOT + '/vqr/api/token_generate', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('posshop:posshop-secret').toString('base64') } })).json()).access_token;
+    await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + gtok }, body: JSON.stringify({ bankaccount: 'SELLERA01', amount: 25000, content: 'chuyen tien rau', transType: 'C', transactionid: 'STATIC-1' }) });
+    const sq = (await (await req('sel', '/vietqr/unclassified')).json()).data.items.find((x) => x.transactionid === 'STATIC-1');
+    ok('static-QR payment queued for the seller', !!sq);
+    const before = (await (await req('sel', '/reports/summary?from=2000-01-01&to=2999-12-31')).json()).data;
+    ok('sale classification rejects foreign category', !(await (await req('sel', '/vietqr/transactions/' + sq.id + '/classify', { method: 'POST', body: { category: 'sale', item_category_id: catB.id } })).json()).ok);
+    const sc = await (await req('sel', '/vietqr/transactions/' + sq.id + '/classify', { method: 'POST', body: { category: 'sale', item_category_id: thit.id } })).json();
+    ok('classify as sale creates a paid invoice with category', sc.ok && sc.data.category === 'sale' && !!sc.data.invoice_id);
+    const scInv = (await (await req('sel', '/invoices/' + sc.data.invoice_id)).json()).data;
+    ok('created invoice: paid, transfer, right amount and label', scInv.status === 'paid' && scInv.total === 25000 && scInv.payment_method === 'transfer' && scInv.item_category_name === 'Thịt, cá tươi' && scInv.payments.length === 1);
+    const after = (await (await req('sel', '/reports/summary?from=2000-01-01&to=2999-12-31')).json()).data;
+    ok('static-QR sale counts in revenue', JSON.stringify(after) !== JSON.stringify(before));
   }
 
   for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg', '/report.html', '/report.css', '/js/report.js']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);

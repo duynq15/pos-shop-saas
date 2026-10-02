@@ -204,23 +204,35 @@ function renderPager(total, page, size) {
 /* ---------------- Phân loại giao dịch chờ (GĐ3.2 — ERR-03) ---------------- */
 async function openClassify(r) {
   if (!r) return;
-  let invoices = [];
-  try { invoices = (await api('/api/vietqr/unclassified')).invoices || []; } catch (e) { toast(e.message, true); return; }
+  let invoices = []; let cats = [];
+  try {
+    [invoices, cats] = await Promise.all([
+      api('/api/vietqr/unclassified').then((x) => x.invoices || []),
+      api('/api/community/categories').catch(() => []),
+    ]);
+  } catch (e) { toast(e.message, true); return; }
   const same = invoices.filter((i) => i.total === r.amount);
   const opts = (list) => list.map((i) => `<option value="${i.id}">${esc(i.code)} · ${money(i.total)}${i.customer_name ? ' · ' + esc(i.customer_name) : ''} · ${esc((i.created_at || '').slice(0, 16))}</option>`).join('');
+  // Mặc định: có hóa đơn cùng số tiền thì gắn hóa đơn; không thì "Bán hàng" (tiền vào QR tĩnh dán quầy, GĐ4.2)
+  const def = same.length ? 'inv' : 'sale';
   modal(`<h2>Phân loại giao dịch</h2>
     <p class="muted" style="margin:-8px 0 14px">${esc(r.ref)} · <b>${money(r.amount)}</b> · ${esc(r.time || '')}<br>Nội dung: ${esc(r.content || '—')}</p>
-    <label class="chk" style="margin-bottom:8px"><input type="radio" name="vq-k" value="inv" ${same.length ? 'checked' : ''} ${same.length ? '' : 'disabled'}>
+    <label class="chk" style="margin-bottom:8px"><input type="radio" name="vq-k" value="inv" ${def === 'inv' ? 'checked' : ''} ${same.length ? '' : 'disabled'}>
       Gắn với hóa đơn chờ chuyển khoản ${same.length ? `(${same.length} hóa đơn cùng số tiền)` : '(không có hóa đơn nào cùng số tiền)'}</label>
     ${same.length ? `<label class="fld"><select class="field" id="vq-inv">${opts(same)}</select></label>` : ''}
-    <label class="chk" style="margin-bottom:8px"><input type="radio" name="vq-k" value="other" ${same.length ? '' : 'checked'}> Thu khác (không phải bán hàng)</label>
+    <label class="chk" style="margin-bottom:8px"><input type="radio" name="vq-k" value="sale" ${def === 'sale' ? 'checked' : ''}> Bán hàng (khách quét QR dán quầy)</label>
+    ${cats.length ? `<label class="fld">Hạng mục<select class="field" id="vq-cat"><option value="">Chưa gắn hạng mục</option>
+      ${cats.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>` : ''}
+    <label class="chk" style="margin-bottom:8px"><input type="radio" name="vq-k" value="other"> Thu khác (không phải bán hàng)</label>
     <label class="fld">Lý do (bắt buộc khi chọn thu khác)<input class="field" id="vq-reason" placeholder="Ví dụ: khách trả nợ cũ, chuyển nhầm"></label>
-    <p class="muted" style="font-size:12.5px">Phân loại rồi thì không đổi được. Sai thì hủy hóa đơn hoặc xử lý trả hàng như bình thường.</p>
+    <p class="muted" style="font-size:12.5px">Phân loại rồi thì không đổi được loại. Sai thì hủy hóa đơn hoặc xử lý trả hàng như bình thường.</p>
     <div class="modal-actions"><button class="btn" id="vq-cancel">Hủy</button><button class="btn primary" id="vq-ok">Phân loại</button></div>`);
   $('#vq-cancel').onclick = closeModal;
   $('#vq-ok').onclick = async () => {
     const k = document.querySelector('input[name="vq-k"]:checked')?.value;
-    const body = k === 'inv' ? { invoice_id: Number($('#vq-inv').value) } : { category: 'other', reason: $('#vq-reason').value.trim() };
+    const body = k === 'inv' ? { invoice_id: Number($('#vq-inv').value) }
+      : k === 'sale' ? { category: 'sale', item_category_id: Number($('#vq-cat')?.value) || undefined }
+        : { category: 'other', reason: $('#vq-reason').value.trim() };
     try {
       await api(`/api/vietqr/transactions/${r.id}/classify`, { method: 'POST', body });
       toast('Đã phân loại'); closeModal(); load();
