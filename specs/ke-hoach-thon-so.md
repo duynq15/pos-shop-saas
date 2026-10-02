@@ -84,6 +84,8 @@ Kiểm thử: ERR-02, ERR-03, ERR-07.
 
 ## Giai đoạn 4 — Chế độ người bán nhỏ (FR-03, FR-11, FR-16, NFR-02)
 
+**Đã làm (SKHGDT-3240, 2026-10-02).** Thiết kế và quyết định: `specs/adr/0006-che-do-nguoi-ban-nho.md`.
+
 POS hiện tại theo hóa đơn / sản phẩm / tồn kho, quá nặng với hàng quán trong thôn.
 
 | # | Việc | Chi tiết | Cỡ |
