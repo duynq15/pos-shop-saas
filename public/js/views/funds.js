@@ -132,6 +132,19 @@ function bodyTemplate(f) {
   </div>
   <div class="stats" id="fd-rp-stats"></div>
   <p class="muted fd-hint">Tồn cuối kỳ = tồn đầu kỳ + thu − chi ± điều chỉnh. Chỉ tính khoản đã ghi sổ, theo ngày ghi sổ.</p>
+  <div class="card fd-recon">
+    <h3>Đối soát sao kê ngân hàng</h3>
+    <p class="muted fd-form-hint">So tổng tiền vào trên sao kê của kỳ đang chọn với tiền vào qua ngân hàng đã ghi sổ (không tính tiền mặt).
+      Lệch thì bổ sung khoản thiếu bằng "Thu tiền" (chuyển khoản, có mã giao dịch) rồi đối soát lại.</p>
+    <div class="fd-recon-row">
+      <div><span class="muted">Hệ thống ghi nhận</span><b id="fd-rc-sys">…</b></div>
+      <label class="fld">Tổng tiền vào theo sao kê<input class="field fd-amount" id="fd-rc-stmt" inputmode="numeric" autocomplete="off" placeholder="0"></label>
+      <div><span class="muted">Chênh lệch</span><b id="fd-rc-diff">—</b></div>
+    </div>
+    <label class="fld" id="fd-rc-note-wrap" hidden>Nguyên nhân chênh lệch *<input class="field" id="fd-rc-note" placeholder="Ví dụ: thiếu khoản 20.000 ngày 01, sẽ bổ sung"></label>
+    ${can('fund.entry') ? '<div class="toolbar"><button class="btn primary" id="fd-rc-save">Lưu biên bản đối soát</button></div>' : ''}
+    <div id="fd-rc-history"></div>
+  </div>
 </section>
 ${entry ? `<div class="fd-bar"><button class="btn primary" id="fd-in-m">+ Thu tiền</button><button class="btn" id="fd-out-m">+ Phiếu chi</button></div>` : ''}`;
 }
@@ -347,7 +360,40 @@ async function loadReport(fundId) {
       ['Tồn đầu kỳ', r.opening_balance, ''], ['Thu chuyển khoản', r.income_bank, 'ok'], ['Thu tiền mặt', r.income_cash, 'ok'],
       ['Chi', r.expense, 'danger'], ['Điều chỉnh', r.adjust, ''], ['Tồn cuối kỳ', r.closing_balance, 'primary'],
     ].map(([k, v, cls]) => `<div class="stat ${cls}"><div class="k">${k}</div><div class="v">${money(v)}</div></div>`).join('');
+    await loadReconcile(fundId, from, to);
   } catch (e) { toast(e.message, true); }
+}
+
+/* ---------------- Đối soát sao kê (GĐ3.6) ---------------- */
+// Lệch khác 0 luôn là việc cần xử lý (sổ thiếu hoặc thừa so với sao kê), nên hiện màu cảnh báo chứ không xanh / đỏ.
+const diffMoney = (d) => (d === 0 ? '<span class="fd-pos">Khớp</span>' : `<b class="fd-diff">${d > 0 ? 'Sổ thiếu ' : 'Sổ thừa '}${money(Math.abs(d))}</b>`);
+async function loadReconcile(fundId, from, to) {
+  const rc = await api(`/api/funds/${fundId}/reconcile?from=${from}&to=${to}`);
+  $('#fd-rc-sys').textContent = money(rc.system_in) + ` (${rc.count} khoản)`;
+  const stmt = $('#fd-rc-stmt');
+  const update = () => {
+    const v = stmt.value.trim() ? parseMoney(stmt.value) : null;
+    const diff = v === null ? null : v - rc.system_in;
+    $('#fd-rc-diff').innerHTML = diff === null ? '—' : diffMoney(diff);
+    $('#fd-rc-note-wrap').hidden = !diff;
+  };
+  if (!stmt.dataset.bound) { bindMoney(stmt); stmt.dataset.bound = '1'; }
+  stmt.oninput = update; update();
+  const save = $('#fd-rc-save');
+  if (save) save.onclick = async () => {
+    if (!stmt.value.trim()) { toast('Nhập tổng tiền vào theo sao kê', true); stmt.focus(); return; }
+    try {
+      const r = await api(`/api/funds/${fundId}/reconciliations`, { method: 'POST', body: { from, to, statement_in: parseMoney(stmt.value), note: $('#fd-rc-note').value } });
+      toast(r.diff ? `Đã lưu biên bản, lệch ${money(r.diff)}` : 'Đã lưu biên bản: khớp');
+      stmt.value = ''; $('#fd-rc-note').value = ''; await loadReconcile(fundId, from, to);
+    } catch (e) { toast(e.message, true); }
+  };
+  $('#fd-rc-history').innerHTML = rc.history.length ? `<div class="tbl-wrap"><table class="grid"><thead><tr>
+      <th>Kỳ</th><th class="r">Sao kê</th><th class="r">Hệ thống</th><th class="r">Chênh</th><th>Ghi chú</th><th>Người lập</th></tr></thead><tbody>
+      ${rc.history.map((h) => `<tr><td class="nw">${esc(h.period_from)} → ${esc(h.period_to)}</td><td class="r nw">${money(h.statement_in)}</td>
+        <td class="r nw">${money(h.system_in)}</td><td class="r">${diffMoney(h.diff)}</td>
+        <td class="muted">${esc(h.note || '')}</td><td class="muted">${esc(h.created_by_name || '')} · ${esc((h.created_at || '').slice(0, 16))}</td></tr>`).join('')}
+    </tbody></table></div>` : '<p class="muted fd-hint">Chưa có biên bản đối soát nào.</p>';
 }
 
 function printReport(f) {

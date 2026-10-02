@@ -392,6 +392,22 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   // GĐ3.4 (ERR-02): mỗi mã giao dịch ngân hàng chỉ ghi một lần. Dòng trùng có sẵn ở DB cũ không xóa (BR-04):
   // giữ dòng đầu, các dòng sau đánh dấu dup_of = id dòng đầu và không tính vào báo cáo.
   ensureColumn('vietqr_transactions', 'dup_of', 'INTEGER');
+  // GĐ3.6 (NFR-03, ERR-01): biên bản đối soát sao kê của quỹ. So tổng tiền vào theo sao kê với tiền vào
+  // qua ngân hàng đã ghi sổ (vietqr + manual). Biên bản là hồ sơ: không sửa, không xóa.
+  conn.exec(`
+    CREATE TABLE IF NOT EXISTS fund_reconciliations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fund_id INTEGER NOT NULL REFERENCES funds(id),
+      period_from TEXT NOT NULL, period_to TEXT NOT NULL,
+      statement_in INTEGER NOT NULL, system_in INTEGER NOT NULL, diff INTEGER NOT NULL,
+      note TEXT, created_by INTEGER, created_by_name TEXT,
+      created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_fund_recon ON fund_reconciliations(fund_id, period_to);
+    CREATE TRIGGER IF NOT EXISTS trg_fund_recon_locked BEFORE UPDATE ON fund_reconciliations
+      BEGIN SELECT RAISE(ABORT, 'Biên bản đối soát không sửa được (BR-04)'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_fund_recon_no_delete BEFORE DELETE ON fund_reconciliations
+      BEGIN SELECT RAISE(ABORT, 'Biên bản đối soát không xóa được (BR-04)'); END;`);
   // GĐ3.1 (FR-08, BR-01): mỗi giao dịch thuộc đúng một loại. Suy ra lúc ghi; không chắc thì 'unclassified' (ERR-03).
   ensureColumn('vietqr_transactions', 'category', "TEXT DEFAULT 'unclassified' CHECK (category IN ('sale','fund','donation','other','refund','unclassified'))");
   ensureColumn('vietqr_transactions', 'classified_by', 'TEXT');

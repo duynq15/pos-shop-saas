@@ -22,6 +22,12 @@ db.runWith('default', (c) => {
   ok('vqr: rows inserted without category default to unclassified (ERR-03)', c.prepare("SELECT category FROM vietqr_transactions WHERE transactionid='IMM-2'").get().category === 'unclassified');
   ok('vqr: unknown category rejected', (() => { try { c.exec("UPDATE vietqr_transactions SET category='xyz' WHERE transactionid='IMM-2'"); return false; } catch { return true; } })());
 });
+db.runWith('default', (c) => {
+  c.exec("INSERT INTO funds(code,name) VALUES ('imm','Imm')");
+  c.exec("INSERT INTO fund_reconciliations(fund_id,period_from,period_to,statement_in,system_in,diff) VALUES (1,'2026-09-01','2026-09-30',100,100,0)");
+  ok('recon: edit blocked', blocked(() => c.exec('UPDATE fund_reconciliations SET diff=5')));
+  ok('recon: delete blocked', blocked(() => c.exec('DELETE FROM fund_reconciliations')));
+});
 control.prepare("INSERT INTO audit_logs(action) VALUES ('test.immut')").run();
 ok('audit: update blocked', blocked(() => control.exec("UPDATE audit_logs SET action='x' WHERE action='test.immut'")));
 ok('audit: delete blocked', blocked(() => control.exec("DELETE FROM audit_logs WHERE action='test.immut'")));

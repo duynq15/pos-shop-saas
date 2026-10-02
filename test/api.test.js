@@ -570,6 +570,20 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
     await cj('c-approver', '/fund-entries/' + loser + '/reject', { method: 'POST', body: { reason: 'race test' } });
   }
 
+  // ---------- GĐ3.6: đối soát sao kê (ERR-01) ----------
+  {
+    const d = new Date().toISOString().slice(0, 10);
+    await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 45000, source: 'manual', bank_ref: 'SK-1' } });
+    const rc = await cj('c-treasurer', '/funds/' + fid + '/reconcile?from=' + d + '&to=' + d);
+    ok('reconcile: system bank income excludes cash', rc.ok && rc.data.system_in === rc.data.entries.reduce((s, e) => s + e.amount, 0) && rc.data.entries.every((e) => e.source !== 'cash'));
+    ok('reconcile: mismatch needs a note', !(await cj('c-treasurer', '/funds/' + fid + '/reconciliations', { method: 'POST', body: { from: d, to: d, statement_in: rc.data.system_in + 20000 } })).ok);
+    const rec = await cj('c-treasurer', '/funds/' + fid + '/reconciliations', { method: 'POST', body: { from: d, to: d, statement_in: rc.data.system_in + 20000, note: 'Thiếu 1 khoản 20.000 ngày 01, bổ sung sau' } });
+    ok('reconcile: mismatch recorded with diff', rec.ok && rec.data.diff === 20000);
+    ok('reconcile: matching period needs no note', (await cj('c-treasurer', '/funds/' + fid + '/reconciliations', { method: 'POST', body: { from: d, to: d, statement_in: rc.data.system_in } })).data.diff === 0);
+    ok('reconcile: history listed, newest first', (await cj('c-community_leader', '/funds/' + fid + '/reconcile?from=' + d + '&to=' + d)).data.history[0].diff === 0);
+    ok('reconcile: leader cannot record', (await req('c-community_leader', '/funds/' + fid + '/reconciliations', { method: 'POST', body: { from: d, to: d, statement_in: 0 } })).status === 403);
+  }
+
   // ---------- Phạm vi thủ quỹ (BR-08, FR-02) ----------
   await req('cadm', '/users', { method: 'POST', body: { username: 'qa-treasurer2', password: '123456', role: 'treasurer' } });
   await req('c-treasurer2', '/auth/login', { method: 'POST', body: { username: 'qa-treasurer2', password: '123456' } });

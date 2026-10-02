@@ -375,6 +375,45 @@ router.get('/funds/:id/report/export', requirePerm('report.export'), wrap((req, 
   sendXlsx(res, `so-quy-${f.code}-${from}_${to}`, rows, { sheet: 'So quy' });
 }));
 
+/* ===================== Đối soát sao kê (GĐ3.6 — NFR-03, ERR-01) ===================== */
+// Thủ quỹ nhập tổng tiền vào theo sao kê ngân hàng của kỳ; hệ thống so với tiền vào qua ngân hàng đã ghi sổ.
+// Lệch thì bổ sung khoản thiếu bằng "Thu tiền" nguồn chuyển khoản (manual, có mã giao dịch) rồi đối soát lại.
+// ponytail: chỉ đối soát chiều tiền vào; phiếu chi chưa ghi chi bằng tiền mặt hay chuyển khoản. Thêm cột
+// phương thức chi cho fund_entries khi thôn cần đối soát cả số dư tài khoản.
+function bankIncome(fundId, from, to) {
+  if (!DAY.test(from) || !DAY.test(to) || from > to) bad('Khoảng ngày không hợp lệ');
+  const entries = db.prepare(`SELECT id, code, amount, source, bank_ref, payer_name, anonymous, note, approved_at FROM fund_entries
+    WHERE fund_id=? AND status='approved' AND type='in' AND source IN ('vietqr','manual')
+      AND date(approved_at)>=date(?) AND date(approved_at)<=date(?) ORDER BY approved_at, id`).all(fundId, from, to);
+  return { total: entries.reduce((s, e) => s + e.amount, 0), entries };
+}
+
+router.get('/funds/:id/reconcile', requirePerm('fund.view'), wrap((req, res) => {
+  const f = fundFor(req, req.params.id);
+  if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
+  const { from, to } = rangeOf(req.query);
+  const inc = bankIncome(f.id, from, to);
+  const history = db.prepare('SELECT * FROM fund_reconciliations WHERE fund_id=? ORDER BY id DESC LIMIT 24').all(f.id);
+  ok(res, { from, to, system_in: inc.total, count: inc.entries.length, entries: inc.entries, history });
+}));
+
+router.post('/funds/:id/reconciliations', requirePerm('fund.entry'), wrap((req, res) => {
+  const f = fundFor(req, req.params.id);
+  if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
+  const b = req.body || {};
+  const from = str(b.from, 10); const to = str(b.to, 10);
+  const statement = int(b.statement_in);
+  if (!Number.isSafeInteger(statement) || statement < 0 || statement > MAX_AMOUNT * 100) bad('Tổng tiền vào theo sao kê không hợp lệ');
+  const inc = bankIncome(f.id, from, to);
+  const diff = statement - inc.total;
+  const note = str(b.note, 500) || null;
+  if (diff !== 0 && !note) bad(`Lệch ${diff.toLocaleString('vi-VN')} ₫. Ghi chú nguyên nhân (ví dụ: khoản nào thiếu, sẽ bổ sung khi nào)`);
+  const r = db.prepare(`INSERT INTO fund_reconciliations(fund_id,period_from,period_to,statement_in,system_in,diff,note,created_by,created_by_name)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(f.id, from, to, statement, inc.total, diff, note, req.user.id, req.user.full_name || req.user.username);
+  log(req, 'fund.reconcile', 'fund', f.id, { from, to, statement_in: statement, system_in: inc.total, diff });
+  ok(res, db.prepare('SELECT * FROM fund_reconciliations WHERE id=?').get(r.lastInsertRowid));
+}));
+
 /* ===================== Webhook VietQR (dùng bởi src/routes/vietqr.js) ===================== */
 // Tài khoản của quỹ luôn duy nhất toàn hệ thống (BR-02), nên tài khoản đủ để xác định
 // tenant + quỹ, không cần bảng theo dõi đơn hàng như luồng hóa đơn.
