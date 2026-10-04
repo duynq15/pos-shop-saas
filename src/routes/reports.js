@@ -2,7 +2,7 @@
 
 const express = require('express');
 const db = require('../db');
-const { ok, fail, wrap, round } = require('../lib/util');
+const { ok, fail, wrap, round, today } = require('../lib/util');
 const { can, requirePerm } = require('../middleware');
 const { getQrOrders } = require('../control');
 const { sendXlsx } = require('../lib/xlsx');
@@ -11,7 +11,7 @@ const router = express.Router();
 const DATE = "date(i.created_at)";
 
 function range(q) {
-  const f = q.from || new Date().toISOString().slice(0, 10);
+  const f = q.from || today();
   const t = q.to || f;
   return { from: f, to: t };
 }

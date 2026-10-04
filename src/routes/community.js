@@ -5,7 +5,7 @@
 const express = require('express');
 const db = require('../db');
 const { control, audit } = require('../control');
-const { ok, fail, wrap, bad, str, int } = require('../lib/util');
+const { ok, fail, wrap, bad, str, int, today: todayLocal } = require('../lib/util');
 const { requirePerm, can } = require('../middleware');
 
 const router = express.Router();
@@ -36,7 +36,7 @@ router.get('/community/summary', requirePerm('community.report'), wrap((req, res
   if (!codes) return fail(res, 'Chỉ tài khoản của cộng đồng mới xem được báo cáo cộng đồng', 403);
   const cm = control.prepare('SELECT status FROM communities WHERE id=?').get(req.tenant.community_id);
   if (!cm || cm.status !== 'active') return fail(res, 'Cộng đồng đang tạm ngưng', 403);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const from = DAY.test(req.query.from || '') ? req.query.from : today;
   const to = DAY.test(req.query.to || '') ? req.query.to : from;
   if (from > to) return fail(res, 'Khoảng thời gian không hợp lệ');

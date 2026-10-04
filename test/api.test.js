@@ -12,6 +12,8 @@ const req = async (who, u, o = {}) => {
   return r;
 };
 const api = async (u, o = {}) => (await req('admin', u, o)).json();
+// Ngày hôm nay theo giờ địa phương, khớp cách server tính (không UTC)
+const localDay = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeAt(0) << 8; for (let j = 0; j < 8; j++) c = c & 0x8000 ? ((c << 1) ^ 0x1021) & 0xffff : (c << 1) & 0xffff; } return c.toString(16).toUpperCase().padStart(4, '0'); };
 (async () => {
   let lg = await req('admin', '/auth/login', { method: 'POST', body: { username: 'admin', password: 'admin123' } });
@@ -528,7 +530,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('entry without attachment 404', (await req('c-treasurer', '/fund-entries/' + cashIn.data.id + '/attachment')).status === 404);
 
   // ---------- Báo cáo kỳ (GĐ2.7 — BR-12: không chốt sổ) ----------
-  const fundDay = new Date().toISOString().slice(0, 10);
+  const fundDay = localDay();
   const rep = await cj('c-community_leader', '/funds/' + fid + '/report?from=' + fundDay + '&to=' + fundDay);
   ok('period report matches balance', rep.ok && rep.data.opening_balance === 0 && rep.data.income_cash === 600000
     && rep.data.income_bank === 0 && rep.data.expense === 200000 && rep.data.adjust === -50000 && rep.data.closing_balance === 350000);
@@ -596,7 +598,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
 
   // ---------- GĐ3.6: đối soát sao kê (ERR-01) ----------
   {
-    const d = new Date().toISOString().slice(0, 10);
+    const d = localDay();
     await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 45000, source: 'manual', bank_ref: 'SK-1' } });
     const rc = await cj('c-treasurer', '/funds/' + fid + '/reconcile?from=' + d + '&to=' + d);
     ok('reconcile: system bank income excludes cash', rc.ok && rc.data.system_in === rc.data.entries.reduce((s, e) => s + e.amount, 0) && rc.data.entries.every((e) => e.source !== 'cash'));
@@ -662,7 +664,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('classify: treasurer books queued payment into a fund', fcls.ok && fcls.data.category === 'fund' && (await cj('c-treasurer', '/funds/' + fund2.data.id)).data.balance === fbal + 60000);
 
   // ---------- Phạm vi cộng đồng (GĐ1.4 — BR-07, BR-09, ERR-08) ----------
-  const day = new Date().toISOString().slice(0, 10);
+  const day = localDay();
   // Cộng đồng B với người bán riêng: số của B không được lẫn vào A
   const comB = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-b', name: 'Thôn B', type: 'village' } });
   await rootJ('/platform/tenants', { method: 'POST', body: { code: 'seller-b', name: 'Người bán B', owner_username: 'sellerb', owner_password: '123456', kind: 'seller', community_id: comB.data.id } });

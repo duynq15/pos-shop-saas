@@ -16,7 +16,7 @@ function moneyShort(n) {
   return nf.format(n);
 }
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const iso = (d) => d.toISOString().slice(0, 10);
+const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; // giờ địa phương
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const dayLabel = (s) => { const [, m, d] = s.split('-'); return `${d}/${m}`; };
 const monthLabel = (s) => { const [y, m] = s.split('-'); return `T${Number(m)}/${y.slice(2)}`; };

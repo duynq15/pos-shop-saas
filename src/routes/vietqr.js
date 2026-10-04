@@ -4,7 +4,7 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const { control, audit, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders } = require('../control');
-const { ok, fail, wrap, str, round } = require('../lib/util');
+const { ok, fail, wrap, str, round, today } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
 const { requirePerm, can } = require('../middleware');
 const { openAlerts } = require('../lib/checks');
@@ -297,7 +297,7 @@ router.post('/vietqr/simulate', requirePerm('pos.sell'), wrap((req, res) => {
 
 /* ===================== Module: Giao dịch VietQR (hợp nhất QR đã tạo + callback) ===================== */
 function txList(req, paged) {
-  const from = str(req.query.from, 10) || new Date().toISOString().slice(0, 10);
+  const from = str(req.query.from, 10) || today();
   const to = str(req.query.to, 10) || from;
   const bank = str(req.query.bank, 40);
   const field = ['ref', 'order', 'content'].includes(req.query.field) ? req.query.field : 'ref';
