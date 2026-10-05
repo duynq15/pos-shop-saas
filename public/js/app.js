@@ -13,6 +13,7 @@ import settings from './views/settings.js';
 import { platformViews } from './views/platform.js';
 import communityView from './views/community.js';
 import fundsView from './views/funds.js';
+import quickpay from './views/quickpay.js';
 import { icon } from './icons.js';
 document.querySelectorAll('[data-icon]').forEach((el) => { el.innerHTML = icon(el.dataset.icon); });
 
@@ -24,6 +25,8 @@ const reportAnalytics = makeReportView('analytics');
 // kinds: loại tenant được thấy mục này; bỏ trống = mọi loại (GĐ1.5, NFR-05).
 const POS_KINDS = ['shop', 'seller'];
 const VIEWS = [
+  // Người bán nhỏ: màn đầu tiên là Nhận tiền nhanh (GĐ4.1); vẫn giữ đủ menu POS
+  { mod: quickpay, perm: 'pos.sell', kinds: ['seller'] },
   { mod: pos, perm: 'pos.sell', kinds: POS_KINDS },
   { mod: products, perm: 'product.view', kinds: POS_KINDS },
   { mod: inventory, perm: 'stock.view', kinds: POS_KINDS },

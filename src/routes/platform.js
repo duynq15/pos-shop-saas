@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { control, audit, getPlatformSettings, setPlatformSettings, TENANT_KINDS, communitySettings, validateCommunitySettings, communityRoleLabels } = require('../control');
 const { bankAccountOf, accountConflict, CONFLICT_MSG } = require('../lib/community');
 const db = require('../db');
-const { ok, fail, wrap, str } = require('../lib/util');
+const { ok, fail, wrap, str, today: todayLocal } = require('../lib/util');
 const { hashPassword } = require('../lib/auth');
 const rbac = require('../lib/rbac');
 const { runChecks, openAlerts, latency } = require('../lib/checks');
@@ -291,7 +291,7 @@ router.get('/alerts', need('reports.view'), wrap((req, res) => {
   ok(res, openAlerts(codes));
 }));
 router.get('/latency', need('reports.view'), wrap((req, res) => {
-  const day = new Date().toISOString().slice(0, 10);
+  const day = todayLocal();
   const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '') ? req.query.from : day;
   const to = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || '') ? req.query.to : from;
   const codes = control.prepare(`SELECT code FROM tenants t WHERE 1=1${scopeSql(req, 't.community_id')}`).all().map((t) => t.code);
@@ -304,7 +304,7 @@ router.post('/alerts/run', need('tenants.manage'), wrap((req, res) => {
 }));
 
 router.get('/reports', need('reports.view'), wrap((req, res) => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const from = str(req.query.from, 20) || today;
   const to = str(req.query.to, 20) || from;
   const list = control.prepare(`SELECT code,name,status,plan FROM tenants WHERE 1=1${scopeSql(req, 'community_id')} ORDER BY name`).all();

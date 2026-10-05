@@ -36,7 +36,10 @@ const wrap = (fn) => (req, res, next) => {
 };
 
 const nowIso = () => new Date().toISOString();
-const today = () => new Date().toISOString().slice(0, 10);
+// Ngày theo giờ máy chủ (cùng múi với datetime('now','localtime') trong DB). Không dùng toISOString(): đó là UTC,
+// nên từ 0h đến 7h sáng giờ Việt Nam "hôm nay" bị lùi một ngày và báo cáo trong ngày ra rỗng.
+const ymd = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const today = () => ymd();
 
 const paginate = (query) => {
   const limit = Math.min(1000, Math.max(1, Number(query.limit) || 200));
@@ -44,4 +47,4 @@ const paginate = (query) => {
   return { limit, offset };
 };
 
-module.exports = { ApiError, ok, fail, bad, round, num, int, str, bool, wrap, nowIso, today, paginate };
+module.exports = { ApiError, ok, fail, bad, round, num, int, str, bool, wrap, nowIso, today, ymd, paginate };

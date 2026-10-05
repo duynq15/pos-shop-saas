@@ -1,7 +1,11 @@
 # POS Shop – SaaS (đa cửa hàng)
-FROM node:22-alpine
+FROM node:24-alpine
 
 WORKDIR /app
+
+# Giờ địa phương: "hôm nay", báo cáo theo ngày và kiểm tra 02:00 đều tính theo giờ VN
+RUN apk add --no-cache tzdata
+ENV TZ=Asia/Ho_Chi_Minh
 
 # Cài phụ thuộc trước để tận dụng cache layer
 COPY package*.json ./

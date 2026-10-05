@@ -384,6 +384,10 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   ensureColumn('invoices', 'promo_order_id', 'INTEGER');
   ensureColumn('invoices', 'payment_ref', 'TEXT');
   ensureColumn('invoices', 'payment_content', 'TEXT');
+  // GĐ4.3 (FR-11): một hạng mục / giao dịch. Lưu id + tên tại thời điểm bán (đổi tên hạng mục không làm sai báo cáo cũ).
+  ensureColumn('invoices', 'item_category_id', 'INTEGER');
+  ensureColumn('invoices', 'item_category_name', 'TEXT');
+  conn.exec('CREATE INDEX IF NOT EXISTS idx_invoices_itemcat ON invoices(item_category_id)');
   conn.exec('CREATE INDEX IF NOT EXISTS idx_invoices_payref ON invoices(payment_ref)');
   // GĐ2.3, GĐ2.5: cột thêm sau khi bảng quỹ đã có ở DB cũ
   ensureColumn('funds', 'bank_bin', 'TEXT');

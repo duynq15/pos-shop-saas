@@ -73,7 +73,7 @@ Chỉ tiêu thí điểm (kế hoạch mục 6.5), **Đề xuất**, thay bằng
 ## 6. Còn mở
 
 - [ ] Quy mô thôn thí điểm (số hộ, người bán, quỹ) — cần để đổi chỉ tiêu sang số tuyệt đối.
-- [ ] FR-11: một giao dịch gắn một hay nhiều hạng mục. Tạm thiết kế một hạng mục / giao dịch.
+- [x] FR-11: một giao dịch gắn **một** hạng mục; người bán đổi được sau, có nhật ký (chốt 2026-10-02, ADR-0006).
 - [ ] FR-01, SEC-03: cách đăng ký và xác thực. Tạm dùng đăng nhập hiện có của POS Shop.
 - [ ] 0.9: một tenant thuộc nhiều cộng đồng (ví dụ người bán vừa ở thôn vừa ở chợ) [NEED DECISION]. MVP: tối đa một cộng đồng / tenant.
 - [ ] 0.9: cấp cha – con giữa cộng đồng (xã → thôn → xóm). MVP chưa làm; thêm sau bằng cột `parent_id` cho phép rỗng.

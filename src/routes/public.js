@@ -35,7 +35,7 @@ function validToken(given) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-const iso = (d) => d.toISOString().slice(0, 10);
+const { ymd: iso } = require('../lib/util'); // ngày theo giờ địa phương, không UTC
 function parseRange(q) {
   const today = new Date();
   const defFrom = new Date(today.getTime() - 29 * 86400000);

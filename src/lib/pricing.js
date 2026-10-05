@@ -4,7 +4,7 @@ const { round, bad } = require('./util');
 
 // Tải các khuyến mãi đang hiệu lực tại một thời điểm.
 function loadActivePromotions(db, dateStr) {
-  const d = dateStr || new Date().toISOString().slice(0, 10);
+  const d = dateStr || require('./util').today();
   return db
     .prepare(
       `SELECT * FROM promotions

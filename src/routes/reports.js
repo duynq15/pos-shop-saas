@@ -2,7 +2,7 @@
 
 const express = require('express');
 const db = require('../db');
-const { ok, wrap, round } = require('../lib/util');
+const { ok, fail, wrap, round, today } = require('../lib/util');
 const { can, requirePerm } = require('../middleware');
 const { getQrOrders } = require('../control');
 const { sendXlsx } = require('../lib/xlsx');
@@ -11,10 +11,30 @@ const router = express.Router();
 const DATE = "date(i.created_at)";
 
 function range(q) {
-  const f = q.from || new Date().toISOString().slice(0, 10);
+  const f = q.from || today();
   const t = q.to || f;
   return { from: f, to: t };
 }
+
+// Báo cáo người bán (GĐ4.5 — FR-16, AC-03-1, AC-03-2, ERR-04): doanh thu theo ngày / tháng và theo hạng mục.
+// Doanh thu = hóa đơn bán đã thanh toán trừ trả hàng đã thanh toán (gắn về hạng mục của hóa đơn gốc).
+// Dòng "Chưa gắn hạng mục" gom phần còn lại nên tổng các hạng mục luôn bằng tổng doanh thu.
+router.get('/reports/seller', requirePerm('report.view'), wrap((req, res) => {
+  const { from, to } = range(req.query);
+  if (from > to) return fail(res, 'Khoảng ngày không hợp lệ');
+  const by = req.query.by === 'month' ? 'month' : 'day';
+  const bucket = by === 'month' ? `strftime('%Y-%m', ${DATE})` : DATE;
+  // Trả hàng mang dấu âm, lấy hạng mục từ hóa đơn gốc (parent)
+  const base = `FROM invoices i LEFT JOIN invoices p ON p.id = i.parent_id
+    WHERE i.status='paid' AND i.type IN ('sale','return') AND ${DATE}>=date(?) AND ${DATE}<=date(?)`;
+  const signed = "CASE WHEN i.type='return' THEN -i.total ELSE i.total END";
+  const cat = "CASE WHEN i.type='return' THEN p.item_category_name ELSE i.item_category_name END";
+  const total = db.prepare(`SELECT COALESCE(SUM(${signed}),0) revenue, SUM(i.type='sale') sales ${base}`).get(from, to);
+  const periods = db.prepare(`SELECT ${bucket} period, COALESCE(SUM(${signed}),0) revenue, SUM(i.type='sale') sales ${base} GROUP BY period ORDER BY period`).all(from, to);
+  const categories = db.prepare(`SELECT ${cat} name, COALESCE(SUM(${signed}),0) revenue, SUM(i.type='sale') sales ${base} GROUP BY name ORDER BY name IS NULL, revenue DESC`).all(from, to)
+    .map((r) => ({ name: r.name || 'Chưa gắn hạng mục', uncategorized: !r.name, revenue: r.revenue, sales: r.sales }));
+  ok(res, { from, to, by, revenue: total.revenue, sales: total.sales || 0, periods, categories });
+}));
 
 router.get('/reports/summary', requirePerm('report.view'), wrap((req, res) => {
   const { from, to } = range(req.query);

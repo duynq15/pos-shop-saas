@@ -12,6 +12,8 @@ const req = async (who, u, o = {}) => {
   return r;
 };
 const api = async (u, o = {}) => (await req('admin', u, o)).json();
+// Ngày hôm nay theo giờ địa phương, khớp cách server tính (không UTC)
+const localDay = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeAt(0) << 8; for (let j = 0; j < 8; j++) c = c & 0x8000 ? ((c << 1) ^ 0x1021) & 0xffff : (c << 1) & 0xffff; } return c.toString(16).toUpperCase().padStart(4, '0'); };
 (async () => {
   let lg = await req('admin', '/auth/login', { method: 'POST', body: { username: 'admin', password: 'admin123' } });
@@ -528,7 +530,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('entry without attachment 404', (await req('c-treasurer', '/fund-entries/' + cashIn.data.id + '/attachment')).status === 404);
 
   // ---------- Báo cáo kỳ (GĐ2.7 — BR-12: không chốt sổ) ----------
-  const fundDay = new Date().toISOString().slice(0, 10);
+  const fundDay = localDay();
   const rep = await cj('c-community_leader', '/funds/' + fid + '/report?from=' + fundDay + '&to=' + fundDay);
   ok('period report matches balance', rep.ok && rep.data.opening_balance === 0 && rep.data.income_cash === 600000
     && rep.data.income_bank === 0 && rep.data.expense === 200000 && rep.data.adjust === -50000 && rep.data.closing_balance === 350000);
@@ -596,7 +598,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
 
   // ---------- GĐ3.6: đối soát sao kê (ERR-01) ----------
   {
-    const d = new Date().toISOString().slice(0, 10);
+    const d = localDay();
     await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 45000, source: 'manual', bank_ref: 'SK-1' } });
     const rc = await cj('c-treasurer', '/funds/' + fid + '/reconcile?from=' + d + '&to=' + d);
     ok('reconcile: system bank income excludes cash', rc.ok && rc.data.system_in === rc.data.entries.reduce((s, e) => s + e.amount, 0) && rc.data.entries.every((e) => e.source !== 'cash'));
@@ -662,7 +664,7 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('classify: treasurer books queued payment into a fund', fcls.ok && fcls.data.category === 'fund' && (await cj('c-treasurer', '/funds/' + fund2.data.id)).data.balance === fbal + 60000);
 
   // ---------- Phạm vi cộng đồng (GĐ1.4 — BR-07, BR-09, ERR-08) ----------
-  const day = new Date().toISOString().slice(0, 10);
+  const day = localDay();
   // Cộng đồng B với người bán riêng: số của B không được lẫn vào A
   const comB = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-b', name: 'Thôn B', type: 'village' } });
   await rootJ('/platform/tenants', { method: 'POST', body: { code: 'seller-b', name: 'Người bán B', owner_username: 'sellerb', owner_password: '123456', kind: 'seller', community_id: comB.data.id } });
@@ -847,6 +849,90 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('reset password', (await (await req('ops1', '/auth/login', { method: 'POST', body: { username: 'ops1', password: 'newpass1' } })).json()).ok);
   const logs = await rootJ('/platform/staff');
   ok('staff list hides password', logs.ok && !JSON.stringify(logs.data).includes('password_hash'));
+
+  // ---------- GĐ4.3: hạng mục hàng dùng chung (FR-10, FR-11, BR-11, AC-02-1, AC-02-2) ----------
+  {
+    // Thôn A: người duyệt (community.categories) quản lý; người bán A (seller-a) chỉ chọn
+    const mk = await cj('c-approver', '/community/categories', { method: 'POST', body: { name: 'Rau củ' } });
+    ok('BR-11: approver creates category', mk.ok && mk.data.some((c) => c.name === 'Rau củ'));
+    await cj('c-approver', '/community/categories', { method: 'POST', body: { name: 'Thịt cá' } });
+    ok('BR-11: duplicate name rejected (case-insensitive)', !(await cj('c-approver', '/community/categories', { method: 'POST', body: { name: 'rau CỦ' } })).ok);
+    ok('BR-11: seller cannot create category', (await req('sel', '/community/categories', { method: 'POST', body: { name: 'Tự thêm' } })).status === 403);
+    ok('BR-11: seller owner cannot rename category', (await req('sel', '/community/categories/' + mk.data[0].id, { method: 'PATCH', body: { name: 'Đổi' } })).status === 403);
+    ok('BR-11: treasurer cannot create category', (await req('c-treasurer', '/community/categories', { method: 'POST', body: { name: 'X' } })).status === 403);
+    const selCats = (await (await req('sel', '/community/categories')).json()).data;
+    const rau = selCats.find((c) => c.name === 'Rau củ'); const thit = selCats.find((c) => c.name === 'Thịt cá');
+    ok('seller sees own community categories', !!rau && !!thit);
+    // Thôn B có danh mục riêng; người bán A không dùng được
+    await rootJ('/platform/tenants', { method: 'POST', body: { code: 'quy-b', name: 'Quỹ B', owner_username: 'quybown', owner_password: '123456', kind: 'community', community_id: comB.data.id } });
+    await req('qb', '/auth/login', { method: 'POST', body: { username: 'quybown', password: '123456' } });
+    const catB = (await (await req('qb', '/community/categories', { method: 'POST', body: { name: 'Hàng thôn B' } })).json()).data.find((c) => c.name === 'Hàng thôn B');
+    ok('BR-11: seller B does not see A categories', !(await (await req('selb', '/community/categories')).json()).data.some((c) => c.name === 'Rau củ'));
+    const crossInv = await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'Rau', price: 3000, qty: 1 }], payment_method: 'cash', paid_amount: 3000, item_category_id: catB.id } })).json();
+    ok('AC-02-2: seller cannot use another community category', !crossInv.ok);
+    const withCat = await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'Rau', price: 3000, qty: 1 }], payment_method: 'cash', paid_amount: 3000, item_category_id: rau.id } })).json();
+    ok('AC-02-1: sale stored with category id + name', withCat.ok && withCat.data.item_category_id === rau.id && withCat.data.item_category_name === 'Rau củ');
+    const re = await (await req('sel', '/invoices/' + withCat.data.id + '/category', { method: 'POST', body: { item_category_id: thit.id } })).json();
+    ok('AC-02-1: seller can change category later', re.ok && re.data.item_category_name === 'Thịt cá');
+    ok('AC-02-2: change to foreign category rejected', !(await (await req('sel', '/invoices/' + withCat.data.id + '/category', { method: 'POST', body: { item_category_id: catB.id } })).json()).ok);
+    // Đổi tên hạng mục: hóa đơn cũ giữ tên lúc bán
+    await cj('c-approver', '/community/categories/' + thit.id, { method: 'PATCH', body: { name: 'Thịt, cá tươi' } });
+    ok('rename keeps old invoice label', (await (await req('sel', '/invoices/' + withCat.data.id)).json()).data.item_category_name === 'Thịt cá');
+    // Ẩn: không chọn được nữa, nhưng không xóa
+    await cj('c-approver', '/community/categories/' + rau.id, { method: 'PATCH', body: { status: 'hidden' } });
+    ok('hidden category not offered to sellers', !(await (await req('sel', '/community/categories')).json()).data.some((c) => c.id === rau.id));
+    ok('hidden category cannot be used', !(await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'R', price: 1000, qty: 1 }], payment_method: 'cash', paid_amount: 1000, item_category_id: rau.id } })).json()).ok);
+    ok('approver still sees hidden with all=1', (await cj('c-approver', '/community/categories?all=1')).data.some((c) => c.id === rau.id && c.status === 'hidden'));
+    ok('shop outside any community has no categories', (await api('/community/categories')).data.length === 0);
+
+    // ---------- GĐ4.2: QR tĩnh của người bán (FR-03, ERR-09) ----------
+    const qrOk = await (await req('sel', '/qr')).json();
+    ok('AC-01-1: seller static QR built on own account', qrOk.ok && qrOk.data.bank_account === 'SELLERA01' && !!qrOk.data.dataUrl, qrOk.error);
+    ok('static QR has no amount', !/54\d{2}/.test(qrOk.data.payload.split('5303704')[1].split('5802VN')[0]));
+    await req('selb', '/settings', { method: 'PUT', body: { bank_account: '' } });
+    const qrNone = await (await req('selb', '/qr')).json();
+    ok('ERR-09: no account -> no QR, clear message', !qrNone.ok && /Chưa khai số tài khoản/.test(qrNone.error));
+    await req('selb', '/settings', { method: 'PUT', body: { bank_account: 'SELB-01!!', bank_bin: '970422' } });
+    ok('ERR-09: malformed account -> no QR', !(await (await req('selb', '/qr')).json()).ok);
+    await req('selb', '/settings', { method: 'PUT', body: { bank_account: 'SELLERB01', bank_bin: 'MB' } });
+    ok('ERR-09: malformed bank BIN -> no QR', /Ngân hàng chưa chọn/.test((await (await req('selb', '/qr')).json()).error || ''));
+    await req('selb', '/settings', { method: 'PUT', body: { bank_account: 'SELLERB01', bank_bin: '970422' } });
+    // Tiền vào QR tĩnh: không có mã đối soát -> hàng chờ -> người bán xác nhận "Bán hàng" + hạng mục
+    const gtok = (await (await fetch(ROOT + '/vqr/api/token_generate', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('posshop:posshop-secret').toString('base64') } })).json()).access_token;
+    await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + gtok }, body: JSON.stringify({ bankaccount: 'SELLERA01', amount: 25000, content: 'chuyen tien rau', transType: 'C', transactionid: 'STATIC-1' }) });
+    const sq = (await (await req('sel', '/vietqr/unclassified')).json()).data.items.find((x) => x.transactionid === 'STATIC-1');
+    ok('static-QR payment queued for the seller', !!sq);
+    const before = (await (await req('sel', '/reports/summary?from=2000-01-01&to=2999-12-31')).json()).data;
+    ok('sale classification rejects foreign category', !(await (await req('sel', '/vietqr/transactions/' + sq.id + '/classify', { method: 'POST', body: { category: 'sale', item_category_id: catB.id } })).json()).ok);
+    const sc = await (await req('sel', '/vietqr/transactions/' + sq.id + '/classify', { method: 'POST', body: { category: 'sale', item_category_id: thit.id } })).json();
+    ok('classify as sale creates a paid invoice with category', sc.ok && sc.data.category === 'sale' && !!sc.data.invoice_id);
+    const scInv = (await (await req('sel', '/invoices/' + sc.data.invoice_id)).json()).data;
+    ok('created invoice: paid, transfer, right amount and label', scInv.status === 'paid' && scInv.total === 25000 && scInv.payment_method === 'transfer' && scInv.item_category_name === 'Thịt, cá tươi' && scInv.payments.length === 1);
+    const after = (await (await req('sel', '/reports/summary?from=2000-01-01&to=2999-12-31')).json()).data;
+    ok('static-QR sale counts in revenue', JSON.stringify(after) !== JSON.stringify(before));
+
+    // ---------- GĐ4.5: báo cáo người bán (FR-16, AC-03-1, AC-03-2, ERR-04) ----------
+    const all = '?from=2000-01-01&to=2999-12-31';
+    const rep = (await (await req('sel', '/reports/seller' + all)).json()).data;
+    const sumCats = rep.categories.reduce((s, c) => s + c.revenue, 0);
+    ok('AC-03-2: categories add up to total revenue', rep.revenue > 0 && sumCats === rep.revenue, sumCats + ' vs ' + rep.revenue);
+    ok('ERR-04: uncategorised line present', rep.categories.some((c) => c.uncategorized && c.name === 'Chưa gắn hạng mục'));
+    ok('AC-03-1: periods add up to total revenue', rep.periods.reduce((s, p) => s + p.revenue, 0) === rep.revenue);
+    const sum = (await (await req('sel', '/reports/summary' + all)).json()).data;
+    ok('AC-03-1: seller report total = POS summary revenue (sales − returns)', rep.revenue === sum.revenue, JSON.stringify([rep.revenue, sum.revenue]));
+    const mon = (await (await req('sel', '/reports/seller' + all + '&by=month')).json()).data;
+    ok('by month buckets YYYY-MM', mon.periods.every((p) => /^\d{4}-\d{2}$/.test(p.period)) && mon.revenue === rep.revenue);
+    // Trả hàng một giao dịch có hạng mục: trừ vào đúng hạng mục đó
+    const rInv = await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'Cá', price: 40000, qty: 1 }], payment_method: 'cash', paid_amount: 40000, item_category_id: thit.id } })).json();
+    const beforeRet = (await (await req('sel', '/reports/seller' + all)).json()).data.categories.find((c) => c.name === 'Thịt, cá tươi' || c.name === 'Thịt cá');
+    await req('sel', '/invoices', { method: 'POST', body: { type: 'return', parent_id: rInv.data.id, items: [{ name: 'Cá', price: 40000, qty: 1 }], payment_method: 'cash', paid_amount: 40000 } });
+    const afterRet = (await (await req('sel', '/reports/seller' + all)).json()).data;
+    const catAfter = afterRet.categories.find((c) => c.name === beforeRet.name);
+    ok('return subtracts from its original category', catAfter.revenue === beforeRet.revenue - 40000 && afterRet.categories.reduce((s, c) => s + c.revenue, 0) === afterRet.revenue,
+      JSON.stringify([beforeRet.revenue, catAfter && catAfter.revenue]));
+    ok('AC-03-3: seller B report excludes seller A', !(await (await req('selb', '/reports/seller' + all)).json()).data.categories.some((c) => c.name === 'Rau củ' || c.name === beforeRet.name));
+    ok('seller report rejects inverted range', !(await (await req('sel', '/reports/seller?from=2026-12-31&to=2026-01-01')).json()).ok);
+  }
 
   for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg', '/report.html', '/report.css', '/js/report.js']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);
   console.log(R.join('\n'));

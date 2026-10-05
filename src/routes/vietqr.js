@@ -4,7 +4,7 @@ const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
 const { control, audit, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders } = require('../control');
-const { ok, fail, wrap, str, round } = require('../lib/util');
+const { ok, fail, wrap, str, round, today } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
 const { requirePerm, can } = require('../middleware');
 const { openAlerts } = require('../lib/checks');
@@ -12,6 +12,9 @@ const { bankTime } = require('../lib/vqr-time');
 const { accountConflict, CONFLICT_MSG } = require('../lib/community');
 const { generateQR, getToken, bases, testCallbackUrl } = require('../payments/vietqr');
 const funds = require('./funds');
+const { makeCode } = require('../lib/codes');
+const { getSettings } = require('./admin');
+const { categoryFor } = require('./community');
 
 const router = express.Router();   // API phía app (đã đăng nhập), mount /api
 const webhook = express.Router();  // API mở cho VietQR gọi vào, mount /vqr
@@ -294,7 +297,7 @@ router.post('/vietqr/simulate', requirePerm('pos.sell'), wrap((req, res) => {
 
 /* ===================== Module: Giao dịch VietQR (hợp nhất QR đã tạo + callback) ===================== */
 function txList(req, paged) {
-  const from = str(req.query.from, 10) || new Date().toISOString().slice(0, 10);
+  const from = str(req.query.from, 10) || today();
   const to = str(req.query.to, 10) || from;
   const bank = str(req.query.bank, 40);
   const field = ['ref', 'order', 'content'].includes(req.query.field) ? req.query.field : 'ref';
@@ -430,6 +433,22 @@ router.post('/vietqr/transactions/:id/classify', classifyPerm, wrap((req, res) =
       db.prepare("UPDATE vietqr_transactions SET category='sale', matched=1, invoice_id=?, note=?, classified_by=?, classified_at=datetime('now','localtime') WHERE id=?")
         .run(inv.id, 'Gắn hóa đơn ' + inv.code, by, t.id);
       auditOf(req, 'vqr.classify', t.id, { transactionid: t.transactionid, invoice: inv.code });
+    } else if (b.category === 'sale') {
+      // GĐ4.2: tiền vào qua QR tĩnh (không có mã đối soát) -> người bán xác nhận là bán hàng, kèm hạng mục.
+      // Tạo hóa đơn đã thanh toán một dòng hàng tự do, nên báo cáo doanh thu / hạng mục / cộng đồng dùng lại được.
+      const cat = b.item_category_id ? categoryFor(req, b.item_category_id) : null;
+      if (b.item_category_id && !cat) throw Object.assign(new Error('Hạng mục không có trong danh mục của cộng đồng'), { code: 400 });
+      const code = makeCode(db, getSettings().invoice_prefix || 'HD', 'invoices');
+      const label = cat ? cat.name : 'Bán hàng (QR tĩnh)';
+      const r = db.prepare(`INSERT INTO invoices(code,type,subtotal,discount,net_amount,total,payment_method,paid_amount,change_amount,note,status,item_category_id,item_category_name,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code, 'sale', t.amount, 0, t.amount, t.amount, 'transfer', t.amount, 0,
+        'Từ giao dịch ' + t.transactionid, 'paid', cat ? cat.id : null, cat ? cat.name : null, t.created_at);
+      const invId = Number(r.lastInsertRowid);
+      db.prepare(`INSERT INTO invoice_items(invoice_id,product_id,name,qty,base_qty,price,line_total) VALUES (?,?,?,?,?,?,?)`).run(invId, null, label, 1, 1, t.amount, t.amount);
+      db.prepare('INSERT INTO invoice_payments(invoice_id,method,amount,note) VALUES (?,?,?,?)').run(invId, 'transfer', t.amount, 'VietQR ' + t.transactionid);
+      db.prepare("UPDATE vietqr_transactions SET category='sale', matched=1, invoice_id=?, note=?, classified_by=?, classified_at=datetime('now','localtime') WHERE id=?")
+        .run(invId, 'Bán hàng ' + code + (cat ? ' · ' + cat.name : ''), by, t.id);
+      auditOf(req, 'vqr.classify', t.id, { transactionid: t.transactionid, category: 'sale', invoice: code, item_category: cat && cat.name });
     } else if (b.category === 'other') {
       const reason = str(b.reason, 300);
       if (!reason) throw Object.assign(new Error('Ghi lý do khi đánh dấu là thu khác'), { code: 400 });
@@ -437,7 +456,7 @@ router.post('/vietqr/transactions/:id/classify', classifyPerm, wrap((req, res) =
         .run('Thu khác: ' + reason, by, t.id);
       auditOf(req, 'vqr.classify', t.id, { transactionid: t.transactionid, category: 'other', reason });
     } else {
-      throw Object.assign(new Error('Chọn hóa đơn để gắn, hoặc đánh dấu là thu khác'), { code: 400 });
+      throw Object.assign(new Error('Chọn hóa đơn để gắn, xác nhận là bán hàng, hoặc đánh dấu là thu khác'), { code: 400 });
     }
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }

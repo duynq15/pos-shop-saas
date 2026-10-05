@@ -57,7 +57,10 @@ router.get('/info/qr', wrap(async (req, res) => {
 /* ===================== QR CHUYỂN KHOẢN ===================== */
 router.get('/qr', wrap(async (req, res) => {
   const s = getSettings();
-  if (!s.bank_account || !s.bank_bin) return fail(res, 'Chưa cấu hình tài khoản ngân hàng trong Cài đặt');
+  // ERR-09: thiếu / sai thông tin tài khoản thì không tạo QR, báo rõ thiếu gì
+  if (!s.bank_account || !s.bank_bin) return fail(res, 'Chưa khai số tài khoản và ngân hàng trong Cài đặt, chưa tạo được QR');
+  if (!/^\d{6}$/.test(s.bank_bin)) return fail(res, 'Ngân hàng chưa chọn đúng trong Cài đặt (mã ngân hàng không hợp lệ)');
+  if (!/^[0-9A-Za-z]{4,19}$/.test(String(s.bank_account).replace(/[\s.-]/g, ''))) return fail(res, 'Số tài khoản không hợp lệ (chỉ gồm chữ số, 4–19 ký tự)');
   const amount = round(req.query.amount || 0);
   const message = str(req.query.message, 120);
   const payload = buildVietQR({ bankBin: s.bank_bin, accountNo: s.bank_account, amount, message });

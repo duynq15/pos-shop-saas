@@ -123,13 +123,24 @@ const STORES = [
   { code: 'demo-thucpham', name: 'Thực phẩm sạch Green', area: 'Thôn C', base: 8, growth: 1.3, emphasis: { 'Tạp hóa': 1.5, 'Đồ uống': 1.2 }, mix: { cash: 0.4, transfer: 0.35, card: 0.1, ewallet: 0.15 } }
 ];
 
+// Người bán nhỏ (GĐ4): không có danh mục sản phẩm/tồn kho, chỉ nhận tiền nhanh theo hạng mục cộng đồng.
+// [mã, tên, cộng đồng, hạng mục hay bán (trọng số), giá trung bình, lần bán/ngày]
+const SMALL_SELLERS = [
+  ['ban-rau-ba-nam', 'Hàng rau bà Năm', 'thon-a', { 'Rau củ': 6, 'Tạp hóa': 1 }, 35000, 9],
+  ['quan-nuoc-co-ut', 'Quán nước cô Út', 'thon-a', { 'Đồ uống': 6, 'Ăn uống': 3 }, 22000, 14],
+  ['sua-xe-anh-tu', 'Sửa xe anh Tư', 'thon-b', { 'Dịch vụ': 8, 'Tạp hóa': 1 }, 90000, 4],
+  ['thit-heo-chu-sau', 'Thịt heo chú Sáu', 'cho-c', { 'Thịt cá': 8 }, 120000, 7],
+  ['banh-mi-chi-hai', 'Bánh mì chị Hai', 'cho-c', { 'Ăn uống': 7, 'Đồ uống': 2 }, 18000, 18],
+];
+
 const DAYS = 180;
 
 // Cộng đồng mẫu (GĐ1): người bán thuộc cộng đồng dùng tài khoản ngân hàng riêng (BR-02).
 const COMMUNITIES = [
   { code: 'thon-a', name: 'Thôn An Phú', type: 'village', area: 'Thôn A', contact: 'Ông Nguyễn Văn Hải', sellers: ['demo-taphoa'] },
   { code: 'thon-b', name: 'Thôn Bình Minh', type: 'village', area: 'Thôn B', contact: 'Bà Trần Thị Lựu', sellers: ['demo-sieuthi', 'demo-mypham'] },
-  { code: 'cho-c', name: 'Chợ Phước Hòa', type: 'market', area: 'Thôn C', contact: 'Ông Lê Văn Tâm', sellers: ['demo-thucpham'] }
+  { code: 'cho-c', name: 'Chợ Phước Hòa', type: 'market', area: 'Thôn C', contact: 'Ông Lê Văn Tâm', sellers: ['demo-thucpham'] },
+  { code: 'chua-pl', name: 'Chùa Phước Lâm', type: 'pagoda', area: 'Thôn A', contact: 'Thầy Thích Minh Tâm', sellers: [] }
 ];
 const SUPPLIERS = [
   ['Công ty CP Hàng tiêu dùng Masan', 'Chị Thảo', 30], ['NPP Nước giải khát Suntory PepsiCo', 'Anh Khoa', 15],
@@ -453,7 +464,9 @@ function receiptPng() {
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 const RECEIPT_PNG = receiptPng();
-const DONORS = ['Ông Nguyễn Văn Thành', 'Bà Lê Thị Hoa', 'Gia đình anh Tuấn', 'Chị Phạm Thu Hà', 'Ông Trần Văn Bảy', 'Bà Võ Thị Mai', 'Anh Đỗ Minh Khoa', 'Cô Hồ Thị Lan'];
+const DONORS = ['Ông Nguyễn Văn Thành', 'Bà Lê Thị Hoa', 'Gia đình anh Tuấn', 'Chị Phạm Thu Hà', 'Ông Trần Văn Bảy', 'Bà Võ Thị Mai', 'Anh Đỗ Minh Khoa', 'Cô Hồ Thị Lan',
+  'Gia đình ông Lê Văn Đức', 'Bà Nguyễn Thị Sen', 'Anh Trần Quốc Việt (Hà Nội)', 'Chị Đinh Thu Trang', 'Ông bà Phạm Văn Lộc', 'Cháu Hoàng Gia Bảo',
+  'Hội phụ nữ thôn', 'Chi hội cựu chiến binh', 'Doanh nghiệp tư nhân Hòa Bình', 'Con cháu xa quê tại TP.HCM', 'Ông Võ Văn Mười', 'Bà Đặng Thị Cúc'];
 function seedFunds(code, c) {
   const conn = db.getTenantDb(code);
   const u = (suffix) => control.prepare('SELECT id, full_name FROM users WHERE username=?').get(`${c.code}-${suffix}`);
@@ -474,13 +487,22 @@ function seedFunds(code, c) {
     seqs[k] += 1; return `${k}-${pad(seqs[k], 4)}`;
   };
   conn.exec('BEGIN');
-  for (const [fcode, name, kind, desc] of [['quy-chung', 'Quỹ chung ' + c.name, 'general', 'Chi tiêu chung, sửa đường, điện chiếu sáng'],
-    ['cong-duc', 'Công đức tu sửa đình làng', 'donation', 'Chương trình công đức năm nay']]) {
+  const FUNDS = c.type === 'pagoda'
+    ? [['quy-chung', 'Quỹ nhà chùa', 'general', 'Điện nước, hương đèn, sinh hoạt', 30],
+      ['cong-duc', 'Công đức đúc chuông', 'donation', 'Đúc đại hồng chung', 45],
+      ['phat-dan', 'Lễ Phật đản', 'donation', 'Tổ chức đại lễ Phật đản', 25]]
+    : [['quy-chung', 'Quỹ chung ' + c.name, 'general', 'Chi tiêu chung, sửa đường, điện chiếu sáng', 22],
+      ['cong-duc', 'Công đức tu sửa đình làng', 'donation', 'Chương trình công đức năm nay', 28],
+      ['khuyen-hoc', 'Quỹ khuyến học', 'donation', 'Thưởng học sinh giỏi, hỗ trợ học sinh khó khăn', 16],
+      ['tet-2026', 'Chương trình Tết cho hộ nghèo', 'donation', 'Đã kết thúc, quyết toán xong', 10]];
+  for (const [fcode, name, kind, desc, nIn] of FUNDS) {
     if (conn.prepare('SELECT 1 FROM funds WHERE code=?').get(fcode)) continue; // chạy lại seed: giữ quỹ đã có
     const fid = Number(insFund.run(fcode, name, kind, acc(fcode), 'BAN QUAN LY ' + removeVietnamese(c.name).toUpperCase(), tq.id, desc, dy.id).lastInsertRowid);
     let balance = 0;
-    for (let i = 0; i < 14; i++) {
-      const d = new Date(Date.now() - (60 - i * 4) * 86400000 - rnd() * 3 * 3600000);
+    const closed = fcode === 'tet-2026';
+    const span = closed ? 180 : 170; // quỹ đã đóng: giao dịch cách đây 3–6 tháng
+    for (let i = 0; i < nIn; i++) {
+      const d = new Date(Date.now() - (closed ? 90 + (span - 90) * (1 - i / nIn) : span * (1 - i / nIn)) * 86400000 - rnd() * 6 * 3600000);
       const amount = (Math.round(rnd() * 19) + 1) * 50000;
       const viaQr = rnd() < 0.6;
       const anon = rnd() < 0.2;
@@ -498,11 +520,120 @@ function seedFunds(code, c) {
       insEntry.run(ecode, fid, 'out', amount, 'cash', null, null, 0, note, file, status, tq.id, tq.full_name, fmtDate(d),
         status === 'approved' ? dy.id : null, status === 'approved' ? dy.full_name : null, status === 'approved' ? fmtDate(new Date(d.getTime() + 86400000)) : null);
     };
-    const paid = Math.min(Math.round(balance * 0.3 / 10000) * 10000, balance);
-    spend(10, paid, kind === 'donation' ? 'Mua ngói lợp mái đình' : 'Thay bóng đèn đường xóm', 'approved');
-    spend(2, Math.min(300000, balance - paid), kind === 'donation' ? 'Sơn lại cột đình' : 'Phát quang bụi rậm', 'submitted');
+    const NOTES = {
+      'quy-chung': ['Thay bóng đèn đường xóm', 'Sửa cống thoát nước', 'Mua loa phát thanh', 'Phát quang bụi rậm'],
+      'cong-duc': ['Mua ngói lợp mái đình', 'Thuê thợ sơn cột', 'Mua gỗ lim làm cửa', 'Sơn lại cột đình'],
+      'khuyen-hoc': ['Thưởng học sinh giỏi học kỳ I', 'Mua sách vở cho học sinh', 'Hỗ trợ học phí em Lan', 'Mua cặp sách'],
+      'tet-2026': ['Mua 40 suất quà Tết', 'Chở quà tới hộ nghèo', 'Mua gạo phát Tết'],
+      'phat-dan': ['Thuê rạp, âm thanh', 'Hoa đăng, đèn lồng', 'Cơm chay phục vụ khách'],
+    }[fcode] || ['Chi phí chung'];
+    let spent = 0;
+    if (closed) {
+      // Quỹ đã quyết toán: chi hết các khoản, không còn khoản dở, đóng quỹ + một biên bản đối soát khớp
+      for (const [k, n] of NOTES.entries()) { const a = k === NOTES.length - 1 ? balance - spent : Math.round(balance / NOTES.length / 10000) * 10000; spend(95 - k * 2, a, n, 'approved'); spent += a; }
+      conn.prepare("UPDATE funds SET status='closed' WHERE id=?").run(fid);
+    } else {
+      for (let k = 0; k < NOTES.length - 1; k++) {
+        const a = Math.min(Math.round((balance - spent) * 0.18 / 10000) * 10000, balance - spent);
+        if (a > 0) { spend(150 - k * 35, a, NOTES[k], 'approved'); spent += a; }
+      }
+      spend(2, Math.min(300000, balance - spent), NOTES[NOTES.length - 1], 'submitted');
+      if (fcode === 'quy-chung') {
+        // Một phiếu bị từ chối và một phiếu nháp thiếu chứng từ để thấy đủ luồng
+        const d = new Date(Date.now() - 20 * 86400000); const ec = entryCode('PC', d);
+        insEntry.run(ec, fid, 'out', 1500000, 'cash', null, null, 0, 'Mua bàn ghế (báo giá cao)', null, 'rejected', tq.id, tq.full_name, fmtDate(d), dy.id, dy.full_name, fmtDate(d));
+        conn.prepare('UPDATE fund_entries SET reject_reason=? WHERE code=?').run('Báo giá cao, xin thêm 2 báo giá khác', ec);
+        const d2 = new Date(Date.now() - 1 * 86400000);
+        insEntry.run(entryCode('PC', d2), fid, 'out', 120000, 'cash', null, null, 0, 'Mua dây điện', null, 'draft', tq.id, tq.full_name, fmtDate(d2), null, null, null);
+      }
+    }
+    // Biên bản đối soát tháng trước (khớp) cho mọi quỹ; quỹ chung có thêm một biên bản lệch có ghi chú
+    const recIns = conn.prepare(`INSERT INTO fund_reconciliations(fund_id,period_from,period_to,statement_in,system_in,diff,note,created_by,created_by_name,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`);
+    const lm = new Date(); const lmFrom = new Date(lm.getFullYear(), lm.getMonth() - 1, 1); const lmTo = new Date(lm.getFullYear(), lm.getMonth(), 0);
+    const ymd = (x) => fmtDate(x).slice(0, 10);
+    const sys = conn.prepare(`SELECT COALESCE(SUM(amount),0) s FROM fund_entries WHERE fund_id=? AND status='approved' AND type='in'
+      AND source IN ('vietqr','manual') AND date(approved_at)>=date(?) AND date(approved_at)<=date(?)`).get(fid, ymd(lmFrom), ymd(lmTo)).s;
+    recIns.run(fid, ymd(lmFrom), ymd(lmTo), sys, sys, 0, null, tq.id, tq.full_name, fmtDate(new Date(lm.getFullYear(), lm.getMonth(), 2, 9)));
+    if (fcode === 'quy-chung') {
+      recIns.run(fid, ymd(lmFrom), ymd(lmTo), sys + 50000, sys, 50000, 'Thiếu 1 khoản 50.000 ngày 15, ngân hàng báo chậm, đã bổ sung sau', tq.id, tq.full_name, fmtDate(new Date(lm.getFullYear(), lm.getMonth(), 1, 16)));
+    }
   }
   conn.exec('COMMIT');
+}
+
+/* ===================== Hạng mục dùng chung + giao dịch nhận tiền nhanh (GĐ4) ===================== */
+const CATS = ['Rau củ', 'Thịt cá', 'Tạp hóa', 'Đồ uống', 'Ăn uống', 'Dịch vụ', 'Trái cây', 'Đồ khô'];
+function seedCategories(communityId, c) {
+  const key = (v) => String(v).normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+  const ins = control.prepare('INSERT OR IGNORE INTO community_categories(community_id,name,name_key,sort_order) VALUES (?,?,?,?)');
+  CATS.forEach((n, i) => ins.run(communityId, n, key(n), i + 1));
+  ins.run(communityId, 'Hàng mùa vụ (ngưng)', key('Hàng mùa vụ (ngưng)'), 99);
+  control.prepare("UPDATE community_categories SET status='hidden' WHERE community_id=? AND name_key=?").run(communityId, key('Hàng mùa vụ (ngưng)'));
+  const cats = control.prepare("SELECT id, name FROM community_categories WHERE community_id=? AND status='active' ORDER BY sort_order").all(communityId);
+  // Mỗi người bán của cộng đồng: ~40 lần nhận tiền nhanh trong 20 ngày, ~15% chưa gắn hạng mục (ERR-04)
+  const small = SMALL_SELLERS.filter((x) => x[2] === c.code);
+  for (const code of [...c.sellers, ...small.map((x) => x[0])]) {
+    const conn = db.getTenantDb(code);
+    if (conn.prepare("SELECT COUNT(*) n FROM invoices WHERE item_category_id IS NOT NULL").get().n) continue;
+    const prof = small.find((x) => x[0] === code);
+    const weighted = prof ? cats.flatMap((ct) => Array(prof[3][ct.name] || 0).fill(ct)) : cats;
+    const days = prof ? 120 : 20; const perDay = prof ? prof[5] : 2; const avg = prof ? prof[4] : 100000;
+    const rnd = mulberry32(hash('qp-' + code));
+    const insInv = conn.prepare(`INSERT INTO invoices(code,type,subtotal,discount,net_amount,total,payment_method,paid_amount,change_amount,status,item_category_id,item_category_name,created_at)
+      VALUES (?,'sale',?,0,?,?,'transfer',?,0,'paid',?,?,?)`);
+    const insItem = conn.prepare('INSERT INTO invoice_items(invoice_id,name,qty,base_qty,price,line_total) VALUES (?,?,1,1,?,?)');
+    const insPay = conn.prepare("INSERT INTO invoice_payments(invoice_id,method,amount,note) VALUES (?,'transfer',?,'Nhận tiền nhanh')");
+    const seqs = {};
+    conn.exec('BEGIN');
+    const total = Math.round(days * perDay * (prof ? 0.85 : 1));
+    for (let i = 0; i < total; i++) {
+      // Giao dịch dày hơn về gần đây (thôn đang chuyển đổi số dần)
+      const back = Math.floor(Math.pow(rnd(), 1.6) * days);
+      const d = new Date(Date.now() - back * 86400000); d.setHours(6 + Math.floor(rnd() * 13), Math.floor(rnd() * 60), 0, 0);
+      if (d > new Date()) d.setTime(Date.now() - 3600000);
+      const ymd = fmtDate(d).slice(0, 10).replace(/-/g, '');
+      if (seqs[ymd] === undefined) seqs[ymd] = conn.prepare('SELECT COUNT(*) n FROM invoices WHERE code LIKE ?').get('NT' + ymd + '%').n;
+      const invCode = `NT${ymd}-${pad(++seqs[ymd], 4)}`;
+      const amount = Math.max(5000, Math.round(avg * (0.3 + rnd() * 1.4) / 1000) * 1000);
+      const cat = rnd() < 0.12 ? null : weighted[Math.floor(rnd() * weighted.length)];
+      const id = Number(insInv.run(invCode, amount, amount, amount, amount, cat ? cat.id : null, cat ? cat.name : null, fmtDate(d)).lastInsertRowid);
+      insItem.run(id, cat ? cat.name : 'Bán hàng', amount, amount);
+      insPay.run(id, amount);
+    }
+    conn.exec('COMMIT');
+    if (prof) seedQueue(code, conn);
+  }
+}
+
+// Tạo tenant người bán nhỏ (GĐ4): tài khoản riêng, chủ + 1 người phụ bán
+function seedSmallSellers() {
+  for (const [code, name, com] of SMALL_SELLERS) {
+    const cid = control.prepare('SELECT id FROM communities WHERE code=?').get(com)?.id;
+    if (!cid) continue;
+    let t = control.prepare('SELECT id FROM tenants WHERE code=?').get(code);
+    if (!t) t = { id: Number(control.prepare("INSERT INTO tenants(code,name,plan,status,area,kind,community_id) VALUES (?,?,'standard','active',?,'seller',?)")
+      .run(code, name, COMMUNITIES.find((x) => x.code === com).area, cid).lastInsertRowid) };
+    const conn = db.getTenantDb(code);
+    const holder = removeVietnamese(name).toUpperCase();
+    for (const [k, v] of [['shop_name', name], ['bank_account', '8' + pad(hash('acc' + code) % 1e9, 9)], ['bank_bin', '970422'], ['bank_name', 'MB Bank'],
+      ['account_holder', holder], ['vqr_enabled', '1'], ['vqr_env', 'mock']]) {
+      conn.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(k, v);
+    }
+    addUser(t.id, code + '-owner', 'Chủ ' + name, 'owner');
+    addUser(t.id, code + '-phu', 'Người phụ bán ' + name, 'cashier');
+  }
+}
+
+// Giao dịch VietQR qua QR dán quầy (không có mã đối soát) chờ người bán phân loại; vài khoản đã cũ để có cảnh báo
+function seedQueue(code, conn) {
+  if (conn.prepare("SELECT COUNT(*) n FROM vietqr_transactions WHERE transactionid LIKE 'QR-%'").get().n) return;
+  const acc = conn.prepare("SELECT value FROM settings WHERE key='bank_account'").get().value;
+  const ins = conn.prepare(`INSERT INTO vietqr_transactions(transactionid,bank_account,amount,content,order_id,trans_type,matched,note,category,created_at)
+    VALUES (?,?,?,?,'','C',0,'Không tìm thấy hóa đơn','unclassified',?)`);
+  const rnd = mulberry32(hash('q-' + code));
+  [0.2, 1, 5, 9].forEach((daysAgo, i) => ins.run(`QR-${code}-${i}`, acc, Math.round((20 + rnd() * 180)) * 1000,
+    ['CK tien hang', 'chuyen tien', 'Ung ho', 'mua rau'][i], fmtDate(new Date(Date.now() - daysAgo * 86400000))));
 }
 
 /* ===================== Cộng đồng và nhân sự nền tảng ===================== */
@@ -533,6 +664,8 @@ function seedCommunities() {
     addUser(t.id, `${c.code}-duyet`, `${lb.approver_label || 'Người duyệt'} ${c.name}`, 'approver');
     addUser(t.id, `${c.code}-truong`, `${lb.leader_label || 'Trưởng'} ${c.name}`, 'community_leader');
     seedFunds(fundCode, c);
+    seedSmallSellers();
+    seedCategories(row.id, c);
   }
   for (const [u, name, role] of [['vanhanh', 'Nhân viên vận hành', 'platform_ops'], ['hotro', 'Nhân viên hỗ trợ', 'platform_support'],
     ['kythuat', 'Kỹ sư VietQR', 'platform_tech'], ['ql-thon-a', 'Cán bộ phụ trách Thôn An Phú', 'platform_community']]) addUser(null, u, name, role);
@@ -551,6 +684,7 @@ console.log('  DATA_DIR: ' + DATA_DIR + '\n');
 const results = [];
 for (const s of STORES) results.push(seedStore(s));
 const reportToken = seedCommunities();
+require('../src/lib/checks').runChecks();
 
 let tProducts = 0, tInvoices = 0, tRevenue = 0, tReturns = 0;
 for (const r of results) {
@@ -567,4 +701,5 @@ for (const c of control.prepare('SELECT code, donations_token FROM communities W
   console.log(`  Công đức công khai ${c.code}: /congduc/${c.donations_token}`);
 }
 console.log('  Tài khoản (mật khẩu demo1234): <mã-cửa-hàng>-owner|quanly|thungan|kho|ketoan,');
-console.log('    thon-a-thuquy|duyet|truong (tương tự thon-b, cho-c), vanhanh, hotro, kythuat, ql-thon-a.\n');
+console.log('    thon-a-thuquy|duyet|truong (tương tự thon-b, cho-c, chua-pl), vanhanh, hotro, kythuat, ql-thon-a.');
+console.log('  Người bán nhỏ: ' + SMALL_SELLERS.map((x) => x[0] + '-owner').join(', ') + ' (và <mã>-phu).\n');

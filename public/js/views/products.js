@@ -1,4 +1,4 @@
-import { $, $$, esc, num, money, toast, modal, closeModal, downloadCSV, debounce } from '../util.js';
+import { $, $$, esc, num, money, toast, modal, closeModal, downloadCSV, debounce, today } from '../util.js';
 import { api, state, loadCategories } from '../store.js';
 import { openProductForm, openStockAdjust } from './product-form.js';
 import { openPriceLists } from './price-lists.js';
@@ -131,5 +131,5 @@ async function generateBarcodes() {
 function exportCSV() {
   const rows = [['Mã vạch', 'SKU', 'Tên', 'Danh mục', 'ĐVT', 'Giá vốn', 'Giá bán', 'Tồn', 'Tồn tối thiểu'],
     ...products.map((p) => [p.barcode || '', p.sku || '', p.name, p.category_name || '', p.unit, p.cost_price, p.sell_price, p.stock, p.min_stock])];
-  downloadCSV(`san-pham-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+  downloadCSV(`san-pham-${today()}.csv`, rows);
 }
