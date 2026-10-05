@@ -1,0 +1,11 @@
+.git
+node_modules
+data
+data-*
+videos
+test
+.env
+.env.*
+!.env.example
+.claude
+*.log
