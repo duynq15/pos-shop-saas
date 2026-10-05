@@ -3,10 +3,12 @@
 const express = require('express');
 const crypto = require('crypto');
 const db = require('../db');
-const { control, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders } = require('../control');
+const { control, audit, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders } = require('../control');
 const { ok, fail, wrap, str, round } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
-const { requirePerm } = require('../middleware');
+const { requirePerm, can } = require('../middleware');
+const { openAlerts } = require('../lib/checks');
+const { bankTime } = require('../lib/vqr-time');
 const { accountConflict, CONFLICT_MSG } = require('../lib/community');
 const { generateQR, getToken, bases, testCallbackUrl } = require('../payments/vietqr');
 const funds = require('./funds');
@@ -82,7 +84,9 @@ function resolveTenantByBank(account) {
 // p: { transactionid, bankaccount, amount, content, orderId, transType, raw }
 function processPayment(code, p) {
   return db.runWith(code, () => {
-    const txnId = str(p.transactionid, 80) || 'AUTO-' + Date.now();
+    // Không có mã giao dịch ngân hàng thì không chống trùng được: chỉ lưu để đối soát, không xác nhận hóa đơn (ERR-02)
+    const txnId = str(p.transactionid, 80);
+    if (!txnId) return { ref: '', message: 'Thiếu mã giao dịch ngân hàng, không ghi nhận', paid: false };
     const orderId = str(p.orderId, 20) || str(p.content, 23);
     const amount = round(p.amount);
     const bank = str(p.bankaccount, 40);
@@ -103,25 +107,40 @@ function processPayment(code, p) {
       const m = String(orderId + ' ' + content).match(/P\d{10}/);
       if (m) inv = db.prepare('SELECT * FROM invoices WHERE payment_ref=? AND type=?').get(m[0], 'sale');
     }
-    const ins = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`);
+    // ON CONFLICT DO NOTHING + index duy nhất: hai lần gửi đồng thời cùng mã chỉ ghi được một dòng
+    const insRaw = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json,category,bank_time)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
+    // Loại suy từ kết quả khớp: chỉ 'sale' khi đã gắn hóa đơn và khớp; tiền ra là 'refund'; còn lại chờ phân loại
+    const ins = { run: (id, invId, bk, amt, ct, oid, tt, matched, note, rj) =>
+      insRaw.run(id, invId, bk, amt, ct, oid, tt, matched, note, rj, tt === 'D' ? 'refund' : matched ? 'sale' : 'unclassified', bankTime(p.raw)) };
 
     if (!inv) {
       ins.run(txnId, null, bank, amount, content, orderId, transType, 0, 'Không tìm thấy hóa đơn', raw);
       return { ref: '', message: 'Không tìm thấy hóa đơn theo mã đối soát', paid: false };
     }
-    if (inv.status === 'paid') {
-      ins.run(txnId, inv.id, bank, amount, content, orderId, transType, 1, 'Hóa đơn đã thanh toán trước đó', raw);
-      return { ref: orderId, message: 'Hóa đơn đã thanh toán', paid: true };
+    // Chỉ hóa đơn đang chờ chuyển khoản mới được xác nhận. Hóa đơn đã thanh toán (khách chuyển trùng) hay đã hủy
+    // (hàng đã trả về kho) thì giữ nguyên, tiền vào hàng chờ phân loại để chủ cửa hàng xử lý (hoàn tiền / thu khác).
+    if (inv.status !== 'pending') {
+      const why = inv.status === 'paid' ? 'Hóa đơn đã thanh toán trước đó, tiền về thêm lần nữa' : 'Hóa đơn đã hủy, tiền về sau khi hủy';
+      ins.run(txnId, inv.id, bank, amount, content, orderId, transType, 0, why, raw);
+      return { ref: orderId, message: why, paid: inv.status === 'paid' };
     }
     if (amount !== inv.total) {
       ins.run(txnId, inv.id, bank, amount, content, orderId, transType, 0, `Số tiền không khớp (nhận ${amount}, cần ${inv.total})`, raw);
       return { ref: orderId, message: `Số tiền không khớp (nhận ${amount}, cần ${inv.total})`, paid: false, mismatch: true };
     }
-    db.prepare("UPDATE invoices SET status='paid', paid_amount=total, change_amount=0 WHERE id=?").run(inv.id);
-    const hasPay = db.prepare('SELECT COUNT(*) c FROM invoice_payments WHERE invoice_id=?').get(inv.id).c;
-    if (!hasPay) db.prepare('INSERT INTO invoice_payments(invoice_id,method,amount,note) VALUES (?,?,?,?)').run(inv.id, 'transfer', inv.total, 'VietQR ' + txnId);
-    ins.run(txnId, inv.id, bank, amount, content, orderId, transType, 1, 'Đã thanh toán', raw);
+    // Ghi giao dịch trước; mã đã có (gửi lặp) thì dừng, không xác nhận hóa đơn lần hai. Cả khối trong một transaction.
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      if (!ins.run(txnId, inv.id, bank, amount, content, orderId, transType, 1, 'Đã thanh toán', raw).changes) {
+        db.exec('ROLLBACK');
+        return { ref: orderId, message: 'Giao dịch đã xử lý trước đó', paid: true };
+      }
+      db.prepare("UPDATE invoices SET status='paid', paid_amount=total, change_amount=0 WHERE id=?").run(inv.id);
+      const hasPay = db.prepare('SELECT COUNT(*) c FROM invoice_payments WHERE invoice_id=?').get(inv.id).c;
+      if (!hasPay) db.prepare('INSERT INTO invoice_payments(invoice_id,method,amount,note) VALUES (?,?,?,?)').run(inv.id, 'transfer', inv.total, 'VietQR ' + txnId);
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
     return { ref: orderId, message: 'Đã ghi nhận thanh toán', paid: true };
   });
 }
@@ -158,6 +177,14 @@ webhook.post('/bank/api/transaction-sync', wrap((req, res) => {
   const fundHit = mapped ? null : funds.resolveFundByBank(b.bankaccount);
   const code = (mapped && mapped.tenant_code) || (fundHit && fundHit.tenantCode) || resolveTenantByBank(b.bankaccount) || pl.t;
   console.log(`[vqr] sync nhận: shop=${code || '?'} orderId=${b.orderId || ''} amount=${b.amount || ''} content=${b.content || ''}${fundHit ? ' quỹ=' + fundHit.fundId : ''}`);
+  // GĐ3.0: token cấp bằng thông tin đăng nhập riêng của một tenant (pl.t) chỉ được ghi vào chính tenant đó.
+  // Trước đây định tuyến theo số tài khoản / orderId nên token của shop A ghi được tiền vào shop B hoặc quỹ.
+  // Token dùng chung của nền tảng (pl.t = null, VietQR gọi vào) vẫn định tuyến như cũ.
+  if (pl.t && code && code !== pl.t) {
+    console.warn(`[vqr] chặn ghi chéo tenant: token=${pl.t} đích=${code} txn=${str(b.transactionid, 80)}`);
+    audit({ action: 'vqr.cross_tenant_blocked', entity: 'tenant', entityId: code, detail: JSON.stringify({ token_tenant: pl.t, transactionid: str(b.transactionid, 80), amount: b.amount }), ip: req.ip });
+    return res.status(403).json({ error: true, errorReason: 'TENANT_MISMATCH', toastMessage: 'Token không thuộc tài khoản nhận tiền này', object: null });
+  }
   if (!code) return res.status(400).json({ error: true, errorReason: 'TENANT_NOT_FOUND', toastMessage: 'Không xác định được cửa hàng theo tài khoản nhận tiền', object: null });
   try {
     const r = fundHit
@@ -276,8 +303,8 @@ function txList(req, paged) {
   const holder = (db.prepare("SELECT value FROM settings WHERE key='account_holder'").get() || {}).value || '';
 
   const qrOrders = getQrOrders(req.tenant.code, from, to);
-  const txns = db.prepare(`SELECT transactionid, invoice_id, bank_account, amount, content, order_id, trans_type, matched, note, created_at
-    FROM vietqr_transactions WHERE date(created_at)>=date(?) AND date(created_at)<=date(?) ORDER BY id DESC LIMIT 3000`).all(from, to);
+  const txns = db.prepare(`SELECT id, transactionid, invoice_id, bank_account, amount, content, order_id, trans_type, matched, note, category, created_at
+    FROM vietqr_transactions WHERE dup_of IS NULL AND date(created_at)>=date(?) AND date(created_at)<=date(?) ORDER BY id DESC LIMIT 3000`).all(from, to);
 
   const ids = [...new Set([...qrOrders.map((o) => o.invoice_id), ...txns.map((t) => t.invoice_id)].filter(Boolean))];
   const codeMap = new Map();
@@ -290,7 +317,7 @@ function txList(req, paged) {
   const rows = [];
   const used = new Set();
   for (const t of txns) {
-    const st = t.trans_type === 'D' ? 'refund' : (t.matched === 1 ? 'success' : 'unmatched');
+    const st = t.trans_type === 'D' ? 'refund' : (t.category && t.category !== 'unclassified' ? 'success' : 'unmatched');
     if (t.order_id && orderMap.has(t.order_id)) used.add(t.order_id);
     rows.push({
       ref: t.transactionid || '', amount: Number(t.amount) || 0, time: t.created_at,
@@ -298,6 +325,7 @@ function txList(req, paged) {
       content: t.content || '', type: t.trans_type === 'D' ? 'Hoàn tiền' : 'QR giao dịch',
       note: t.note || '', order_id: t.order_id || '',
       invoice_code: t.invoice_id ? (codeMap.get(t.invoice_id) || '') : '', status: st,
+      id: t.id, category: t.category || 'unclassified',
     });
   }
   for (const o of qrOrders) {
@@ -350,5 +378,74 @@ router.get('/vietqr/transactions/export', requirePerm('report.export'), wrap((re
   }));
   sendXlsx(res, `giao-dich-vietqr-${from}_${to}`, out, { sheet: 'Giao dich VietQR' });
 }));
+
+/* ===================== Hàng chờ phân loại (GĐ3.2 — ERR-03, FR-08) ===================== */
+// Giao dịch tiền vào chưa xác định được loại không vào báo cáo cho đến khi có người phân loại.
+// Cửa hàng: gắn với hóa đơn đang chờ chuyển khoản cùng số tiền, hoặc ghi là "thu khác".
+//   Quyền invoice.cancel (chủ, quản lý): gắn giao dịch = xác nhận đã nhận tiền, thu ngân không tự làm.
+// Cộng đồng: thủ quỹ chọn quỹ để ghi sổ (sinh bút toán thu approved, bank_ref = mã giao dịch).
+const auditOf = (req, action, id, detail) => audit({ tenantId: req.user.tenant_id, userId: req.user.id, username: req.user.username,
+  action, entity: 'vietqr_transaction', entityId: id, detail: JSON.stringify(detail), ip: req.ip });
+const getTxn = (id) => db.prepare("SELECT * FROM vietqr_transactions WHERE id=? AND dup_of IS NULL").get(Number(id));
+const isCommunity = (req) => req.tenant && req.tenant.kind === 'community';
+const classifyPerm = (req, res, next) => {
+  const perm = isCommunity(req) ? 'fund.entry' : 'invoice.cancel';
+  return requirePerm(perm)(req, res, next);
+};
+
+router.get('/vietqr/unclassified', classifyPerm, wrap((req, res) => {
+  const items = db.prepare(`SELECT id, transactionid, bank_account, amount, content, order_id, note, created_at,
+      CAST((julianday('now','localtime') - julianday(created_at)) AS INTEGER) AS age_days
+    FROM vietqr_transactions WHERE dup_of IS NULL AND category='unclassified' AND trans_type='C' ORDER BY id DESC LIMIT 500`).all();
+  // Gợi ý: hóa đơn chờ chuyển khoản cùng số tiền (cửa hàng) hoặc danh sách quỹ đang hoạt động (cộng đồng)
+  const options = isCommunity(req)
+    ? { funds: db.prepare("SELECT id, name, kind FROM funds WHERE status='active' ORDER BY id").all() }
+    : { invoices: db.prepare(`SELECT id, code, total, customer_name, created_at FROM invoices
+        WHERE type='sale' AND status='pending' ORDER BY id DESC LIMIT 200`).all() };
+  ok(res, { items, ...options });
+}));
+
+router.post('/vietqr/transactions/:id/classify', classifyPerm, wrap((req, res) => {
+  const t = getTxn(req.params.id);
+  if (!t) return fail(res, 'Không tìm thấy giao dịch', 404);
+  if (t.category !== 'unclassified' || t.trans_type !== 'C') return fail(res, 'Giao dịch đã được phân loại');
+  const b = req.body || {};
+  const by = req.user.full_name || req.user.username;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (isCommunity(req)) {
+      const r = funds.bookUnclassified(req, t, Number(b.fund_id), by);
+      db.prepare("UPDATE vietqr_transactions SET category=?, matched=1, note=?, classified_by=?, classified_at=datetime('now','localtime') WHERE id=?")
+        .run(r.category, 'Đã ghi vào quỹ ' + r.fund.name, by, t.id);
+      auditOf(req, 'vqr.classify', t.id, { transactionid: t.transactionid, fund_id: r.fund.id, entry: r.code });
+    } else if (b.invoice_id) {
+      const inv = db.prepare("SELECT * FROM invoices WHERE id=? AND type='sale'").get(Number(b.invoice_id));
+      if (!inv) throw Object.assign(new Error('Không tìm thấy hóa đơn'), { code: 404 });
+      if (inv.status !== 'pending') throw Object.assign(new Error('Chỉ gắn được với hóa đơn đang chờ chuyển khoản'), { code: 400 });
+      if (inv.total !== t.amount) throw Object.assign(new Error(`Số tiền không khớp hóa đơn (giao dịch ${t.amount}, hóa đơn ${inv.total})`), { code: 400 });
+      db.prepare("UPDATE invoices SET status='paid', paid_amount=total, change_amount=0 WHERE id=?").run(inv.id);
+      if (!db.prepare('SELECT COUNT(*) c FROM invoice_payments WHERE invoice_id=?').get(inv.id).c) {
+        db.prepare('INSERT INTO invoice_payments(invoice_id,method,amount,note) VALUES (?,?,?,?)').run(inv.id, 'transfer', inv.total, 'VietQR ' + t.transactionid + ' (phân loại tay)');
+      }
+      db.prepare("UPDATE vietqr_transactions SET category='sale', matched=1, invoice_id=?, note=?, classified_by=?, classified_at=datetime('now','localtime') WHERE id=?")
+        .run(inv.id, 'Gắn hóa đơn ' + inv.code, by, t.id);
+      auditOf(req, 'vqr.classify', t.id, { transactionid: t.transactionid, invoice: inv.code });
+    } else if (b.category === 'other') {
+      const reason = str(b.reason, 300);
+      if (!reason) throw Object.assign(new Error('Ghi lý do khi đánh dấu là thu khác'), { code: 400 });
+      db.prepare("UPDATE vietqr_transactions SET category='other', note=?, classified_by=?, classified_at=datetime('now','localtime') WHERE id=?")
+        .run('Thu khác: ' + reason, by, t.id);
+      auditOf(req, 'vqr.classify', t.id, { transactionid: t.transactionid, category: 'other', reason });
+    } else {
+      throw Object.assign(new Error('Chọn hóa đơn để gắn, hoặc đánh dấu là thu khác'), { code: 400 });
+    }
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  ok(res, getTxn(t.id));
+}));
+
+// Cảnh báo tự kiểm của tenant (GĐ3.5): chủ / quản lý (report.view) và thủ quỹ (fund.view) xem
+router.get('/alerts', (req, res, next) => (can(req, 'report.view') || can(req, 'fund.view') ? next() : fail(res, 'Không có quyền', 403)),
+  wrap((req, res) => ok(res, openAlerts([req.tenant.code]))));
 
 module.exports = { router, webhook, processPayment };

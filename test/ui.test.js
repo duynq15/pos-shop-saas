@@ -391,6 +391,11 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.locator('#fd-qr-close').click(); await quy.pg.waitForTimeout(200);
     await quy.pg.locator('#fd-subtabs [data-tab="report"]').click(); await quy.pg.waitForTimeout(600);
     ok('Period report renders', (await quy.pg.locator('#fd-rp-stats .stat').count()) === 6);
+    await quy.pg.waitForTimeout(400);
+    await quy.pg.locator('#fd-rc-stmt').pressSequentially('999999');
+    // Quỹ này chỉ có thu tiền mặt nên hệ thống ghi nhận 0 qua ngân hàng; sao kê 999.999 -> lệch +999.999
+    ok('Reconcile shows diff and asks for a note', /Sổ thiếu 999\.999/.test(await quy.pg.locator('#fd-rc-diff').innerText()) && await quy.pg.locator('#fd-rc-note-wrap').isVisible(),
+      await quy.pg.locator('#fd-rc-diff').innerText());
     await quy.pg.setViewportSize({ width: 400, height: 820 }); await quy.pg.waitForTimeout(300);
     ok('Funds: no horizontal overflow 400px', !(await quy.pg.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
     ok('Funds: mobile action bar visible', await quy.pg.locator('.fd-bar').isVisible());

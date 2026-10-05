@@ -1,10 +1,12 @@
-import { $, esc, num, money, today, addDays, monthStart } from '../util.js';
+import { $, esc, num, money, today, addDays, monthStart, modal, closeModal, toast, renderAlerts } from '../util.js';
 import { api, state } from '../store.js';
 import { can } from '../auth.js';
 import { icon } from '../icons.js';
 
+let rowsCache = []; // dòng đang hiển thị, để mở hộp phân loại
 const V = { from: today(), to: today(), preset: 'today', bank: '', field: 'ref', q: '', status: '', page: 1, size: 20 };
 
+const CAT = { sale: 'Bán hàng', other: 'Thu khác', fund: 'Quỹ', donation: 'Công đức', refund: 'Hoàn tiền' };
 const ST = {
   success: ['badge paid', 'Thành công'],
   pending: ['badge pending', 'Chờ thanh toán'],
@@ -55,6 +57,7 @@ export default {
   </div>
 </div>
 
+<div id="vqt-alerts"></div>
 <div class="stats" id="vqt-stats"></div>
 
 <div class="tabs" id="vqt-tabs"></div>
@@ -68,7 +71,7 @@ export default {
   <div class="tbl-wrap"><table class="grid"><thead><tr>
     <th>STT</th><th>Mã tham chiếu</th><th class="r">Số tiền (đ)</th><th>Thời gian TT / Tạo</th>
     <th>Tài khoản NH</th><th>Chủ tài khoản</th><th>Nội dung TT</th><th>Loại giao dịch</th>
-    <th>Mã đơn hàng</th><th>Trạng thái</th>
+    <th>Mã đơn hàng</th><th>Trạng thái</th><th></th>
   </tr></thead><tbody id="vqt-body"></tbody></table></div>
   <div class="toolbar" id="vqt-pager" style="justify-content:flex-end;margin:10px 0 0"></div>
 </div>`;
@@ -89,6 +92,8 @@ export default {
       if (t.id === 'vqt-newqr') { if (window.showView) window.showView('pos'); return; }
       if (t.id === 'vqt-prev') { V.page = Math.max(1, V.page - 1); return load(); }
       if (t.id === 'vqt-next') { V.page += 1; return load(); }
+      const cb = t.closest('[data-classify]');
+      if (cb) return openClassify(rowsCache.find((x) => String(x.id) === cb.dataset.classify));
       const tab = t.closest('[data-status]');
       if (tab) { V.status = tab.dataset.status; V.page = 1; return load(); }
     });
@@ -102,7 +107,7 @@ export default {
     el.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'vqt-q') { V.q = e.target.value.trim(); V.page = 1; load(); } });
   },
 
-  show() { setPreset(V.preset || 'today'); load(); },
+  show() { setPreset(V.preset || 'today'); load(); renderAlerts($('#vqt-alerts'), api); },
 };
 
 function qs(paged) {
@@ -140,15 +145,15 @@ async function load() {
     renderRows(r.items, r.page, r.size);
     renderPager(r.total, r.page, r.size);
   } catch (e) {
-    $('#vqt-body').innerHTML = `<tr><td colspan="10" class="empty">${esc(e.message)}</td></tr>`;
+    $('#vqt-body').innerHTML = `<tr><td colspan="11" class="empty">${esc(e.message)}</td></tr>`;
   }
 }
 
 function renderStats(s) {
   const cards = [
     [icon('card'), 'Tất cả GD', num(s.total_count) + ' GD', money(s.total_amount), 'Doanh thu', 'primary'],
-    [icon('check'), 'GD đã hoạch toán', num(s.success_count) + ' GD', money(s.success_amount), 'Doanh thu', 'ok'],
-    [icon('clock'), 'GD chưa hoạch toán', num(s.unmatched_count) + ' GD', money(s.unmatched_amount), 'Doanh thu', 'warn'],
+    [icon('check'), 'GD đã hạch toán', num(s.success_count) + ' GD', money(s.success_amount), 'Doanh thu', 'ok'],
+    [icon('clock'), 'GD chưa hạch toán', num(s.unmatched_count) + ' GD', money(s.unmatched_amount), 'Doanh thu', 'warn'],
     [icon('undo'), 'GD hoàn tiền', num(s.refund_count) + ' GD', money(s.refund_amount), 'Chi phí', 'danger'],
   ];
   const el = $('#vqt-stats'); if (!el) return;
@@ -170,7 +175,8 @@ function renderRows(items, page, size) {
     const refund = r.status === 'refund';
     const amt = `${refund ? '- ' : '+ '}${num(r.amount)}`;
     const type = r.type === 'Hoàn tiền' ? '<span class="badge return">Hoàn tiền</span>' : '<span class="badge sale">QR giao dịch</span>';
-    return `<tr>
+    const canCls = r.status === 'unmatched' && r.id && can('invoice.cancel');
+    return `<tr${canCls ? ` class="vqt-pending" data-classify="${r.id}" title="Bấm để phân loại"` : ''}>
       <td>${(page - 1) * size + i + 1}</td>
       <td>${r.ref ? `<code>${esc(r.ref)}</code>` : '<span class="muted">—</span>'}</td>
       <td class="r" style="color:${refund ? 'var(--danger)' : 'var(--ok)'};font-weight:600">${amt}</td>
@@ -180,9 +186,11 @@ function renderRows(items, page, size) {
       <td class="muted">${esc(r.content || '')}</td>
       <td>${type}</td>
       <td>${r.order_id ? `<code>${esc(r.order_id)}</code>` : '—'}</td>
-      <td><span class="${cls}">${label}</span></td>
+      <td><span class="${cls}">${label}</span>${r.status === 'success' && CAT[r.category] ? `<span class="sub">${CAT[r.category]}</span>` : ''}</td>
+      <td class="r vqt-act">${r.status === 'unmatched' && r.id && can('invoice.cancel') ? `<button class="btn sm primary" data-classify="${r.id}">Phân loại</button>` : ''}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="10" class="empty">Chưa có giao dịch</td></tr>';
+  }).join('') || '<tr><td colspan="11" class="empty">Chưa có giao dịch</td></tr>';
+  rowsCache = items || [];
 }
 
 function renderPager(total, page, size) {
@@ -191,4 +199,31 @@ function renderPager(total, page, size) {
   el.innerHTML = `<span class="muted">Hiển thị ${num(total)} · Trang ${page}/${pages}</span>
     <button class="btn sm" id="vqt-prev" ${page <= 1 ? 'disabled' : ''}>‹</button>
     <button class="btn sm" id="vqt-next" ${page >= pages ? 'disabled' : ''}>›</button>`;
+}
+
+/* ---------------- Phân loại giao dịch chờ (GĐ3.2 — ERR-03) ---------------- */
+async function openClassify(r) {
+  if (!r) return;
+  let invoices = [];
+  try { invoices = (await api('/api/vietqr/unclassified')).invoices || []; } catch (e) { toast(e.message, true); return; }
+  const same = invoices.filter((i) => i.total === r.amount);
+  const opts = (list) => list.map((i) => `<option value="${i.id}">${esc(i.code)} · ${money(i.total)}${i.customer_name ? ' · ' + esc(i.customer_name) : ''} · ${esc((i.created_at || '').slice(0, 16))}</option>`).join('');
+  modal(`<h2>Phân loại giao dịch</h2>
+    <p class="muted" style="margin:-8px 0 14px">${esc(r.ref)} · <b>${money(r.amount)}</b> · ${esc(r.time || '')}<br>Nội dung: ${esc(r.content || '—')}</p>
+    <label class="chk" style="margin-bottom:8px"><input type="radio" name="vq-k" value="inv" ${same.length ? 'checked' : ''} ${same.length ? '' : 'disabled'}>
+      Gắn với hóa đơn chờ chuyển khoản ${same.length ? `(${same.length} hóa đơn cùng số tiền)` : '(không có hóa đơn nào cùng số tiền)'}</label>
+    ${same.length ? `<label class="fld"><select class="field" id="vq-inv">${opts(same)}</select></label>` : ''}
+    <label class="chk" style="margin-bottom:8px"><input type="radio" name="vq-k" value="other" ${same.length ? '' : 'checked'}> Thu khác (không phải bán hàng)</label>
+    <label class="fld">Lý do (bắt buộc khi chọn thu khác)<input class="field" id="vq-reason" placeholder="Ví dụ: khách trả nợ cũ, chuyển nhầm"></label>
+    <p class="muted" style="font-size:12.5px">Phân loại rồi thì không đổi được. Sai thì hủy hóa đơn hoặc xử lý trả hàng như bình thường.</p>
+    <div class="modal-actions"><button class="btn" id="vq-cancel">Hủy</button><button class="btn primary" id="vq-ok">Phân loại</button></div>`);
+  $('#vq-cancel').onclick = closeModal;
+  $('#vq-ok').onclick = async () => {
+    const k = document.querySelector('input[name="vq-k"]:checked')?.value;
+    const body = k === 'inv' ? { invoice_id: Number($('#vq-inv').value) } : { category: 'other', reason: $('#vq-reason').value.trim() };
+    try {
+      await api(`/api/vietqr/transactions/${r.id}/classify`, { method: 'POST', body });
+      toast('Đã phân loại'); closeModal(); load();
+    } catch (e) { toast(e.message, true); }
+  };
 }

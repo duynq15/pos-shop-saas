@@ -137,6 +137,14 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault(); e.stopPropagation(); comboClose(input);
   }
 }, true);
+// Dải cảnh báo tự kiểm (GĐ3.5). Chèn vào el; không có cảnh báo thì để trống.
+export async function renderAlerts(el, api) {
+  if (!el) return;
+  let list = [];
+  try { list = await api('/api/alerts'); } catch { list = []; }
+  el.innerHTML = list.map((a) => `<div class="alert-bar ${a.kind}" role="status"><b>Cảnh báo:</b> ${esc(a.message)}
+    <span class="muted">· phát hiện ${esc(String(a.created_at || '').slice(0, 16))}</span></div>`).join('');
+}
 export const fmtDT = (s) => (s ? String(s).slice(0, 16) : '');
 
 export const debounce = (fn, ms = 250) => {

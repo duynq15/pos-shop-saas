@@ -1,6 +1,6 @@
 // Màn hình sổ quỹ (GĐ2.8): chọn quỹ, số liệu nhanh, việc cần làm, sổ thu chi, báo cáo kỳ.
 // Bố cục theo việc hằng ngày của thủ quỹ: thu tiền là thao tác chính; duyệt chi gom vào "Việc cần làm".
-import { $, esc, nf, money, today, monthStart, modal, closeModal, toast, printHTML, bankField, bankOf } from '../util.js';
+import { $, esc, nf, money, today, monthStart, modal, closeModal, toast, printHTML, bankField, bankOf, renderAlerts } from '../util.js';
 import { api } from '../store.js';
 import { auth, can } from '../auth.js';
 import { icon } from '../icons.js';
@@ -49,6 +49,7 @@ export default {
     el.innerHTML = `
 <div class="view-head"><div><h1>Sổ quỹ</h1><div class="sub">Quỹ chung và công đức của cộng đồng</div></div>
   <button class="btn hidden" id="fd-new-fund">+ Quỹ mới</button></div>
+<div id="fd-alerts"></div>
 <div class="fd-chips" id="fd-tabs" role="tablist" aria-label="Chọn quỹ"></div>
 <div id="fd-body"><div class="card fd-empty">Đang tải…</div></div>`;
     $('#fd-new-fund').onclick = () => openFundForm(null);
@@ -58,7 +59,7 @@ export default {
     };
   },
 
-  async show() { await loadFunds(); },
+  async show() { await loadFunds(); renderAlerts($('#fd-alerts'), api); },
 };
 
 async function loadFunds() {
@@ -131,6 +132,19 @@ function bodyTemplate(f) {
   </div>
   <div class="stats" id="fd-rp-stats"></div>
   <p class="muted fd-hint">Tồn cuối kỳ = tồn đầu kỳ + thu − chi ± điều chỉnh. Chỉ tính khoản đã ghi sổ, theo ngày ghi sổ.</p>
+  <div class="card fd-recon">
+    <h3>Đối soát sao kê ngân hàng</h3>
+    <p class="muted fd-form-hint">So tổng tiền vào trên sao kê của kỳ đang chọn với tiền vào qua ngân hàng đã ghi sổ (không tính tiền mặt).
+      Lệch thì bổ sung khoản thiếu bằng "Thu tiền" (chuyển khoản, có mã giao dịch) rồi đối soát lại.</p>
+    <div class="fd-recon-row">
+      <div><span class="muted">Hệ thống ghi nhận</span><b id="fd-rc-sys">…</b></div>
+      <label class="fld">Tổng tiền vào theo sao kê<input class="field fd-amount" id="fd-rc-stmt" inputmode="numeric" autocomplete="off" placeholder="0"></label>
+      <div><span class="muted">Chênh lệch</span><b id="fd-rc-diff">—</b></div>
+    </div>
+    <label class="fld" id="fd-rc-note-wrap" hidden>Nguyên nhân chênh lệch *<input class="field" id="fd-rc-note" placeholder="Ví dụ: thiếu khoản 20.000 ngày 01, sẽ bổ sung"></label>
+    ${can('fund.entry') ? '<div class="toolbar"><button class="btn primary" id="fd-rc-save">Lưu biên bản đối soát</button></div>' : ''}
+    <div id="fd-rc-history"></div>
+  </div>
 </section>
 ${entry ? `<div class="fd-bar"><button class="btn primary" id="fd-in-m">+ Thu tiền</button><button class="btn" id="fd-out-m">+ Phiếu chi</button></div>` : ''}`;
 }
@@ -187,16 +201,51 @@ async function loadTodo(f) {
   const { entries: submitted } = await api(`/api/funds/${f.id}/entries?status=submitted`);
   let drafts = [];
   if (can('fund.entry')) drafts = (await api(`/api/funds/${f.id}/entries?status=draft`)).entries.filter((e) => e.created_by === auth.user.id);
+  // GĐ3.2: tiền vào tài khoản quỹ nhưng chưa ghi được sổ (quỹ đóng, không rõ quỹ…) chờ thủ quỹ phân loại.
+  // Hàng chờ chung của cộng đồng nên hiện ở mọi quỹ.
+  let queue = [];
+  if (can('fund.entry')) { try { queue = (await api('/api/vietqr/unclassified')).items; } catch { queue = []; } }
   todo = [...drafts, ...submitted];
-  const actionable = drafts.length + (can('fund.approve') ? submitted.filter((e) => e.created_by !== auth.user.id).length : 0);
+  const actionable = queue.length + drafts.length + (can('fund.approve') ? submitted.filter((e) => e.created_by !== auth.user.id).length : 0);
   $('#fd-m-todo').textContent = actionable ? `${actionable} việc` : 'Không có';
   $('#fd-todo-count').textContent = actionable || '';
-  $('#fd-pending-body').innerHTML = todo.map(taskCard).join('') || `<div class="card fd-empty">
+  $('#fd-pending-body').innerHTML = queue.map(queueCard).join('') + todo.map(taskCard).join('') || `<div class="card fd-empty">
     <p><b>Không có việc cần làm.</b></p>
-    <p class="muted">${can('fund.approve') ? 'Khoản chi do thủ quỹ gửi sẽ hiện ở đây để bạn duyệt.' : 'Phiếu chi nháp và khoản đang chờ duyệt sẽ hiện ở đây.'}</p></div>`;
+    <p class="muted">${can('fund.approve') ? 'Khoản chi do thủ quỹ gửi sẽ hiện ở đây để bạn duyệt.' : 'Phiếu chi nháp, khoản đang chờ duyệt và tiền vào chưa rõ quỹ sẽ hiện ở đây.'}</p></div>`;
   $('#fd-pending-body').onclick = (ev) => {
+    const q = ev.target.closest('[data-queue]');
+    if (q) return openQueueClassify(queue.find((x) => String(x.id) === q.dataset.queue), f);
     const b = ev.target.closest('[data-act]'); if (!b) return;
     taskAction(f, b.dataset.act, todo.find((x) => String(x.id) === b.dataset.id));
+  };
+}
+
+function queueCard(t) {
+  return `<div class="fd-task">
+    <div class="fd-task-main">
+      <div class="fd-task-amt">${signedMoney(t.amount)}</div>
+      <div>${esc(t.content || 'Chuyển khoản không có nội dung')}</div>
+      <div class="meta">VietQR · ${esc(t.transactionid)} · TK ${esc(t.bank_account || '')} · ${esc((t.created_at || '').slice(0, 16))}${t.age_days ? ` · đã ${t.age_days} ngày` : ''}</div>
+    </div>
+    <div class="fd-task-side"><span class="badge pending">Tiền vào chưa rõ quỹ</span>
+      <div class="acts"><button class="btn primary" data-queue="${t.id}">Ghi vào quỹ</button></div></div>
+  </div>`;
+}
+
+function openQueueClassify(t, current) {
+  if (!t) return;
+  const active = funds.filter((x) => x.status === 'active');
+  modal(`<h2>Ghi tiền vào quỹ</h2>
+    <p class="muted" style="margin:-8px 0 14px">${money(t.amount)} · ${esc(t.transactionid)} · ${esc((t.created_at || '').slice(0, 16))}<br>Nội dung: ${esc(t.content || '—')}</p>
+    <label class="fld">Quỹ nhận *<select class="field" id="fd-q-fund">${active.map((x) => `<option value="${x.id}" ${x.id === current.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+    <p class="muted" style="font-size:12.5px">Ghi xong là khoản thu đã ghi sổ, không đổi quỹ được nữa. Sai thì lập bút toán điều chỉnh.</p>
+    <div class="modal-actions"><button class="btn" id="fd-q-cancel">Hủy</button><button class="btn primary" id="fd-q-ok">Ghi sổ</button></div>`);
+  $('#fd-q-cancel').onclick = closeModal;
+  $('#fd-q-ok').onclick = async () => {
+    try {
+      await api(`/api/vietqr/transactions/${t.id}/classify`, { method: 'POST', body: { fund_id: Number($('#fd-q-fund').value) } });
+      toast(`Đã ghi ${money(t.amount)} vào quỹ`); closeModal(); await loadFunds();
+    } catch (e) { toast(e.message, true); }
   };
 }
 
@@ -311,7 +360,40 @@ async function loadReport(fundId) {
       ['Tồn đầu kỳ', r.opening_balance, ''], ['Thu chuyển khoản', r.income_bank, 'ok'], ['Thu tiền mặt', r.income_cash, 'ok'],
       ['Chi', r.expense, 'danger'], ['Điều chỉnh', r.adjust, ''], ['Tồn cuối kỳ', r.closing_balance, 'primary'],
     ].map(([k, v, cls]) => `<div class="stat ${cls}"><div class="k">${k}</div><div class="v">${money(v)}</div></div>`).join('');
+    await loadReconcile(fundId, from, to);
   } catch (e) { toast(e.message, true); }
+}
+
+/* ---------------- Đối soát sao kê (GĐ3.6) ---------------- */
+// Lệch khác 0 luôn là việc cần xử lý (sổ thiếu hoặc thừa so với sao kê), nên hiện màu cảnh báo chứ không xanh / đỏ.
+const diffMoney = (d) => (d === 0 ? '<span class="fd-pos">Khớp</span>' : `<b class="fd-diff">${d > 0 ? 'Sổ thiếu ' : 'Sổ thừa '}${money(Math.abs(d))}</b>`);
+async function loadReconcile(fundId, from, to) {
+  const rc = await api(`/api/funds/${fundId}/reconcile?from=${from}&to=${to}`);
+  $('#fd-rc-sys').textContent = money(rc.system_in) + ` (${rc.count} khoản)`;
+  const stmt = $('#fd-rc-stmt');
+  const update = () => {
+    const v = stmt.value.trim() ? parseMoney(stmt.value) : null;
+    const diff = v === null ? null : v - rc.system_in;
+    $('#fd-rc-diff').innerHTML = diff === null ? '—' : diffMoney(diff);
+    $('#fd-rc-note-wrap').hidden = !diff;
+  };
+  if (!stmt.dataset.bound) { bindMoney(stmt); stmt.dataset.bound = '1'; }
+  stmt.oninput = update; update();
+  const save = $('#fd-rc-save');
+  if (save) save.onclick = async () => {
+    if (!stmt.value.trim()) { toast('Nhập tổng tiền vào theo sao kê', true); stmt.focus(); return; }
+    try {
+      const r = await api(`/api/funds/${fundId}/reconciliations`, { method: 'POST', body: { from, to, statement_in: parseMoney(stmt.value), note: $('#fd-rc-note').value } });
+      toast(r.diff ? `Đã lưu biên bản, lệch ${money(r.diff)}` : 'Đã lưu biên bản: khớp');
+      stmt.value = ''; $('#fd-rc-note').value = ''; await loadReconcile(fundId, from, to);
+    } catch (e) { toast(e.message, true); }
+  };
+  $('#fd-rc-history').innerHTML = rc.history.length ? `<div class="tbl-wrap"><table class="grid"><thead><tr>
+      <th>Kỳ</th><th class="r">Sao kê</th><th class="r">Hệ thống</th><th class="r">Chênh</th><th>Ghi chú</th><th>Người lập</th></tr></thead><tbody>
+      ${rc.history.map((h) => `<tr><td class="nw">${esc(h.period_from)} → ${esc(h.period_to)}</td><td class="r nw">${money(h.statement_in)}</td>
+        <td class="r nw">${money(h.system_in)}</td><td class="r">${diffMoney(h.diff)}</td>
+        <td class="muted">${esc(h.note || '')}</td><td class="muted">${esc(h.created_by_name || '')} · ${esc((h.created_at || '').slice(0, 16))}</td></tr>`).join('')}
+    </tbody></table></div>` : '<p class="muted fd-hint">Chưa có biên bản đối soát nào.</p>';
 }
 
 function printReport(f) {

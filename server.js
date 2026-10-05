@@ -22,6 +22,7 @@ const vietqr = require('./src/routes/vietqr');
 const publicRoutes = require('./src/routes/public');
 const community = require('./src/routes/community');
 const funds = require('./src/routes/funds');
+const { runChecks } = require('./src/lib/checks');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -86,6 +87,13 @@ function lanUrls() {
   return urls;
 }
 
+// Tự kiểm mỗi đêm lúc 02:00 (GĐ3.5 — NFR-03), chạy thêm một lần ngay sau khi khởi động.
+function nightlyChecks() {
+  try { runChecks(); } catch (e) { console.error('  Tự kiểm lỗi:', e.message); }
+  const next = new Date(); next.setHours(26, 0, 0, 0); // 02:00 ngày mai
+  setTimeout(nightlyChecks, next - Date.now()).unref?.();
+}
+
 function autoBackup() {
   try {
     for (const t of control.prepare('SELECT code FROM tenants').all()) {
@@ -109,6 +117,7 @@ app.listen(PORT, HOST, () => {
   const tenants = control.prepare('SELECT COUNT(*) c FROM tenants').get().c;
   console.log(`\n  ${tenants} cửa hàng · đăng nhập bằng tài khoản được cấp\n`);
 
+  if (process.env.NO_CHECKS !== '1') setTimeout(nightlyChecks, 6000).unref?.();
   if (process.env.NO_BACKUP !== '1') {
     setTimeout(autoBackup, 4000).unref?.();
     setInterval(autoBackup, 6 * 60 * 60 * 1000).unref?.();

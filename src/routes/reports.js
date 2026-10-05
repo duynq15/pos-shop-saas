@@ -235,7 +235,7 @@ router.get('/reports/vietqr', requirePerm('report.view'), wrap((req, res) => {
   let sql = `SELECT v.id, v.transactionid, v.invoice_id, v.bank_account, v.amount, v.content, v.order_id,
       v.trans_type, v.matched, v.note, v.created_at, i.code AS invoice_code
     FROM vietqr_transactions v LEFT JOIN invoices i ON i.id=v.invoice_id
-    WHERE date(v.created_at)>=date(?) AND date(v.created_at)<=date(?)`;
+    WHERE v.dup_of IS NULL AND date(v.created_at)>=date(?) AND date(v.created_at)<=date(?)`;
   const params = [from, to];
   if (matched === '1') sql += ' AND v.matched=1';
   if (matched === '0') sql += ' AND v.matched=0';
@@ -246,11 +246,11 @@ router.get('/reports/vietqr', requirePerm('report.view'), wrap((req, res) => {
       COALESCE(SUM(CASE WHEN v.trans_type='C' THEN v.amount ELSE 0 END),0) AS received,
       SUM(CASE WHEN v.matched=1 THEN 1 ELSE 0 END) AS matched_count,
       SUM(CASE WHEN v.matched=0 THEN 1 ELSE 0 END) AS unmatched_count
-    FROM vietqr_transactions v WHERE date(v.created_at)>=date(?) AND date(v.created_at)<=date(?)`).get(from, to);
+    FROM vietqr_transactions v WHERE v.dup_of IS NULL AND date(v.created_at)>=date(?) AND date(v.created_at)<=date(?)`).get(from, to);
 
   // Đối chiếu QR đã tạo (lúc gọi Generate QR) với giao dịch đã nhận (callback).
   const paidSet = new Set(db.prepare(`SELECT DISTINCT order_id FROM vietqr_transactions
-    WHERE matched=1 AND order_id IS NOT NULL AND date(created_at)>=date(?) AND date(created_at)<=date(?)`)
+    WHERE dup_of IS NULL AND matched=1 AND order_id IS NOT NULL AND date(created_at)>=date(?) AND date(created_at)<=date(?)`)
     .all(from, to).map((r) => r.order_id));
   let orders = getQrOrders(req.tenant.code, from, to).map((o) => ({ ...o, paid: paidSet.has(o.order_id) }));
   if (matched === '1') orders = orders.filter((o) => o.paid);
@@ -281,7 +281,7 @@ router.get('/reports/vietqr/export', requirePerm('report.export'), wrap((req, re
       v.bank_account AS 'Tài khoản nhận', v.content AS 'Nội dung',
       CASE WHEN v.matched=1 THEN 'Khớp' ELSE 'Chưa khớp' END AS 'Trạng thái', v.note AS 'Ghi chú'
     FROM vietqr_transactions v LEFT JOIN invoices i ON i.id=v.invoice_id
-    WHERE date(v.created_at)>=date(?) AND date(v.created_at)<=date(?) ORDER BY v.id DESC`).all(from, to);
+    WHERE v.dup_of IS NULL AND date(v.created_at)>=date(?) AND date(v.created_at)<=date(?) ORDER BY v.id DESC`).all(from, to);
   sendXlsx(res, `giao-dich-vietqr-${from}_${to}`, rows, { sheet: 'Giao dich VietQR' });
 }));
 
@@ -289,7 +289,7 @@ router.get('/reports/vietqr/export', requirePerm('report.export'), wrap((req, re
 router.get('/reports/vietqr/reconcile/export', requirePerm('report.export'), wrap((req, res) => {
   const { from, to } = range(req.query);
   const paidSet = new Set(db.prepare(`SELECT DISTINCT order_id FROM vietqr_transactions
-    WHERE matched=1 AND order_id IS NOT NULL AND date(created_at)>=date(?) AND date(created_at)<=date(?)`)
+    WHERE dup_of IS NULL AND matched=1 AND order_id IS NOT NULL AND date(created_at)>=date(?) AND date(created_at)<=date(?)`)
     .all(from, to).map((r) => r.order_id));
   const rows = getQrOrders(req.tenant.code, from, to).map((o) => ({
     'Thời gian tạo QR': o.created_at,

@@ -15,6 +15,7 @@ const { requirePerm, can } = require('../middleware');
 const QRCode = require('qrcode');
 const { buildVietQR, removeVietnamese } = require('../lib/vietqr');
 const { sendXlsx } = require('../lib/xlsx');
+const { bankTime } = require('../lib/vqr-time');
 
 const router = express.Router();
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -375,6 +376,45 @@ router.get('/funds/:id/report/export', requirePerm('report.export'), wrap((req, 
   sendXlsx(res, `so-quy-${f.code}-${from}_${to}`, rows, { sheet: 'So quy' });
 }));
 
+/* ===================== Đối soát sao kê (GĐ3.6 — NFR-03, ERR-01) ===================== */
+// Thủ quỹ nhập tổng tiền vào theo sao kê ngân hàng của kỳ; hệ thống so với tiền vào qua ngân hàng đã ghi sổ.
+// Lệch thì bổ sung khoản thiếu bằng "Thu tiền" nguồn chuyển khoản (manual, có mã giao dịch) rồi đối soát lại.
+// ponytail: chỉ đối soát chiều tiền vào; phiếu chi chưa ghi chi bằng tiền mặt hay chuyển khoản. Thêm cột
+// phương thức chi cho fund_entries khi thôn cần đối soát cả số dư tài khoản.
+function bankIncome(fundId, from, to) {
+  if (!DAY.test(from) || !DAY.test(to) || from > to) bad('Khoảng ngày không hợp lệ');
+  const entries = db.prepare(`SELECT id, code, amount, source, bank_ref, payer_name, anonymous, note, approved_at FROM fund_entries
+    WHERE fund_id=? AND status='approved' AND type='in' AND source IN ('vietqr','manual')
+      AND date(approved_at)>=date(?) AND date(approved_at)<=date(?) ORDER BY approved_at, id`).all(fundId, from, to);
+  return { total: entries.reduce((s, e) => s + e.amount, 0), entries };
+}
+
+router.get('/funds/:id/reconcile', requirePerm('fund.view'), wrap((req, res) => {
+  const f = fundFor(req, req.params.id);
+  if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
+  const { from, to } = rangeOf(req.query);
+  const inc = bankIncome(f.id, from, to);
+  const history = db.prepare('SELECT * FROM fund_reconciliations WHERE fund_id=? ORDER BY id DESC LIMIT 24').all(f.id);
+  ok(res, { from, to, system_in: inc.total, count: inc.entries.length, entries: inc.entries, history });
+}));
+
+router.post('/funds/:id/reconciliations', requirePerm('fund.entry'), wrap((req, res) => {
+  const f = fundFor(req, req.params.id);
+  if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
+  const b = req.body || {};
+  const from = str(b.from, 10); const to = str(b.to, 10);
+  const statement = int(b.statement_in);
+  if (!Number.isSafeInteger(statement) || statement < 0 || statement > MAX_AMOUNT * 100) bad('Tổng tiền vào theo sao kê không hợp lệ');
+  const inc = bankIncome(f.id, from, to);
+  const diff = statement - inc.total;
+  const note = str(b.note, 500) || null;
+  if (diff !== 0 && !note) bad(`Lệch ${diff.toLocaleString('vi-VN')} ₫. Ghi chú nguyên nhân (ví dụ: khoản nào thiếu, sẽ bổ sung khi nào)`);
+  const r = db.prepare(`INSERT INTO fund_reconciliations(fund_id,period_from,period_to,statement_in,system_in,diff,note,created_by,created_by_name)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(f.id, from, to, statement, inc.total, diff, note, req.user.id, req.user.full_name || req.user.username);
+  log(req, 'fund.reconcile', 'fund', f.id, { from, to, statement_in: statement, system_in: inc.total, diff });
+  ok(res, db.prepare('SELECT * FROM fund_reconciliations WHERE id=?').get(r.lastInsertRowid));
+}));
+
 /* ===================== Webhook VietQR (dùng bởi src/routes/vietqr.js) ===================== */
 // Tài khoản của quỹ luôn duy nhất toàn hệ thống (BR-02), nên tài khoản đủ để xác định
 // tenant + quỹ, không cần bảng theo dõi đơn hàng như luồng hóa đơn.
@@ -396,9 +436,11 @@ function processFundPayment(code, fundId, p) {
     if (db.prepare('SELECT 1 FROM vietqr_transactions WHERE transactionid=?').get(txnId)) {
       return { ref: '', message: 'Giao dịch đã xử lý trước đó', paid: true };
     }
-    const insTxn = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`);
     const f = getFund(fundId);
+    const insRaw = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json,category,bank_time)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
+    const insTxn = { run: (id, invId, bk, amt, ct, oid, tt, matched, note, rj) =>
+      insRaw.run(id, invId, bk, amt, ct, oid, tt, matched, note, rj, tt === 'D' ? 'refund' : matched && f ? (f.kind === 'donation' ? 'donation' : 'fund') : 'unclassified', bankTime(p.raw)) };
     if (!f || f.status !== 'active') {
       insTxn.run(txnId, null, bank, amount, content, '', transType, 0, 'Quỹ không hoạt động', raw);
       return { ref: '', message: 'Quỹ không hoạt động', paid: false };
@@ -408,18 +450,37 @@ function processFundPayment(code, fundId, p) {
       return { ref: '', message: 'Không phải giao dịch tiền vào', paid: false };
     }
     const entryCode = makeCode(db, 'PT', 'fund_entries');
-    db.exec('BEGIN');
+    db.exec('BEGIN IMMEDIATE');
     try {
+    if (!insTxn.run(txnId, null, bank, amount, content, '', transType, 1, 'Đã ghi vào quỹ ' + f.name, raw).changes) {
+      db.exec('ROLLBACK');
+      return { ref: '', message: 'Giao dịch đã xử lý trước đó', paid: true };
+    }
     db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,note,status,created_by_name,approved_by_name,approved_at)
       VALUES (?,?,'in',?,'vietqr',?,?,'approved',?,?,datetime('now','localtime'))`)
       .run(entryCode, f.id, amount, txnId, content, 'VietQR', 'Hệ thống (VietQR)');
-    insTxn.run(txnId, null, bank, amount, content, '', transType, 1, 'Đã ghi vào quỹ ' + f.name, raw);
     db.exec('COMMIT');
     } catch (e) { db.exec('ROLLBACK'); throw e; }
     return { ref: entryCode, message: 'Đã ghi vào quỹ ' + f.name, paid: true };
   });
 }
 
+// GĐ3.2: thủ quỹ ghi một giao dịch chưa phân loại vào quỹ. Gọi trong transaction của route phân loại.
+function bookUnclassified(req, t, fundId, by) {
+  const f = fundFor(req, fundId);
+  if (!f) throw Object.assign(new Error('Không tìm thấy quỹ'), { code: 404 });
+  if (f.status !== 'active') throw Object.assign(new Error('Quỹ đã đóng'), { code: 400 });
+  if (!amountOk(t.amount)) throw Object.assign(new Error('Số tiền giao dịch không hợp lệ'), { code: 400 });
+  if (db.prepare('SELECT 1 FROM fund_entries WHERE bank_ref=?').get(t.transactionid)) throw Object.assign(new Error('Giao dịch này đã có trong sổ quỹ'), { code: 400 });
+  const code = makeCode(db, 'PT', 'fund_entries');
+  db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,note,status,created_by,created_by_name,approved_by,approved_by_name,approved_at)
+    VALUES (?,?,'in',?,'vietqr',?,?,'approved',?,?,?,?,datetime('now','localtime'))`)
+    .run(code, f.id, t.amount, t.transactionid, t.content || 'Phân loại từ hàng chờ', req.user.id, by, req.user.id, by);
+  log(req, 'fund_entry.create', 'fund_entry', null, { code, from_transaction: t.transactionid, amount: t.amount });
+  return { fund: f, code, category: f.kind === 'donation' ? 'donation' : 'fund' };
+}
+
 module.exports = router;
+module.exports.bookUnclassified = bookUnclassified;
 module.exports.resolveFundByBank = resolveFundByBank;
 module.exports.processFundPayment = processFundPayment;

@@ -287,13 +287,62 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const tokRoute = await (await fetch(ROOT + '/vqr/api/token_generate', { method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from('shopA:secretA').toString('base64') } })).json();
   const syncRoute = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 1000, content: isoInv.data.payment_ref, orderId: isoInv.data.payment_ref, transactionid: 'ROUTE-1', transType: 'C' }) })).json();
   const isoStatus = await (await req('iso', '/invoices/' + isoInv.data.id + '/payment-status')).json();
-  ok('webhook routes by bank account (not token)', syncRoute.error === false && isoStatus.data.paid === true);
+  ok('GĐ3.0: tenant token cannot book into another tenant', syncRoute.errorReason === 'TENANT_MISMATCH' && isoStatus.data.paid === false);
+  // Token dùng chung của nền tảng vẫn định tuyến theo số tài khoản
+  const syncRouteG = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 1000, content: isoInv.data.payment_ref, orderId: isoInv.data.payment_ref, transactionid: 'ROUTE-1G', transType: 'C' }) })).json();
+  const isoStatusG = await (await req('iso', '/invoices/' + isoInv.data.id + '/payment-status')).json();
+  ok('webhook routes by bank account (platform token)', syncRouteG.error === false && isoStatusG.data.paid === true);
+  // GĐ3.4 (ERR-02): cùng mã giao dịch gửi đồng thời chỉ ghi một dòng, hóa đơn chỉ có một lần thanh toán
+  const dupInv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Dup', price: 3000, qty: 1 }], payment_method: 'transfer' } })).json();
+  const dupBody = JSON.stringify({ bankaccount: 'BANKISO', amount: 3000, content: dupInv.data.payment_ref, orderId: dupInv.data.payment_ref, transactionid: 'DUP-RACE', transType: 'C' });
+  await Promise.all([1, 2, 3, 4].map(() => fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: dupBody })));
+  const dupTx = (await (await req('iso', '/reports/vietqr?from=2000-01-01&to=2999-12-31&q=DUP-RACE')).json()).data;
+  ok('ERR-02: concurrent duplicate webhook stored once', dupTx.items.filter((x) => x.transactionid === 'DUP-RACE').length === 1);
+  ok('FR-08: matched invoice payment classified as sale', (await (await req('iso', '/vietqr/transactions?from=2000-01-01&to=2999-12-31&q=DUP-RACE')).json()).data.items[0].category === 'sale');
+  const dupPays = (await (await req('iso', '/invoices/' + dupInv.data.id)).json()).data.payments || [];
+  ok('ERR-02: invoice paid once', dupPays.length === 1);
+  const noIdInv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'NoId', price: 4000, qty: 1 }], payment_method: 'transfer' } })).json();
+  await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 4000, content: noIdInv.data.payment_ref, orderId: noIdInv.data.payment_ref, transType: 'C' }) });
+  ok('ERR-02: webhook without transactionid does not mark invoice paid', (await (await req('iso', '/invoices/' + noIdInv.data.id + '/payment-status')).json()).data.paid === false);
+  // Tiền về cho hóa đơn đã hủy / đã thanh toán: không đổi hóa đơn, không tính doanh thu, vào hàng chờ
+  {
+    const cInv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Hủy', price: 2500, qty: 1 }], payment_method: 'transfer' } })).json();
+    await req('iso', '/invoices/' + cInv.data.id + '/cancel', { method: 'POST', body: { reason: 'khách đổi ý' } });
+    await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 2500, content: cInv.data.payment_ref, orderId: cInv.data.payment_ref, transactionid: 'LATE-CANCEL', transType: 'C' }) });
+    ok('payment after cancel does not revive the invoice', (await (await req('iso', '/invoices/' + cInv.data.id)).json()).data.status === 'cancelled');
+    await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 3000, content: dupInv.data.payment_ref, orderId: dupInv.data.payment_ref, transactionid: 'PAID-TWICE', transType: 'C' }) });
+    const q0 = (await (await req('iso', '/vietqr/unclassified')).json()).data.items.map((x) => x.transactionid);
+    ok('late or second payment goes to the queue, not sales', q0.includes('LATE-CANCEL') && q0.includes('PAID-TWICE'));
+    for (const id of ['LATE-CANCEL', 'PAID-TWICE']) {
+      const row = (await (await req('iso', '/vietqr/unclassified')).json()).data.items.find((x) => x.transactionid === id);
+      await req('iso', '/vietqr/transactions/' + row.id + '/classify', { method: 'POST', body: { category: 'other', reason: 'Sẽ hoàn tiền cho khách' } });
+    }
+  }
+
+  // ---------- GĐ3.2: hàng chờ phân loại (ERR-03) ----------
+  const qInv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Chờ khớp', price: 8800, qty: 1 }], payment_method: 'transfer' } })).json();
+  await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 8800, content: 'chuyen tien quen ghi ma', transType: 'C', transactionid: 'Q-1' }) });
+  await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 1234, content: 'tien la', transType: 'C', transactionid: 'Q-2' }) });
+  const queue = (await (await req('iso', '/vietqr/unclassified')).json()).data;
+  const q1 = queue.items.find((x) => x.transactionid === 'Q-1'); const q2 = queue.items.find((x) => x.transactionid === 'Q-2');
+  ok('ERR-03: unmatched payments land in the queue', !!q1 && !!q2 && queue.invoices.some((i) => i.id === qInv.data.id));
+  const sumBefore = (await (await req('iso', '/reports/summary?from=2000-01-01&to=2999-12-31')).json()).data;
+  ok('ERR-03: queued payment does not mark the invoice paid', (await (await req('iso', '/invoices/' + qInv.data.id + '/payment-status')).json()).data.paid === false);
+  ok('classify: amount must match the invoice', !(await (await req('iso', '/vietqr/transactions/' + q2.id + '/classify', { method: 'POST', body: { invoice_id: qInv.data.id } })).json()).ok);
+  const cls = await (await req('iso', '/vietqr/transactions/' + q1.id + '/classify', { method: 'POST', body: { invoice_id: qInv.data.id } })).json();
+  ok('classify: attach to pending invoice marks it paid', cls.ok && cls.data.category === 'sale' && (await (await req('iso', '/invoices/' + qInv.data.id + '/payment-status')).json()).data.paid === true);
+  const sumAfter = (await (await req('iso', '/reports/summary?from=2000-01-01&to=2999-12-31')).json()).data;
+  ok('classify: revenue counts only after classification', JSON.stringify(sumAfter) !== JSON.stringify(sumBefore));
+  ok('classify: cannot classify twice', !(await (await req('iso', '/vietqr/transactions/' + q1.id + '/classify', { method: 'POST', body: { category: 'other', reason: 'x' } })).json()).ok);
+  ok('classify: other needs a reason', !(await (await req('iso', '/vietqr/transactions/' + q2.id + '/classify', { method: 'POST', body: { category: 'other' } })).json()).ok);
+  ok('classify: mark as other income', (await (await req('iso', '/vietqr/transactions/' + q2.id + '/classify', { method: 'POST', body: { category: 'other', reason: 'Khách trả nợ cũ' } })).json()).data.category === 'other');
+  ok('classify: queue drained', !(await (await req('iso', '/vietqr/unclassified')).json()).data.items.some((x) => ['Q-1', 'Q-2'].includes(x.transactionid)));
 
   // Định tuyến theo orderId (bản đồ QR) khi tiền về một tài khoản chung
   await req('iso', '/settings', { method: 'PUT', body: { vqr_enabled: '1', vqr_env: 'mock', bank_account: 'BANKISO' } });
   const isoInv2 = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Hàng test 2', price: 2000, qty: 1 }], payment_method: 'transfer' } })).json();
   await req('iso', '/invoices/' + isoInv2.data.id + '/vietqr', { method: 'POST' });
-  const syncRoute2 = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: 'ACCOUNT-KHAC', amount: 2000, content: isoInv2.data.payment_ref, orderId: isoInv2.data.payment_ref, transactionid: 'ROUTE-2', transType: 'C' }) })).json();
+  const syncRoute2 = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'ACCOUNT-KHAC', amount: 2000, content: isoInv2.data.payment_ref, orderId: isoInv2.data.payment_ref, transactionid: 'ROUTE-2', transType: 'C' }) })).json();
   const isoStatus2 = await (await req('iso', '/invoices/' + isoInv2.data.id + '/payment-status')).json();
   ok('webhook routes by orderId map (shared account)', syncRoute2.error === false && isoStatus2.data.paid === true);
 
@@ -347,6 +396,17 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
 
   // ---------- Cộng đồng (GĐ1.1–1.2, NFR-05) + chặn tài khoản chung (GĐ0.2 — BR-02, FR-05, SEC-01) ----------
   const rootJ = async (u, o) => (await req('root', u, o)).json();
+  ok('alerts: tenant endpoint for owner', (await (await req('iso', '/alerts')).json()).ok === true);
+  ok('alerts: platform endpoint + manual run', (await rootJ('/platform/alerts/run', { method: 'POST' })).ok && Array.isArray((await rootJ('/platform/alerts')).data));
+  {
+    const lat0 = await rootJ('/platform/latency');
+    ok('latency: no bank_time yet -> nothing measured', lat0.ok && lat0.data.measured === 0);
+    const inv = await (await req('iso', '/invoices', { method: 'POST', body: { items: [{ name: 'Lat', price: 1500, qty: 1 }], payment_method: 'transfer' } })).json();
+    const sent = new Date(Date.now() - 42000).toISOString();
+    await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: 'BANKISO', amount: 1500, content: inv.data.payment_ref, orderId: inv.data.payment_ref, transactionid: 'LAT-1', transType: 'C', transactiontime: sent }) });
+    const lat = await rootJ('/platform/latency');
+    ok('AC-01-3: latency measured from bank time', lat.data.measured === 1 && lat.data.p95 >= 40 && lat.data.p95 <= 60 && lat.data.within_60s === 100, JSON.stringify(lat.data));
+  }
   const com = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Thôn A', type: 'village', area: 'Xã X' } });
   ok('community create (type village)', com.ok && com.data.type === 'village' && com.data.status === 'active');
   ok('community dup code rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Trùng', type: 'village' } })).ok);
@@ -534,6 +594,20 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
     await cj('c-approver', '/fund-entries/' + loser + '/reject', { method: 'POST', body: { reason: 'race test' } });
   }
 
+  // ---------- GĐ3.6: đối soát sao kê (ERR-01) ----------
+  {
+    const d = new Date().toISOString().slice(0, 10);
+    await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 45000, source: 'manual', bank_ref: 'SK-1' } });
+    const rc = await cj('c-treasurer', '/funds/' + fid + '/reconcile?from=' + d + '&to=' + d);
+    ok('reconcile: system bank income excludes cash', rc.ok && rc.data.system_in === rc.data.entries.reduce((s, e) => s + e.amount, 0) && rc.data.entries.every((e) => e.source !== 'cash'));
+    ok('reconcile: mismatch needs a note', !(await cj('c-treasurer', '/funds/' + fid + '/reconciliations', { method: 'POST', body: { from: d, to: d, statement_in: rc.data.system_in + 20000 } })).ok);
+    const rec = await cj('c-treasurer', '/funds/' + fid + '/reconciliations', { method: 'POST', body: { from: d, to: d, statement_in: rc.data.system_in + 20000, note: 'Thiếu 1 khoản 20.000 ngày 01, bổ sung sau' } });
+    ok('reconcile: mismatch recorded with diff', rec.ok && rec.data.diff === 20000);
+    ok('reconcile: matching period needs no note', (await cj('c-treasurer', '/funds/' + fid + '/reconciliations', { method: 'POST', body: { from: d, to: d, statement_in: rc.data.system_in } })).data.diff === 0);
+    ok('reconcile: history listed, newest first', (await cj('c-community_leader', '/funds/' + fid + '/reconcile?from=' + d + '&to=' + d)).data.history[0].diff === 0);
+    ok('reconcile: leader cannot record', (await req('c-community_leader', '/funds/' + fid + '/reconciliations', { method: 'POST', body: { from: d, to: d, statement_in: 0 } })).status === 403);
+  }
+
   // ---------- Phạm vi thủ quỹ (BR-08, FR-02) ----------
   await req('cadm', '/users', { method: 'POST', body: { username: 'qa-treasurer2', password: '123456', role: 'treasurer' } });
   await req('c-treasurer2', '/auth/login', { method: 'POST', body: { username: 'qa-treasurer2', password: '123456' } });
@@ -562,16 +636,30 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const dynQr = await cj('c-treasurer', '/funds/' + fund2.data.id + '/qr', { method: 'POST', body: { amount: 250000 } });
   ok('dynamic fund QR carries amount', dynQr.ok && dynQr.data.amount === 250000 && dynQr.data.qrCode.includes('250000'));
   const balBefore = (await cj('cadm', '/funds/' + fund2.data.id)).data.balance;
-  const syncFund = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
+  const syncFund = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
   ok('webhook routes to fund by bank account', syncFund.error === false);
+  ok('FR-08: income into a general fund classified as fund', (await (await req('cadm', '/vietqr/transactions?from=2000-01-01&to=2999-12-31&q=FUND-TXN-1')).json()).data.items[0].category === 'fund');
+  const syncFundShop = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 999000, content: 'gia mao', transType: 'C', transactionid: 'FUND-FORGED' }) })).json();
+  ok('GĐ3.0: shop token cannot book into a fund', syncFundShop.errorReason === 'TENANT_MISMATCH');
   ok('fund balance increases from webhook', (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
-  const syncFundAgain = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
+  const syncFundAgain = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
   ok('webhook fund payment idempotent', syncFundAgain.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
-  const syncNoId = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 7000, content: 'x', transType: 'C' }) })).json();
+  const syncNoId = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 7000, content: 'x', transType: 'C' }) })).json();
   ok('webhook without transactionid not booked', /Thiếu mã/.test(syncNoId.toastMessage) && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
   ok('BR-02: shop cannot take a fund account', !(await api('/settings', { method: 'PUT', body: { bank_account: 'QUY CHUNG 01' } })).ok);
-  const syncNeg = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: -5000, content: 'x', transType: 'C', transactionid: 'FUND-TXN-NEG' }) })).json();
+  const syncNeg = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: -5000, content: 'x', transType: 'C', transactionid: 'FUND-TXN-NEG' }) })).json();
   ok('webhook ignores non-positive amount', syncNeg.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
+  // Tiền vào tài khoản quỹ đang đóng -> hàng chờ của thủ quỹ; thủ quỹ chọn quỹ khác để ghi sổ
+  await cj('c-approver', '/funds/' + fund2.data.id, { method: 'PATCH', body: { status: 'closed' } });
+  await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 60000, content: 'ung ho', transType: 'C', transactionid: 'FQ-1' }) });
+  await cj('c-approver', '/funds/' + fund2.data.id, { method: 'PATCH', body: { status: 'active' } });
+  const fq = await cj('c-treasurer', '/vietqr/unclassified');
+  const fq1 = fq.data.items.find((x) => x.transactionid === 'FQ-1');
+  ok('ERR-03: payment to a closed fund waits in the treasurer queue', !!fq1 && fq.data.funds.length >= 1);
+  ok('classify: leader cannot classify', (await req('c-community_leader', '/vietqr/transactions/' + fq1.id + '/classify', { method: 'POST', body: { fund_id: fid } })).status === 403);
+  const fbal = (await cj('c-treasurer', '/funds/' + fund2.data.id)).data.balance;
+  const fcls = await cj('c-treasurer', '/vietqr/transactions/' + fq1.id + '/classify', { method: 'POST', body: { fund_id: fund2.data.id } });
+  ok('classify: treasurer books queued payment into a fund', fcls.ok && fcls.data.category === 'fund' && (await cj('c-treasurer', '/funds/' + fund2.data.id)).data.balance === fbal + 60000);
 
   // ---------- Phạm vi cộng đồng (GĐ1.4 — BR-07, BR-09, ERR-08) ----------
   const day = new Date().toISOString().slice(0, 10);
@@ -594,9 +682,10 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const sumRes = await req('c-community_leader', '/community/summary?from=' + day + '&to=' + day);
   const summ = (await sumRes.json()).data;
   ok('BR-09: leader gets community summary', sumRes.status === 200 && summ.sellers === 2 && summ.community_id === com.data.id);
-  // Thôn A: seller-a (1 hóa đơn 10.000) + iso-shop đã gia nhập (3 hóa đơn 1.000 + 2.000 + 100). Hóa đơn chờ VietQR không tính.
+  // Thôn A: seller-a (1 hóa đơn 10.000) + iso-shop đã gia nhập (6 hóa đơn 1.000 + 2.000 + 3.000 + 8.800 + 1.500 + 100;
+  // 3.000 từ test ERR-02, 8.800 từ test hàng chờ phân loại, 1.500 từ test độ trễ). Hóa đơn chờ VietQR không tính.
   ok('BR-07: converted = sellers with a paid sale', summ.converted_sellers === 2);
-  ok('summary counts only own community', summ.transactions === 4 && summ.amount === 13100);
+  ok('summary counts only own community', summ.transactions === 7 && summ.amount === 26400, JSON.stringify([summ.transactions, summ.amount]));
   ok('BR-09: summary has no per-seller data', !/seller-a|iso-shop|Người bán|Quán A/.test(JSON.stringify(summ)) && Object.values(summ).every((v) => typeof v !== 'object'));
   ok('summary rejects inverted range', (await req('c-community_leader', '/community/summary?from=' + day + '&to=2000-01-01')).status === 400);
   ok('ERR-08: seller owner cannot read community summary', (await req('sel', '/community/summary')).status === 403);
