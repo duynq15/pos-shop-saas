@@ -1,6 +1,7 @@
 import { $, esc, num, money, today, addDays, monthStart } from '../util.js';
 import { api, state } from '../store.js';
 import { can } from '../auth.js';
+import { icon } from '../icons.js';
 
 const V = { from: today(), to: today(), preset: 'today', bank: '', field: 'ref', q: '', status: '', page: 1, size: 20 };
 
@@ -14,14 +15,14 @@ const ST = {
 export default {
   id: 'vietqr',
   label: 'Giao dịch VietQR',
-  icon: '🏦',
+  icon: icon('bank'),
 
   mount(el) {
     el.innerHTML = `
 <div class="view-head">
   <div><h1>Giao dịch VietQR</h1><div class="sub" id="vqt-range"></div></div>
   <div class="toolbar" style="margin:0">
-    ${can('report.export') ? '<button class="btn" id="vqt-export">📥 Xuất Excel</button>' : ''}
+    ${can('report.export') ? '<button class="btn" id="vqt-export">Xuất Excel</button>' : ''}
   </div>
 </div>
 
@@ -49,8 +50,8 @@ export default {
       <span class="range2"><input type="date" class="field" id="vqt-from"><input type="date" class="field" id="vqt-to"></span></label>
   </div>
   <div class="filters-actions">
-    <button class="btn" id="vqt-clear">✕ Xóa bộ lọc</button>
-    <button class="btn primary" id="vqt-search">🔍 Tìm kiếm</button>
+    <button class="btn" id="vqt-clear">Xóa bộ lọc</button>
+    <button class="btn primary" id="vqt-search">Tìm kiếm</button>
   </div>
 </div>
 
@@ -145,10 +146,10 @@ async function load() {
 
 function renderStats(s) {
   const cards = [
-    ['💳', 'Tất cả GD', num(s.total_count) + ' GD', money(s.total_amount), 'Doanh thu', 'primary'],
-    ['✅', 'GD đã hoạch toán', num(s.success_count) + ' GD', money(s.success_amount), 'Doanh thu', 'ok'],
-    ['⏳', 'GD chưa hoạch toán', num(s.unmatched_count) + ' GD', money(s.unmatched_amount), 'Doanh thu', 'warn'],
-    ['↩️', 'GD hoàn tiền', num(s.refund_count) + ' GD', money(s.refund_amount), 'Chi phí', 'danger'],
+    [icon('card'), 'Tất cả GD', num(s.total_count) + ' GD', money(s.total_amount), 'Doanh thu', 'primary'],
+    [icon('check'), 'GD đã hoạch toán', num(s.success_count) + ' GD', money(s.success_amount), 'Doanh thu', 'ok'],
+    [icon('clock'), 'GD chưa hoạch toán', num(s.unmatched_count) + ' GD', money(s.unmatched_amount), 'Doanh thu', 'warn'],
+    [icon('undo'), 'GD hoàn tiền', num(s.refund_count) + ' GD', money(s.refund_amount), 'Chi phí', 'danger'],
   ];
   const el = $('#vqt-stats'); if (!el) return;
   el.innerHTML = cards.map(([ic, k, c, v, sub, cls]) => `<div class="stat ${cls}">

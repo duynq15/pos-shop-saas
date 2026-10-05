@@ -1,7 +1,7 @@
 'use strict';
 
 const express = require('express');
-const { control, audit, newToken, tokenHash, tenantExpired } = require('../control');
+const { control, audit, newToken, tokenHash, tenantExpired, communityRoleLabels, platformRole } = require('../control');
 const { ok, fail, wrap, str } = require('../lib/util');
 const { hashPassword, verifyPassword, sessionCookie, clearCookie, parseCookies, COOKIE } = require('../lib/auth');
 const rbac = require('../lib/rbac');
@@ -31,10 +31,11 @@ function createSession(user, req) {
   return token;
 }
 
-const payload = (user, tenant) => ({
-  user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role, tenant_id: user.tenant_id },
-  tenant: tenant ? { code: tenant.code, name: tenant.name, status: tenant.status } : null,
-  permissions: user.role === 'platform' ? ['*'] : rbac.permsFor(user.role),
+const payload = (user, tenant, pr = user.tenant_id == null ? platformRole(user.role) : null) => ({
+  user: { id: user.id, username: user.username, full_name: user.full_name, role: user.role,
+    role_name: pr ? pr.name : rbac.roleName(user.role, communityRoleLabels(tenant && tenant.community_id)), tenant_id: user.tenant_id },
+  tenant: tenant ? { code: tenant.code, name: tenant.name, status: tenant.status, kind: tenant.kind || 'shop', community_id: tenant.community_id ?? null } : null,
+  permissions: user.tenant_id == null ? (pr ? pr.permissions : []) : rbac.permsFor(user.role),
   app_env: process.env.NODE_ENV || 'development',
 });
 

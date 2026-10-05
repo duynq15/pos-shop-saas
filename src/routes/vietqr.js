@@ -7,7 +7,9 @@ const { control, getPlatformSettings, nextPaymentRef, saveQrOrder, getQrOrder, g
 const { ok, fail, wrap, str, round } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
 const { requirePerm } = require('../middleware');
+const { accountConflict, CONFLICT_MSG } = require('../lib/community');
 const { generateQR, getToken, bases, testCallbackUrl } = require('../payments/vietqr');
+const funds = require('./funds');
 
 const router = express.Router();   // API phía app (đã đăng nhập), mount /api
 const webhook = express.Router();  // API mở cho VietQR gọi vào, mount /vqr
@@ -149,14 +151,18 @@ webhook.post('/bank/api/transaction-sync', wrap((req, res) => {
   if (!pl) { console.warn('[vqr] transaction-sync: token không hợp lệ'); return res.status(401).json({ error: true, errorReason: 'INVALID_TOKEN', toastMessage: 'Invalid or expired token', object: null }); }
   const b = req.body || {};
   // Nhận diện shop theo orderId (đã ghi lúc tạo QR) -> đúng cho mọi mô hình,
-  // kể cả khi tiền về một tài khoản quản lý chung. Dự phòng: theo số TK, rồi theo token.
+  // kể cả khi tiền về một tài khoản quản lý chung. Dự phòng: theo tài khoản quỹ (GĐ2.3,
+  // luôn duy nhất theo BR-02), rồi theo số TK của tenant, rồi theo token.
   const orderIdForResolve = str(b.orderId, 20) || ((String(b.content || '').match(/P\d{10}/) || [])[0] || '');
   const mapped = getQrOrder(orderIdForResolve);
-  const code = (mapped && mapped.tenant_code) || resolveTenantByBank(b.bankaccount) || pl.t;
-  console.log(`[vqr] sync nhận: shop=${code || '?'} orderId=${b.orderId || ''} amount=${b.amount || ''} content=${b.content || ''}`);
+  const fundHit = mapped ? null : funds.resolveFundByBank(b.bankaccount);
+  const code = (mapped && mapped.tenant_code) || (fundHit && fundHit.tenantCode) || resolveTenantByBank(b.bankaccount) || pl.t;
+  console.log(`[vqr] sync nhận: shop=${code || '?'} orderId=${b.orderId || ''} amount=${b.amount || ''} content=${b.content || ''}${fundHit ? ' quỹ=' + fundHit.fundId : ''}`);
   if (!code) return res.status(400).json({ error: true, errorReason: 'TENANT_NOT_FOUND', toastMessage: 'Không xác định được cửa hàng theo tài khoản nhận tiền', object: null });
   try {
-    const r = processPayment(code, { transactionid: b.transactionid, bankaccount: b.bankaccount, amount: b.amount, content: b.content, orderId: b.orderId, transType: b.transType, raw: b });
+    const r = fundHit
+      ? funds.processFundPayment(code, fundHit.fundId, { transactionid: b.transactionid, bankaccount: b.bankaccount, amount: b.amount, content: b.content, transType: b.transType, raw: b })
+      : processPayment(code, { transactionid: b.transactionid, bankaccount: b.bankaccount, amount: b.amount, content: b.content, orderId: b.orderId, transType: b.transType, raw: b });
     res.json({ error: false, errorReason: null, toastMessage: r.message, object: { reftransactionid: r.ref } });
   } catch (e) {
     res.status(400).json({ error: true, errorReason: 'TRANSACTION_FAILED', toastMessage: e.message, object: null });
@@ -179,7 +185,9 @@ router.get('/vietqr/config', wrap((req, res) => {
 router.post('/invoices/:id/vietqr', requirePerm('invoice.view'), wrap(async (req, res) => {
   const id = Number(req.params.id);
   const s = vqrSettings();
-  if (s.vqr_enabled !== '1') fail(res, 'VietQR động chưa bật trong Cài đặt');
+  if (s.vqr_enabled !== '1') return fail(res, 'VietQR động chưa bật trong Cài đặt');
+  // GĐ0.2 (BR-02, SEC-01): kiểm lại khi tạo QR, phòng dữ liệu cũ hoặc tenant được gán vào cộng đồng sau khi đã khai tài khoản
+  if (accountConflict(req.tenant.code, s.bank_account)) return fail(res, CONFLICT_MSG);
   let inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(id);
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
   if (!inv.payment_ref) {
@@ -227,12 +235,12 @@ router.post('/vietqr/test', requirePerm('settings.edit'), wrap(async (req, res) 
 
 // Giả lập thanh toán qua Test Callback của VietQR (chỉ môi trường dev)
 router.post('/vietqr/simulate-dev', requirePerm('pos.sell'), wrap(async (req, res) => {
-  if (process.env.NODE_ENV === 'production') fail(res, 'Không khả dụng ở môi trường production', 403);
+  if (process.env.NODE_ENV === 'production') return fail(res, 'Không khả dụng ở môi trường production', 403);
   const s = vqrSettings();
-  if ((s.vqr_env || 'mock') !== 'dev') fail(res, 'Chỉ dùng được ở môi trường dev');
+  if ((s.vqr_env || 'mock') !== 'dev') return fail(res, 'Chỉ dùng được ở môi trường dev');
   const inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(Number(req.body.invoice_id));
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);
-  if (!inv.payment_content) fail(res, 'Chưa có mã QR — hãy tạo QR (chuyển khoản) trước');
+  if (!inv.payment_content) return fail(res, 'Chưa có mã QR — hãy tạo QR (chuyển khoản) trước');
   let token;
   try { token = await getToken(s, req.tenant.code); } catch (e) { return fail(res, e.message, 502); }
   const body = { bankAccount: s.bank_account, content: inv.payment_content, amount: String(inv.total), bankCode: s.vqr_bank_code, transType: 'C' };
@@ -245,7 +253,7 @@ router.post('/vietqr/simulate-dev', requirePerm('pos.sell'), wrap(async (req, re
 
 // Mô phỏng thanh toán để test (không cần VietQR thật)
 router.post('/vietqr/simulate', requirePerm('pos.sell'), wrap((req, res) => {
-  if (process.env.NODE_ENV === 'production') fail(res, 'Không khả dụng ở môi trường production', 403);
+  if (process.env.NODE_ENV === 'production') return fail(res, 'Không khả dụng ở môi trường production', 403);
   const id = Number(req.body.invoice_id);
   const inv = db.prepare('SELECT * FROM invoices WHERE id=?').get(id);
   if (!inv) return fail(res, 'Không tìm thấy hóa đơn', 404);

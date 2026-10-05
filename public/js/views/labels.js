@@ -29,7 +29,7 @@ export function openLabelPrint(products) {
         <td class="r">${money(p.sell_price)}</td>
         <td class="c"><input class="field lbl-count" type="number" min="0" value="1" style="width:76px;text-align:center"></td>
       </tr>`).join('')}</tbody></table></div>
-    <div class="modal-actions"><button class="btn primary" id="lbl-print">🖨 In tem</button><button class="btn" id="lbl-close">Đóng</button></div>`);
+    <div class="modal-actions"><button class="btn primary" id="lbl-print">In tem</button><button class="btn" id="lbl-close">Đóng</button></div>`);
   $('#lbl-close').onclick = closeModal;
   $('#lbl-print').onclick = () => {
     const html = [];

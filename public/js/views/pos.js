@@ -2,6 +2,7 @@ import { $, $$, esc, num, money, uid, debounce, toast, modal, closeModal, beep }
 import { api, state, defaultPriceListId, loadPriceLists } from '../store.js';
 import { openProductForm } from './product-form.js';
 import { showReceipt, showTransferQR } from './receipt.js';
+import { icon } from '../icons.js';
 
 let cart = [];
 let priceListId = null;
@@ -49,7 +50,7 @@ async function loadPriceMap(listId) {
 export default {
   id: 'pos',
   label: 'Bán hàng',
-  icon: '🛒',
+  icon: icon('cart'),
   key: 'F1',
 
   mount(el) {
@@ -85,10 +86,10 @@ export default {
     <div class="card">
       <h3>Thanh toán</h3>
       <div class="seg">
-        <button class="seg-btn active" data-method="cash">💵 Tiền mặt</button>
-        <button class="seg-btn" data-method="transfer">🏦 CK</button>
-        <button class="seg-btn" data-method="card">💳 Thẻ</button>
-        <button class="seg-btn" data-method="mixed">➕ Hỗn hợp</button>
+        <button class="seg-btn active" data-method="cash">Tiền mặt</button>
+        <button class="seg-btn" data-method="transfer">CK</button>
+        <button class="seg-btn" data-method="card">Thẻ</button>
+        <button class="seg-btn" data-method="mixed">Hỗn hợp</button>
       </div>
       <div id="cash-box">
         <div class="rowline"><span>Khách đưa</span><input id="paid" class="field" type="number" min="0" style="width:150px;text-align:right"></div>
@@ -334,7 +335,7 @@ function applyPreview() {
   $('#promo-box').innerHTML = promo;
 
   $('#warn-box').innerHTML = (preview && preview.warnings && preview.warnings.length)
-    ? preview.warnings.map((w) => `<div class="warn-line">⚠️ ${esc(w.message)}</div>`).join('') : '';
+    ? preview.warnings.map((w) => `<div class="warn-line">${esc(w.message)}</div>`).join('') : '';
 
   // cập nhật lại ô giá nếu không đang nhập
   $$('#cart-body tr').forEach((tr, i) => {

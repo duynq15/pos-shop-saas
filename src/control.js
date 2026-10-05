@@ -30,6 +30,51 @@ CREATE TABLE IF NOT EXISTS tenants (
   created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
+-- Cộng đồng (NFR-05, quyết định 0.9): thôn là một loại (type='village')
+CREATE TABLE IF NOT EXISTS communities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'village',
+  area TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- Loại cộng đồng cấu hình được (GĐ1.6, NFR-05, US-13). Nhãn vai trò hiển thị theo loại
+CREATE TABLE IF NOT EXISTS community_types (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  approver_label TEXT,
+  leader_label TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+-- Vai trò nền tảng cấu hình được (GĐ1.7). Nhân sự nền tảng là users có tenant_id NULL, users.role = platform_roles.code
+CREATE TABLE IF NOT EXISTS platform_roles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT UNIQUE NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  scope TEXT NOT NULL DEFAULT 'all',
+  status TEXT NOT NULL DEFAULT 'active',
+  is_system INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS platform_role_permissions (
+  role_id INTEGER NOT NULL REFERENCES platform_roles(id) ON DELETE CASCADE,
+  permission TEXT NOT NULL,
+  PRIMARY KEY (role_id, permission)
+);
+CREATE TABLE IF NOT EXISTS platform_user_communities (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  community_id INTEGER NOT NULL REFERENCES communities(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, community_id)
+);
+
 CREATE TABLE IF NOT EXISTS plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   code TEXT UNIQUE NOT NULL,
@@ -105,6 +150,42 @@ function controlColumns(table) {
 }
 if (!controlColumns('tenants').includes('expires_at')) control.exec('ALTER TABLE tenants ADD COLUMN expires_at TEXT');
 if (!controlColumns('tenants').includes('area')) control.exec('ALTER TABLE tenants ADD COLUMN area TEXT');
+// GĐ1.2: loại tenant và cộng đồng. Tenant cũ nhận kind='shop', không thuộc cộng đồng (ADR-0002)
+if (!controlColumns('tenants').includes('kind')) control.exec("ALTER TABLE tenants ADD COLUMN kind TEXT NOT NULL DEFAULT 'shop'");
+if (!controlColumns('tenants').includes('community_id')) control.exec('ALTER TABLE tenants ADD COLUMN community_id INTEGER REFERENCES communities(id)');
+// GĐ1.6: thông tin liên hệ và cấu hình riêng từng cộng đồng
+for (const [col, def] of [['contact_name', 'TEXT'], ['contact_phone', 'TEXT'], ['note', 'TEXT'], ['settings', "TEXT NOT NULL DEFAULT '{}'"], ['donations_token', 'TEXT']]) {
+  if (!controlColumns('communities').includes(col)) control.exec(`ALTER TABLE communities ADD COLUMN ${col} ${def}`);
+}
+// Loại mẫu chỉ nạp cho DB mới; root thêm / sửa / xóa loại ở màn Nền tảng
+if (!control.prepare('SELECT COUNT(*) c FROM community_types').get().c) {
+  const ins = control.prepare('INSERT INTO community_types(code,name,approver_label,leader_label,sort_order) VALUES (?,?,?,?,?)');
+  [
+    ['village', 'Thôn', 'Trưởng thôn', 'Ban lãnh đạo thôn'],
+    ['residential-group', 'Tổ dân phố', 'Tổ trưởng', 'Ban điều hành tổ dân phố'],
+    ['parish', 'Giáo xứ', 'Cha xứ', 'Hội đồng giáo xứ'],
+    ['pagoda', 'Chùa', 'Trụ trì', 'Ban hộ tự'],
+    ['market', 'Chợ', 'Trưởng ban quản lý chợ', 'Ban quản lý chợ'],
+    ['association', 'Hội nhóm', 'Chủ nhiệm', 'Ban chấp hành'],
+  ].forEach((t, i) => ins.run(...t, i + 1));
+}
+// GĐ1.7: vai trò nền tảng. 'platform' là quản trị tối cao (*), không sửa / xóa được; các vai trò mẫu sửa được
+if (!control.prepare("SELECT id FROM platform_roles WHERE code='platform'").get()) {
+  const insRole = control.prepare('INSERT INTO platform_roles(code,name,description,scope,is_system) VALUES (?,?,?,?,?)');
+  const insPerm = control.prepare('INSERT INTO platform_role_permissions(role_id,permission) VALUES (?,?)');
+  [
+    ['platform', 'Quản trị tối cao', 'Toàn quyền nền tảng', 'all', 1, ['*']],
+    ['platform_ops', 'Vận hành', 'Quản lý cửa hàng, cộng đồng, báo cáo', 'all', 0,
+      ['tenants.view', 'tenants.manage', 'communities.view', 'communities.manage', 'users.view', 'reports.view']],
+    ['platform_community', 'Quản lý cộng đồng', 'Chỉ các cộng đồng được giao', 'assigned', 0,
+      ['tenants.view', 'tenants.manage', 'communities.view', 'communities.manage', 'users.view', 'reports.view']],
+    ['platform_support', 'Hỗ trợ', 'Chỉ xem', 'all', 0, ['tenants.view', 'communities.view', 'users.view', 'reports.view']],
+    ['platform_tech', 'Kỹ thuật', 'Cấu hình VietQR, báo cáo công khai', 'all', 0, ['tenants.view', 'vietqr.manage', 'public_report.manage']],
+  ].forEach(([code, name, desc, scope, sys, perms]) => {
+    const id = Number(insRole.run(code, name, desc, scope, sys).lastInsertRowid);
+    perms.forEach((p) => insPerm.run(id, p));
+  });
+}
 for (const [col, def] of [['amount', 'INTEGER'], ['content', 'TEXT'], ['bank_account', 'TEXT']]) {
   if (!controlColumns('qr_orders').includes(col)) control.exec(`ALTER TABLE qr_orders ADD COLUMN ${col} ${def}`);
 }
@@ -208,4 +289,72 @@ function getQrOrders(tenantCode, from, to) {
     ORDER BY created_at DESC, rowid DESC LIMIT 2000`).all(String(tenantCode), from, to);
 }
 
-module.exports = { control, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired, getPlatformSettings, setPlatformSettings, nextGlobalSeq, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders };
+// ---------- Chặn tài khoản nhận tiền dùng chung (GĐ0.2 — BR-02, FR-05, SEC-01) ----------
+// Tenant thuộc cộng đồng phải nhận tiền vào tài khoản riêng: số tài khoản không được trùng
+// với bất kỳ tenant nào khác. Chiều ngược lại cũng chặn: shop thường không được khai trùng
+// tài khoản của tenant thuộc cộng đồng. Hai shop thường trùng nhau vẫn được (hành vi cũ).
+const TENANT_KINDS = ['shop', 'seller', 'community'];
+const normAccount = (v) => String(v || '').replace(/[\s.-]/g, '');
+function tenantByCode(code) {
+  return control.prepare('SELECT * FROM tenants WHERE code=?').get(code);
+}
+// Trả về mã tenant đang dùng trùng tài khoản (vi phạm BR-02), hoặc null.
+// readAccount(code) đọc bank_account trong DB của tenant (truyền vào để tránh vòng require với db.js).
+function sharedAccountConflict(tenantCode, account, readAccount, communityId) {
+  const acc = normAccount(account);
+  if (!acc) return null;
+  const self = tenantByCode(tenantCode);
+  const selfInCommunity = communityId !== undefined ? !!communityId : !!(self && self.community_id);
+  for (const t of control.prepare('SELECT code, community_id FROM tenants WHERE code<>?').all(tenantCode)) {
+    if (!selfInCommunity && !t.community_id) continue;
+    if (normAccount(readAccount(t.code)) === acc) return t.code;
+  }
+  return null;
+}
+
+// ---------- Cấu hình cộng đồng (GĐ1.6) ----------
+// Chỉ nhận các khóa đã biết; giá trị mặc định dùng khi cộng đồng chưa cấu hình.
+const COMMUNITY_SETTINGS = {
+  public_donations: { def: false, parse: (v) => (typeof v === 'boolean' ? v : undefined) },
+  unclassified_alert_days: { def: 3, parse: (v) => (Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 90 && v !== '' && v !== null ? Number(v) : undefined) },
+};
+function communitySettings(raw) {
+  let obj = {};
+  try { obj = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {}); } catch { obj = {}; }
+  const out = {};
+  for (const [k, spec] of Object.entries(COMMUNITY_SETTINGS)) out[k] = obj[k] === undefined ? spec.def : obj[k];
+  return out;
+}
+// Kiểm tra settings gửi lên. Trả { error } hoặc { value } đã gộp với giá trị hiện tại.
+function validateCommunitySettings(input, current) {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return { error: 'Cấu hình cộng đồng không hợp lệ' };
+  const value = communitySettings(current);
+  for (const [k, v] of Object.entries(input)) {
+    const spec = COMMUNITY_SETTINGS[k];
+    if (!spec) return { error: `Khóa cấu hình không hợp lệ: ${k}` };
+    const parsed = spec.parse(v);
+    if (parsed === undefined) return { error: `Giá trị cấu hình không hợp lệ: ${k}` };
+    value[k] = parsed;
+  }
+  return { value };
+}
+// Nhãn vai trò theo loại cộng đồng của tenant; null khi tenant không thuộc cộng đồng.
+function communityRoleLabels(communityId) {
+  if (!communityId) return null;
+  return control.prepare(`SELECT ct.approver_label, ct.leader_label FROM communities c
+    JOIN community_types ct ON ct.code = c.type WHERE c.id=?`).get(communityId) || null;
+}
+
+// Vai trò nền tảng của nhân sự (tenant_id NULL). Vai trò tạm ngưng / không tồn tại: không có quyền
+function platformRole(code) {
+  const r = control.prepare('SELECT * FROM platform_roles WHERE code=?').get(code);
+  if (!r) return null;
+  const permissions = r.status === 'active'
+    ? control.prepare('SELECT permission FROM platform_role_permissions WHERE role_id=? ORDER BY permission').all(r.id).map((x) => x.permission) : [];
+  return { ...r, permissions };
+}
+const platformUserCommunities = (userId) =>
+  control.prepare('SELECT community_id FROM platform_user_communities WHERE user_id=? ORDER BY community_id').all(userId).map((x) => x.community_id);
+
+module.exports = { control, platformRole, platformUserCommunities, DATA_DIR, audit, newToken, tokenHash, planOf, tenantExpired, getPlatformSettings, setPlatformSettings, nextGlobalSeq, nextPaymentRef, saveQrOrder, getQrOrder, getQrOrders,
+  TENANT_KINDS, tenantByCode, sharedAccountConflict, COMMUNITY_SETTINGS, communitySettings, validateCommunitySettings, communityRoleLabels };

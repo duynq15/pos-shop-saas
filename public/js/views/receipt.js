@@ -48,9 +48,9 @@ export async function showReceipt(inv) {
   modal(`<h2>${isReturn ? 'Phiếu trả hàng' : 'Hóa đơn'} ${esc(inv.code)} ${statusBadge(inv.status)}</h2>
     ${receiptHTML(inv, qr)}
     <div class="modal-actions">
-      <button class="btn primary" id="r-print">🖨 In</button>
-      ${inv.status === 'pending' ? `<button class="btn ok" id="r-confirm">✔ Đã nhận tiền</button>` : ''}
-      ${!isReturn && inv.status !== 'cancelled' ? `<button class="btn" id="r-return">↩ Trả hàng</button>` : ''}
+      <button class="btn primary" id="r-print">In</button>
+      ${inv.status === 'pending' ? `<button class="btn ok" id="r-confirm">Đã nhận tiền</button>` : ''}
+      ${!isReturn && inv.status !== 'cancelled' ? `<button class="btn" id="r-return">Trả hàng</button>` : ''}
       ${inv.status !== 'cancelled' ? `<button class="btn danger" id="r-cancel">Hủy</button>` : ''}
       <button class="btn" id="r-close">Đóng</button>
     </div>`);
@@ -92,10 +92,10 @@ export async function showTransferQR(inv) {
       ${inv.status === 'pending' ? `<div class="hint" id="q-wait">${dynamic ? 'Đang chờ khách chuyển khoản… (tự cập nhật khi nhận tiền)' : 'Sau khi nhận tiền, bấm "Đã nhận tiền"'}</div>` : ''}
     </div>
     <div class="modal-actions" style="justify-content:center">
-      ${inv.status === 'pending' && !isProd() && isMock ? `<button class="btn" id="q-simulate">🧪 Mô phỏng đã chuyển tiền</button>` : ''}
-      ${inv.status === 'pending' && !isProd() && env === 'dev' && !isMock ? `<button class="btn" id="q-simulate-dev">🧪 Mô phỏng thanh toán (dev)</button>` : ''}
-      ${inv.status === 'pending' ? `<button class="btn primary" id="q-confirm">✔ Đã nhận tiền</button>` : ''}
-      <button class="btn" id="q-print">🖨 In hóa đơn</button>
+      ${inv.status === 'pending' && !isProd() && isMock ? `<button class="btn" id="q-simulate">Mô phỏng đã chuyển tiền</button>` : ''}
+      ${inv.status === 'pending' && !isProd() && env === 'dev' && !isMock ? `<button class="btn" id="q-simulate-dev">Mô phỏng thanh toán (dev)</button>` : ''}
+      ${inv.status === 'pending' ? `<button class="btn primary" id="q-confirm">Đã nhận tiền</button>` : ''}
+      <button class="btn" id="q-print">In hóa đơn</button>
       <button class="btn" id="q-close">Đóng</button>
     </div>`);
   if ($('#q-confirm')) $('#q-confirm').onclick = async () => { stopPoll(); const i = await api(`/api/invoices/${inv.id}/confirm`, { method: 'POST' }); toast('Đã xác nhận thanh toán'); showReceipt(i); };
@@ -119,7 +119,7 @@ export async function showTransferQR(inv) {
     try {
       await api('/api/vietqr/simulate-dev', { method: 'POST', body: { invoice_id: inv.id } });
       toast('Đã gửi mô phỏng — chờ VietQR báo về…');
-    } catch (e) { toast(e.message, true); btn.disabled = false; btn.textContent = '🧪 Mô phỏng thanh toán (dev)'; }
+    } catch (e) { toast(e.message, true); btn.disabled = false; btn.textContent = 'Mô phỏng thanh toán (dev)'; }
   };
   if (inv.status === 'pending') {
     timer = setInterval(async () => {

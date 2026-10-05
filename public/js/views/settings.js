@@ -1,21 +1,13 @@
-import { $, $$, esc, toast, modal, closeModal, setCurrency, fmtDT } from '../util.js';
+import { $, $$, esc, toast, modal, closeModal, setCurrency, fmtDT, bankField, bankOf } from '../util.js';
 import { api, state, loadSettings, loadPriceLists } from '../store.js';
 import { showLanInfo } from './lan.js';
 import { isProd } from '../auth.js';
-
-const BANKS = [
-  ['970436', 'Vietcombank'], ['970415', 'VietinBank'], ['970418', 'BIDV'], ['970405', 'Agribank'], ['970422', 'MB Bank'], ['970407', 'Techcombank'],
-  ['970416', 'ACB'], ['970432', 'VPBank'], ['970423', 'TPBank'], ['970403', 'Sacombank'], ['970437', 'HDBank'], ['970441', 'VIB'], ['970443', 'SHB'],
-  ['970426', 'MSB'], ['970448', 'OCB'], ['970431', 'Eximbank'], ['970429', 'SCB'], ['970400', 'SaigonBank'], ['970409', 'BacABank'], ['970438', 'BaoVietBank'],
-  ['970449', 'LPBank'], ['970452', 'KienLongBank'], ['970454', 'VietCapitalBank'], ['970425', 'ABBank'], ['970419', 'NCB'], ['970428', 'NamABank'],
-  ['970427', 'VietABank'], ['970430', 'PGBank'], ['970412', 'PVcomBank'], ['970414', 'Oceanbank'], ['970433', 'VietBank'], ['970440', 'SeABank'],
-  ['546034', 'CAKE'], ['546035', 'Ubank'], ['963388', 'Timo'],
-];
+import { icon } from '../icons.js';
 
 export default {
   id: 'settings',
   label: 'Cài đặt',
-  icon: '⚙️',
+  icon: icon('settings'),
 
   mount(el) {
     el.innerHTML = `
@@ -39,7 +31,7 @@ export default {
 
   <div class="card">
     <h3>Tài khoản nhận chuyển khoản (VietQR)</h3>
-    <label class="fld">Ngân hàng<select class="field" data-s="bank_bin" id="bank-select"></select></label>
+    <label class="fld">Ngân hàng<span id="bank-slot"></span></label>
     <div class="form-grid">
       <label class="fld">Số tài khoản<input class="field" data-s="bank_account" placeholder="VD: 0123456789"></label>
       <label class="fld">Chủ tài khoản<input class="field" data-s="account_holder" placeholder="NGUYEN VAN A"></label>
@@ -99,7 +91,7 @@ export default {
   <div class="card">
     <h3>Kết nối thiết bị khác (LAN)</h3>
     <p class="muted">Điện thoại/máy tính bảng trong cùng Wi-Fi truy cập phần mềm qua địa chỉ máy chủ.</p>
-    <button class="btn" id="btn-lan-settings">📶 Xem địa chỉ &amp; mã QR</button>
+    <button class="btn" id="btn-lan-settings">Xem địa chỉ &amp; mã QR</button>
   </div>
 
   <div class="card">
@@ -140,7 +132,7 @@ export default {
 
   async show() {
     await Promise.all([loadSettings(), loadPriceLists()]);
-    $('#bank-select').innerHTML = BANKS.map(([bin, n]) => `<option value="${bin}">${n}</option>`).join('');
+    $('#bank-slot').innerHTML = bankField('bank-select', state.settings.bank_bin, state.settings.bank_name);
     $('#pl-select').innerHTML = state.priceLists.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
     for (const el of $$('[data-s]')) {
       if (el.type === 'checkbox') el.checked = state.settings[el.dataset.s] === '1';
@@ -186,7 +178,10 @@ async function onBackupClick(e) {
 async function save() {
   const body = {};
   for (const el of $$('[data-s]')) body[el.dataset.s] = el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value;
-  body.bank_name = BANKS.find((b) => b[0] === body.bank_bin)?.[1] || '';
+  const bank = bankOf($('#bank-select').value);
+  if (bank === undefined) { toast('Chọn ngân hàng trong danh sách gợi ý', true); $('#bank-select').focus(); return; }
+  body.bank_bin = bank ? bank[0] : '';
+  body.bank_name = bank ? bank[1] : '';
   try {
     state.settings = await api('/api/settings', { method: 'PUT', body });
     setCurrency(state.settings.currency || '₫');

@@ -20,6 +20,8 @@ const reports = require('./src/routes/reports');
 const backup = require('./src/routes/backup');
 const vietqr = require('./src/routes/vietqr');
 const publicRoutes = require('./src/routes/public');
+const community = require('./src/routes/community');
+const funds = require('./src/routes/funds');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -37,6 +39,7 @@ app.use('/vqr', vietqr.webhook);
 
 // Báo cáo thống kê giao dịch công khai (chia sẻ bằng link token, không cần đăng nhập)
 app.get('/r/:token', publicRoutes.page);
+app.get('/congduc/:token', publicRoutes.donationsPage);
 app.use('/public/api', publicRoutes.router);
 
 // Xác thực & định tuyến theo tenant
@@ -52,6 +55,8 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use('/api', usersRoutes);
+app.use('/api', community);
+app.use('/api', funds);
 app.use('/api', admin.router);
 app.use('/api', backup.router);
 app.use('/api', vietqr.router);
@@ -63,9 +68,14 @@ app.use('/api', reports);
 app.use('/api', (req, res) => fail(res, 'Không tìm thấy API: ' + req.method + ' ' + req.originalUrl, 404));
 
 app.use((err, req, res, next) => {
-  const code = err.code || 500;
+  // Response already sent: log only; passing on to finalhandler would destroy a keep-alive socket
+  if (res.headersSent) return console.error(err);
+  // Lỗi của express.json (JSON hỏng, quá dung lượng) mang err.status 4xx: trả 4xx, không lộ thông báo gốc tiếng Anh
+  if (err.type === 'entity.parse.failed') return fail(res, 'Dữ liệu gửi lên không đúng định dạng JSON', 400);
+  if (err.type === 'entity.too.large') return fail(res, 'Dữ liệu gửi lên quá lớn', 413);
+  const code = Number.isInteger(err.code) ? err.code : 500;
   if (code >= 500) console.error(err);
-  fail(res, err.message || 'Lỗi máy chủ', code);
+  fail(res, code >= 500 ? 'Lỗi máy chủ' : err.message, code);
 });
 
 function lanUrls() {

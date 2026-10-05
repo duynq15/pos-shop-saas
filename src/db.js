@@ -282,6 +282,60 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   CREATE INDEX IF NOT EXISTS idx_vqr_txn ON vietqr_transactions(transactionid);
   CREATE INDEX IF NOT EXISTS idx_vqr_order ON vietqr_transactions(order_id);
 
+  -- Sổ quỹ cộng đồng (GĐ2.1–2.2 — FR-04, FR-12 → FR-15, BR-03, BR-04, BR-05)
+  CREATE TABLE IF NOT EXISTS funds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','donation')),
+    bank_account TEXT,
+    bank_bin TEXT,
+    bank_name TEXT,
+    account_holder TEXT,
+    manager_user_id INTEGER,
+    description TEXT,
+    start_date TEXT,
+    end_date TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','closed')),
+    created_by INTEGER,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_funds_account ON funds(bank_account) WHERE bank_account IS NOT NULL AND bank_account <> '';
+
+  -- Thu (in) và chi (out) lưu số dương; điều chỉnh (adjust) lưu số có dấu và trỏ về bút toán được sửa.
+  -- Chỉ bút toán approved mới tính vào tồn quỹ.
+  CREATE TABLE IF NOT EXISTS fund_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT UNIQUE NOT NULL,
+    fund_id INTEGER NOT NULL REFERENCES funds(id),
+    type TEXT NOT NULL CHECK (type IN ('in','out','adjust')),
+    amount INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'cash' CHECK (source IN ('vietqr','manual','cash')),
+    bank_ref TEXT UNIQUE,
+    payer_name TEXT,
+    anonymous INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    ref_entry_id INTEGER REFERENCES fund_entries(id),
+    attachment TEXT,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','submitted','approved','rejected')),
+    created_by INTEGER,
+    created_by_name TEXT,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    approved_by INTEGER,
+    approved_by_name TEXT,
+    approved_at TEXT,
+    reject_reason TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_fund_entries_fund ON fund_entries(fund_id, status, created_at);
+
+  -- BR-04: không xóa bút toán; bút toán đã chốt (approved/rejected) không đổi số tiền, quỹ, loại hay trạng thái
+  CREATE TRIGGER IF NOT EXISTS trg_fund_entries_no_delete BEFORE DELETE ON fund_entries
+  BEGIN SELECT RAISE(ABORT, 'Không được xóa bút toán quỹ (BR-04)'); END;
+  CREATE TRIGGER IF NOT EXISTS trg_fund_entries_locked BEFORE UPDATE ON fund_entries
+  WHEN OLD.status IN ('approved','rejected') AND (NEW.amount <> OLD.amount OR NEW.fund_id <> OLD.fund_id
+    OR NEW.type <> OLD.type OR NEW.status <> OLD.status)
+  BEGIN SELECT RAISE(ABORT, 'Bút toán đã chốt, sửa sai bằng bút toán điều chỉnh (BR-04)'); END;
+
   CREATE TABLE IF NOT EXISTS invoice_tax_lines (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
@@ -331,6 +385,10 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   ensureColumn('invoices', 'payment_ref', 'TEXT');
   ensureColumn('invoices', 'payment_content', 'TEXT');
   conn.exec('CREATE INDEX IF NOT EXISTS idx_invoices_payref ON invoices(payment_ref)');
+  // GĐ2.3, GĐ2.5: cột thêm sau khi bảng quỹ đã có ở DB cũ
+  ensureColumn('funds', 'bank_bin', 'TEXT');
+  ensureColumn('funds', 'bank_name', 'TEXT');
+  ensureColumn('fund_entries', 'attachment', 'TEXT');
   ensureColumn('invoice_items', 'unit_id', 'INTEGER');
   ensureColumn('invoice_items', 'unit_name', 'TEXT');
   ensureColumnWithDefault('invoice_items', 'conversion', 'REAL DEFAULT 1', '1');

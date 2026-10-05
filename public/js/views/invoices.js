@@ -1,13 +1,14 @@
 import { $, esc, num, money, toast, statusBadge, methodLabel, today } from '../util.js';
 import { api } from '../store.js';
 import { showReceipt } from './receipt.js';
+import { icon } from '../icons.js';
 
 let type = 'sale';
 
 export default {
   id: 'invoices',
   label: 'Hóa đơn',
-  icon: '🧾',
+  icon: icon('receipt'),
   key: 'F4',
 
   mount(el) {

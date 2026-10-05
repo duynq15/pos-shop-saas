@@ -3,6 +3,7 @@ import { api, state, loadCategories } from '../store.js';
 import { openProductForm, openStockAdjust } from './product-form.js';
 import { openPriceLists } from './price-lists.js';
 import { openLabelPrint } from './labels.js';
+import { icon } from '../icons.js';
 
 let products = [];
 let loadT;
@@ -10,7 +11,7 @@ let loadT;
 export default {
   id: 'products',
   label: 'Sản phẩm',
-  icon: '📦',
+  icon: icon('package'),
   key: 'F2',
 
   mount(el) {

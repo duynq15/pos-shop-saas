@@ -273,9 +273,9 @@ router.post('/products/barcodes/generate', requirePerm('product.edit'), wrap((re
 // Tra cứu thông tin sản phẩm theo mã vạch qua dịch vụ online (mặc định Open Food Facts).
 router.get('/barcode-lookup/:code', wrap(async (req, res) => {
   const s = getSettings();
-  if (s.online_lookup !== '1') fail(res, 'Tra cứu online đang tắt trong Cài đặt');
+  if (s.online_lookup !== '1') return fail(res, 'Tra cứu online đang tắt trong Cài đặt');
   const code = str(req.params.code, 40).replace(/\D/g, '');
-  if (!code) fail(res, 'Mã vạch không hợp lệ');
+  if (!code) return fail(res, 'Mã vạch không hợp lệ');
   const url = s.lookup_url && s.lookup_url.includes('{code}')
     ? s.lookup_url.replace('{code}', encodeURIComponent(code))
     : `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=product_name,product_name_vi,generic_name,brands,image_front_url,image_url,categories,quantity`;

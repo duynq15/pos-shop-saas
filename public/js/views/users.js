@@ -1,5 +1,6 @@
 import { $, esc, toast, modal, closeModal, statusBadge } from '../util.js';
 import { api } from '../store.js';
+import { icon } from '../icons.js';
 
 let users = [];
 let roles = [];
@@ -7,7 +8,7 @@ let roles = [];
 export default {
   id: 'users',
   label: 'Người dùng',
-  icon: '👤',
+  icon: icon('user'),
 
   mount(el) {
     el.innerHTML = `

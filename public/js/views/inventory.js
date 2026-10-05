@@ -1,5 +1,6 @@
 import { $, $$, esc, num, money, toast, modal, closeModal, downloadCSV, statusBadge, moveTypeLabel, today, addDays } from '../util.js';
 import { api, state, loadSuppliers, loadCategories } from '../store.js';
+import { icon } from '../icons.js';
 
 let tab = 'stock';
 let productsCache = null;
@@ -12,7 +13,7 @@ async function allProducts() {
 export default {
   id: 'inventory',
   label: 'Kho',
-  icon: '🏷️',
+  icon: icon('tag'),
   key: 'F3',
 
   mount(el) {

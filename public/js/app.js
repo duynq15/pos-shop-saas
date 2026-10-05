@@ -10,17 +10,23 @@ import vietqr from './views/vietqr.js';
 import promotions from './views/promotions.js';
 import usersView from './views/users.js';
 import settings from './views/settings.js';
-import platformView from './views/platform.js';
+import { platformViews } from './views/platform.js';
+import communityView from './views/community.js';
+import fundsView from './views/funds.js';
+import { icon } from './icons.js';
+document.querySelectorAll('[data-icon]').forEach((el) => { el.innerHTML = icon(el.dataset.icon); });
 
 const reportOverview = makeReportView('overview');
 const reportProducts = makeReportView('products');
 const reportVat = makeReportView('vat');
 const reportAnalytics = makeReportView('analytics');
 
+// kinds: loại tenant được thấy mục này; bỏ trống = mọi loại (GĐ1.5, NFR-05).
+const POS_KINDS = ['shop', 'seller'];
 const VIEWS = [
-  { mod: pos, perm: 'pos.sell' },
-  { mod: products, perm: 'product.view' },
-  { mod: inventory, perm: 'stock.view' },
+  { mod: pos, perm: 'pos.sell', kinds: POS_KINDS },
+  { mod: products, perm: 'product.view', kinds: POS_KINDS },
+  { mod: inventory, perm: 'stock.view', kinds: POS_KINDS },
   { mod: invoices, perm: 'invoice.view' },
   {
     mod: reportOverview, perm: 'report.view',
@@ -36,23 +42,27 @@ const VIEWS = [
   { mod: reportVat, perm: 'report.view', subOnly: true },
   { mod: reportAnalytics, perm: 'report.view', subOnly: true },
   { mod: vietqr, perm: 'report.view', subOnly: true },
-  { mod: promotions, perm: 'promo.manage' },
+  { mod: promotions, perm: 'promo.manage', kinds: POS_KINDS },
+  { mod: communityView, perm: 'community.report', kinds: ['community'] },
+  { mod: fundsView, perm: 'fund.view', kinds: ['community'] },
   { mod: usersView, perm: 'user.manage' },
   { mod: settings, perm: 'settings.edit' },
-  { mod: platformView, perm: 'platform' },
+  // Menu quản trị nền tảng: hiện khi có một trong các quyền của menu (GĐ1.7)
+  ...platformViews.map((mod) => ({ mod, perm: 'platform', any: mod.perms })),
 ];
 
 const registry = {};
 const mounted = new Set();
 let current = null;
 
-const allowed = (perm) => {
-  if (perm === 'platform') return auth.isPlatform;
+const allowed = (perm, any) => {
+  if (perm === 'platform') return auth.isPlatform && (!any || any.some(can));
   if (auth.isPlatform) return false;
   return can(perm);
 };
 
-const permFor = (id) => (VIEWS.find((v) => v.mod.id === id) || {}).perm;
+const kindOk = (kinds) => !kinds || kinds.includes(auth.tenant?.kind || 'shop');
+const entryFor = (id) => VIEWS.find((v) => v.mod.id === id) || {};
 const collapsed = new Set();
 
 function setGroup(id, open) {
@@ -70,8 +80,8 @@ function build() {
   const navList = $('#nav-list');
   navList.innerHTML = '';
   for (const entry of VIEWS) {
-    const { mod, perm, subs, subOnly } = entry;
-    if (!allowed(perm)) continue;
+    const { mod, perm, subs, subOnly, kinds } = entry;
+    if (!allowed(perm, entry.any) || !kindOk(kinds)) continue;
     let sec = document.getElementById('view-' + mod.id);
     if (!sec) {
       sec = document.createElement('section');
@@ -99,7 +109,8 @@ function build() {
       wrap.className = 'nav-subs';
       wrap.id = 'subs-' + mod.id;
       for (const s of subs) {
-        if (!allowed(permFor(s.view))) continue;
+        const se = entryFor(s.view);
+        if (!allowed(se.perm) || !kindOk(se.kinds)) continue;
         const sb = document.createElement('button');
         sb.className = 'nav-sub';
         sb.dataset.subview = s.view;
@@ -159,7 +170,7 @@ function renderUser() {
   if (!el) return;
   const u = auth.user;
   if (!u) { el.innerHTML = ''; return; }
-  const roleName = { owner: 'Chủ cửa hàng', manager: 'Quản lý', cashier: 'Thu ngân', sales: 'NV bán hàng', warehouse: 'Thủ kho', accountant: 'Kế toán', viewer: 'Chỉ xem', platform: 'Quản trị nền tảng' }[u.role] || u.role;
+  const roleName = u.role_name || u.role;
   el.innerHTML = `<div class="su-name">${esc(u.full_name || u.username)}</div>
     <div class="su-meta">${esc(roleName)}${auth.tenant ? ' · ' + esc(auth.tenant.name) : ''}</div>
     <button class="btn sm" id="btn-logout">Đăng xuất</button>`;

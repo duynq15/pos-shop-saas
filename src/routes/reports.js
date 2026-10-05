@@ -16,7 +16,7 @@ function range(q) {
   return { from: f, to: t };
 }
 
-router.get('/reports/summary', wrap((req, res) => {
+router.get('/reports/summary', requirePerm('report.view'), wrap((req, res) => {
   const { from, to } = range(req.query);
   const P = [from, to];
 
@@ -95,7 +95,7 @@ router.get('/reports/summary', wrap((req, res) => {
   ok(res, out);
 }));
 
-router.get('/reports/products', wrap((req, res) => {
+router.get('/reports/products', requirePerm('report.view'), wrap((req, res) => {
   const { from, to } = range(req.query);
   const sort = { revenue: 'revenue', qty: 'qty', profit: 'profit', name: 'name' }[req.query.sort] || 'revenue';
   const rows = db.prepare(`SELECT ii.product_id, ii.name, SUM(ii.base_qty) AS qty, SUM(ii.line_total) AS revenue,
@@ -107,7 +107,7 @@ router.get('/reports/products', wrap((req, res) => {
   ok(res, rows);
 }));
 
-router.get('/reports/inventory', wrap((req, res) => {
+router.get('/reports/inventory', requirePerm('report.view'), wrap((req, res) => {
   const rows = db.prepare(`SELECT p.id, p.name, p.sku, p.barcode, p.unit, p.stock, p.min_stock, p.cost_price, p.sell_price,
       (p.stock*p.cost_price) AS stock_value, COALESCE(c.name,'') AS category_name
     FROM products p LEFT JOIN categories c ON c.id=p.category_id WHERE p.active=1 ORDER BY stock_value DESC`).all();
@@ -115,7 +115,7 @@ router.get('/reports/inventory', wrap((req, res) => {
   ok(res, { items: rows, ...totals });
 }));
 
-router.get('/reports/slow-moving', wrap((req, res) => {
+router.get('/reports/slow-moving', requirePerm('report.view'), wrap((req, res) => {
   const { from, to } = range(req.query);
   const rows = db.prepare(`SELECT p.id, p.name, p.unit, p.stock, p.cost_price, (p.stock*p.cost_price) AS stock_value,
       COALESCE(SUM(ii.base_qty),0) AS sold
@@ -127,7 +127,7 @@ router.get('/reports/slow-moving', wrap((req, res) => {
   ok(res, rows);
 }));
 
-router.get('/reports/purchases', wrap((req, res) => {
+router.get('/reports/purchases', requirePerm('report.view'), wrap((req, res) => {
   const { from, to } = range(req.query);
   const rows = db.prepare(`SELECT COALESCE(supplier_name,'Khác') AS supplier, COUNT(*) AS orders, COALESCE(SUM(total),0) AS total
     FROM purchases WHERE status='received' AND date(created_at)>=date(?) AND date(created_at)<=date(?)
@@ -136,7 +136,7 @@ router.get('/reports/purchases', wrap((req, res) => {
 }));
 
 /* ===================== XUẤT EXCEL ===================== */
-router.get('/reports/export', wrap((req, res) => {
+router.get('/reports/export', requirePerm('report.view'), wrap((req, res) => {
   const { from, to } = range(req.query);
   const type = req.query.type || 'sales';
   let rows = [];
@@ -163,7 +163,7 @@ router.get('/reports/export', wrap((req, res) => {
   sendXlsx(res, name, rows, { sheet: 'Bao cao' });
 }));
 
-router.get('/reports/vat', wrap((req, res) => {
+router.get('/reports/vat', requirePerm('report.view'), wrap((req, res) => {
   const { from, to } = range(req.query);
   const output = db.prepare(`SELECT t.rate,
       SUM(CASE WHEN i.type='return' THEN -t.taxable_amount ELSE t.taxable_amount END) AS taxable,

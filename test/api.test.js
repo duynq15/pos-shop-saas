@@ -345,6 +345,420 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   const expLogin = await (await req('exp', '/auth/login', { method: 'POST', body: { username: 'expadmin', password: '123456' } })).json();
   ok('expired tenant blocked', !expLogin.ok);
 
+  // ---------- Cộng đồng (GĐ1.1–1.2, NFR-05) + chặn tài khoản chung (GĐ0.2 — BR-02, FR-05, SEC-01) ----------
+  const rootJ = async (u, o) => (await req('root', u, o)).json();
+  const com = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Thôn A', type: 'village', area: 'Xã X' } });
+  ok('community create (type village)', com.ok && com.data.type === 'village' && com.data.status === 'active');
+  ok('community dup code rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-a', name: 'Trùng', type: 'village' } })).ok);
+  ok('community bad type rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'cho-b', name: 'Chợ B', type: 'no-such-type' } })).ok);
+  ok('community update', (await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { name: 'Thôn A mới' } })).data.name === 'Thôn A mới');
+  ok('tenant bad kind rejected', !(await rootJ('/platform/tenants', { method: 'POST', body: { code: 'bad-kind', name: 'x', owner_username: 'badkind', owner_password: '123456', kind: 'xyz' } })).ok);
+  ok('seller without community rejected', !(await rootJ('/platform/tenants', { method: 'POST', body: { code: 'no-com', name: 'x', owner_username: 'nocom', owner_password: '123456', kind: 'seller' } })).ok);
+  ok('tenant unknown community rejected', !(await rootJ('/platform/tenants', { method: 'POST', body: { code: 'no-com', name: 'x', owner_username: 'nocom', owner_password: '123456', kind: 'seller', community_id: 99999 } })).ok);
+  const sel = await rootJ('/platform/tenants', { method: 'POST', body: { code: 'seller-a', name: 'Người bán A', owner_username: 'sellera', owner_password: '123456', kind: 'seller', community_id: com.data.id } });
+  ok('seller tenant in community', sel.ok && sel.data.kind === 'seller' && sel.data.community_id === com.data.id);
+  ok('old tenant defaults kind=shop', (await rootJ('/platform/tenants')).data.find((t) => t.code === 'iso-shop').kind === 'shop');
+  await req('sel', '/auth/login', { method: 'POST', body: { username: 'sellera', password: '123456' } });
+  const defAcc = (await api('/settings')).data.bank_account;
+  ok('BR-02: seller cannot reuse another shop account', !(await (await req('sel', '/settings', { method: 'PUT', body: { bank_account: defAcc } })).json()).ok);
+  ok('BR-02: formatting does not bypass check', !(await (await req('sel', '/settings', { method: 'PUT', body: { bank_account: defAcc.slice(0, 4) + ' ' + defAcc.slice(4) } })).json()).ok);
+  const selSet = await (await req('sel', '/settings', { method: 'PUT', body: { bank_account: 'SELLERA01', vqr_enabled: '1', vqr_env: 'mock' } })).json();
+  ok('BR-02: seller saves own account', selSet.ok && selSet.data.bank_account === 'SELLERA01');
+  ok('BR-02: shop cannot reuse community tenant account', !(await api('/settings', { method: 'PUT', body: { bank_account: 'SELLERA01' } })).ok);
+  ok('BR-02: other settings still saved without bank_account', (await (await req('sel', '/settings', { method: 'PUT', body: { shop_name: 'Quán A' } })).json()).ok);
+  const selInv = await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'Rau', price: 3000, qty: 1 }], payment_method: 'transfer' } })).json();
+  const selQr = await (await req('sel', '/invoices/' + selInv.data.id + '/vietqr', { method: 'POST' })).json();
+  ok('seller with own account creates VietQR', selQr.ok && !!selQr.data.payment_ref);
+  ok('kind=shop: two shops may share account (old behaviour)', (await (await req('iso', '/settings', { method: 'PUT', body: { bank_account: defAcc } })).json()).ok);
+  const assign = await rootJ('/platform/tenants/' + newT.data.id, { method: 'PUT', body: { kind: 'seller', community_id: com.data.id } });
+  ok('BR-02: cannot join community while sharing account', !assign.ok && /BR-02/.test(assign.error || ''));
+  await req('iso', '/settings', { method: 'PUT', body: { bank_account: 'BANKISO' } });
+  const assign2 = await rootJ('/platform/tenants/' + newT.data.id, { method: 'PUT', body: { kind: 'seller', community_id: com.data.id } });
+  ok('join community with own account', assign2.ok && assign2.data.community_id === com.data.id);
+  ok('community lists tenant count', (await rootJ('/platform/communities')).data.find((c) => c.id === com.data.id).tenant_count === 2);
+  ok('tenant cannot manage communities', (await req('admin', '/platform/communities')).status === 403);
+
+  // ---------- Vai trò cộng đồng (GĐ1.3 — FR-02, BR-05, SEC-04, BR-09, BR-11) ----------
+  await rootJ('/platform/tenants', { method: 'POST', body: { code: 'quy-a', name: 'Quỹ thôn A', owner_username: 'quyaadmin', owner_password: '123456', kind: 'community', community_id: com.data.id } });
+  const cLogin = await (await req('cadm', '/auth/login', { method: 'POST', body: { username: 'quyaadmin', password: '123456' } })).json();
+  ok('login payload has tenant kind + community', cLogin.data.tenant.kind === 'community' && cLogin.data.tenant.community_id === com.data.id);
+  ok('me has tenant kind', (await (await req('cadm', '/auth/me')).json()).data.tenant.kind === 'community');
+  const cRoles = (await (await req('cadm', '/roles')).json()).data.map((r) => r.code);
+  ok('FR-02: community roles list', ['owner', 'treasurer', 'approver', 'community_leader'].every((r) => cRoles.includes(r)) && !cRoles.includes('cashier'));
+  const sRoles = (await api('/roles')).data.map((r) => r.code);
+  ok('FR-02: shop roles list excludes community roles', sRoles.includes('cashier') && !sRoles.includes('treasurer'));
+  ok('FR-02: shop cannot create treasurer', !(await api('/users', { method: 'POST', body: { username: 'bad-treas', password: '123456', role: 'treasurer' } })).ok);
+  ok('FR-02: community cannot create cashier', !(await (await req('cadm', '/users', { method: 'POST', body: { username: 'bad-cash', password: '123456', role: 'cashier' } })).json()).ok);
+  const perms = {};
+  for (const role of ['treasurer', 'approver', 'community_leader']) {
+    const u = await (await req('cadm', '/users', { method: 'POST', body: { username: 'qa-' + role, password: '123456', role } })).json();
+    ok('create ' + role, u.ok && u.data.role === role && !!u.data.role_name);
+    const l = await (await req('c-' + role, '/auth/login', { method: 'POST', body: { username: 'qa-' + role, password: '123456' } })).json();
+    perms[role] = l.data.permissions;
+  }
+  ok('SEC-04: treasurer cannot approve', perms.treasurer.includes('fund.entry') && !perms.treasurer.includes('fund.approve'));
+  ok('BR-05: approver approves, does not enter', perms.approver.includes('fund.approve') && !perms.approver.includes('fund.entry'));
+  ok('BR-11: approver manages categories', perms.approver.includes('community.categories'));
+  ok('BR-09: leader only aggregate + fund view', perms.community_leader.includes('community.report') && perms.community_leader.includes('fund.view')
+    && !['pos.sell', 'report.view', 'fund.entry'].some((p) => perms.community_leader.includes(p)));
+  ok('community role cannot sell', (await (await req('c-community_leader', '/invoices', { method: 'POST', body: { items: [{ name: 'x', price: 1000, qty: 1 }] } })).json()).ok === false);
+  const leaderId = (await (await req('cadm', '/users')).json()).data.find((u) => u.username === 'qa-community_leader').id;
+  ok('FR-02: cannot switch community user to POS role', !(await (await req('cadm', '/users/' + leaderId, { method: 'PUT', body: { role: 'manager' } })).json()).ok);
+
+  // ---------- Sổ quỹ (GĐ2.1–2.2 — FR-12 → FR-15, BR-03, BR-04, BR-05, ERR-06) ----------
+  const cj = async (who, u, o) => (await req(who, u, o)).json();
+  const fund = await cj('c-approver', '/funds', { method: 'POST', body: { code: 'cong-duc', name: 'Quỹ công đức', kind: 'donation', bank_account: 'QUY-A 001' } });
+  ok('fund create (account normalised)', fund.ok && fund.data.bank_account === 'QUYA001' && fund.data.balance === 0);
+  ok('fund dup account rejected', !(await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-2', name: 'Quỹ 2', bank_account: 'QUYA001' } })).ok);
+  ok('fund cannot reuse shop account', !(await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-3', name: 'Quỹ 3', bank_account: 'SELLERA01' } })).ok);
+  ok('treasurer cannot create fund', (await req('c-treasurer', '/funds', { method: 'POST', body: { code: 'quy-4', name: 'Quỹ 4' } })).status === 403);
+  ok('shop tenant has no fund book', (await req('admin', '/funds')).status === 403 && (await req('admin', '/fund-entries/1/attachment')).status === 403);
+  const fid = fund.data.id;
+  const cashIn = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 500000, payer_name: 'Ông Ba', note: 'Công đức' } });
+  ok('cash in recorded at once', cashIn.ok && cashIn.data.status === 'approved' && /^PT/.test(cashIn.data.code));
+  await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 100000, anonymous: true } });
+  ok('balance from approved entries', (await cj('c-community_leader', '/funds/' + fid)).data.balance === 600000);
+  ok('leader cannot enter', (await req('c-community_leader', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).status === 403);
+  ok('approver cannot enter (BR-05)', (await req('c-approver', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).status === 403);
+  const receipt = 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('chung-tu')]).toString('base64');
+  const out = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 200000, note: 'Mua hương', attachment: receipt } });
+  ok('out starts as draft', out.ok && out.data.status === 'draft' && /^PC/.test(out.data.code));
+  ok('draft cannot be approved', !(await cj('c-approver', '/fund-entries/' + out.data.id + '/approve', { method: 'POST' })).ok);
+  ok('submit', (await cj('c-treasurer', '/fund-entries/' + out.data.id + '/submit', { method: 'POST' })).data.status === 'submitted');
+  ok('treasurer cannot approve (SEC-04)', (await req('c-treasurer', '/fund-entries/' + out.data.id + '/approve', { method: 'POST' })).status === 403);
+  ok('approve', (await cj('c-approver', '/fund-entries/' + out.data.id + '/approve', { method: 'POST' })).data.status === 'approved');
+  ok('balance after out', (await cj('cadm', '/funds/' + fid)).data.balance === 400000);
+  // Chủ tài khoản có mọi quyền nhưng vẫn không được tự duyệt phiếu mình lập
+  const noImg = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000 } });
+  ok('ERR-05: expense without receipt cannot be submitted', !(await cj('c-treasurer', '/fund-entries/' + noImg.data.id + '/submit', { method: 'POST' })).ok);
+  ok('draft editable only by creator', (await req('c-approver', '/fund-entries/' + noImg.data.id, { method: 'PATCH', body: { note: 'x' } })).status === 403
+    && !(await cj('cadm', '/fund-entries/' + noImg.data.id, { method: 'PATCH', body: { note: 'x' } })).ok);
+  const fixed = await cj('c-treasurer', '/fund-entries/' + noImg.data.id, { method: 'PATCH', body: { amount: 2000, attachment: receipt } });
+  ok('creator adds receipt to own draft', fixed.ok && fixed.data.amount === 2000 && !!fixed.data.attachment);
+  ok('draft with receipt can be submitted', (await cj('c-treasurer', '/fund-entries/' + noImg.data.id + '/submit', { method: 'POST' })).data.status === 'submitted');
+  ok('submitted entry no longer editable', !(await cj('c-treasurer', '/fund-entries/' + noImg.data.id, { method: 'PATCH', body: { amount: 1 } })).ok);
+  await cj('c-approver', '/fund-entries/' + noImg.data.id + '/reject', { method: 'POST', body: { reason: 'Test' } });
+  const own = await cj('cadm', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, attachment: receipt } });
+  await cj('cadm', '/fund-entries/' + own.data.id + '/submit', { method: 'POST' });
+  ok('ERR-06: creator cannot approve own entry', (await req('cadm', '/fund-entries/' + own.data.id + '/approve', { method: 'POST' })).status === 403);
+  ok('reject needs reason', !(await cj('c-approver', '/fund-entries/' + own.data.id + '/reject', { method: 'POST' })).ok);
+  ok('reject', (await cj('c-approver', '/fund-entries/' + own.data.id + '/reject', { method: 'POST', body: { reason: 'Thiếu chứng từ' } })).data.status === 'rejected');
+  const big = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 400001, attachment: receipt } });
+  await cj('c-treasurer', '/fund-entries/' + big.data.id + '/submit', { method: 'POST' });
+  ok('BR-03: overspend blocked', !(await cj('c-approver', '/fund-entries/' + big.data.id + '/approve', { method: 'POST' })).ok);
+  ok('adjust needs ref + reason', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'adjust', amount: -50000 } })).ok);
+  const adj = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'adjust', amount: -50000, ref_entry_id: cashIn.data.id, note: 'Ghi thừa 50.000' } });
+  await cj('c-treasurer', '/fund-entries/' + adj.data.id + '/submit', { method: 'POST' });
+  await cj('c-approver', '/fund-entries/' + adj.data.id + '/approve', { method: 'POST' });
+  ok('adjust approved lowers balance', /^DC/.test(adj.data.code) && (await cj('cadm', '/funds/' + fid)).data.balance === 350000);
+  ok('BR-04: no delete route', (await req('cadm', '/fund-entries/' + out.data.id, { method: 'DELETE' })).status === 404);
+  const list = await cj('c-community_leader', '/funds/' + fid + '/entries?type=out&status=approved');
+  ok('entries filter', list.ok && list.data.entries.length === 1 && list.data.entries[0].id === out.data.id);
+
+  // ---------- Ảnh chứng từ (GĐ2.5) ----------
+  const tinyJpeg = receipt;
+  const outWithImg = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 5000, note: 'Mua giấy', attachment: tinyJpeg } });
+  ok('expense entry with attachment', outWithImg.ok && !!outWithImg.data.attachment);
+  const imgRes = await req('c-treasurer', '/fund-entries/' + outWithImg.data.id + '/attachment');
+  ok('attachment downloads', imgRes.status === 200 && (await imgRes.text()).endsWith('chung-tu') && imgRes.headers.get('x-content-type-options') === 'nosniff');
+  ok('fake image (wrong bytes) rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, attachment: 'data:image/jpeg;base64,' + Buffer.from('<svg onload=alert(1)>').toString('base64') } })).ok);
+  ok('bad attachment format rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, attachment: 'data:text/plain;base64,aGk=' } })).ok);
+  const bigB64 = 'data:image/jpeg;base64,' + Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(5.2 * 1024 * 1024, 'a')]).toString('base64');
+  ok('oversize attachment rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, attachment: bigB64 } })).ok);
+  ok('entry without attachment 404', (await req('c-treasurer', '/fund-entries/' + cashIn.data.id + '/attachment')).status === 404);
+
+  // ---------- Báo cáo kỳ (GĐ2.7 — BR-12: không chốt sổ) ----------
+  const fundDay = new Date().toISOString().slice(0, 10);
+  const rep = await cj('c-community_leader', '/funds/' + fid + '/report?from=' + fundDay + '&to=' + fundDay);
+  ok('period report matches balance', rep.ok && rep.data.opening_balance === 0 && rep.data.income_cash === 600000
+    && rep.data.income_bank === 0 && rep.data.expense === 200000 && rep.data.adjust === -50000 && rep.data.closing_balance === 350000);
+  ok('empty range returns opening as closing', (await cj('cadm', '/funds/' + fid + '/report?from=2000-01-01&to=2000-01-01')).data.closing_balance === 0);
+  ok('inverted range rejected', !(await cj('cadm', '/funds/' + fid + '/report?from=' + fundDay + '&to=2000-01-01')).ok);
+  ok('leader cannot export (no report.export)', (await req('c-community_leader', '/funds/' + fid + '/report/export?from=' + fundDay + '&to=' + fundDay)).status === 403);
+  const expRes = await req('c-treasurer', '/funds/' + fid + '/report/export?from=' + fundDay + '&to=' + fundDay);
+  ok('export xlsx', expRes.status === 200 && (expRes.headers.get('content-type') || '').includes('spreadsheetml'));
+
+  // ---------- Danh sách công đức công khai (GĐ2.9, FR-20) ----------
+  const pubOn = await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: true } } });
+  ok('enabling public donations issues a token', pubOn.ok && !!pubOn.data.donations_url);
+  const donToken = pubOn.data.donations_url.split('/').pop();
+  const donJson = await (await fetch(ROOT + '/public/api/donations/' + donToken)).json();
+  const donFund = donJson.data.programs.find((p) => p.name === 'Quỹ công đức');
+  ok('public list shows only donation-kind funds', donJson.ok && !!donFund && !donJson.data.programs.some((p) => p.name === 'Quỹ chung'));
+  ok('public total matches approved income only', donFund.total === 600000);
+  ok('anonymous entry hides the name', donFund.entries.some((e) => e.name === null && e.anonymous === true && e.amount === 100000));
+  const named = (await cj('c-treasurer', '/funds/' + fid + '/entries?type=in')).data.entries.find((e) => e.payer_name === 'Ông Ba');
+  ok('FR-20: approver cannot toggle anonymity', (await req('c-approver', '/fund-entries/' + named.id + '/anonymous', { method: 'POST', body: { anonymous: true } })).status === 403);
+  ok('FR-20: treasurer hides a donor name', (await cj('c-treasurer', '/fund-entries/' + named.id + '/anonymous', { method: 'POST', body: { anonymous: true } })).data.anonymous === 1);
+  const donAfter = (await (await fetch(ROOT + '/public/api/donations/' + donToken)).json()).data.programs.find((p) => p.name === 'Quỹ công đức');
+  ok('FR-20: hidden name no longer public', !JSON.stringify(donAfter).includes('Ông Ba') && donAfter.total === 600000);
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: false } } });
+  const pubOn2 = await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: true } } });
+  ok('token stays the same across toggle off/on', pubOn2.data.donations_url === pubOn.data.donations_url);
+  ok('wrong token 404', (await fetch(ROOT + '/public/api/donations/bad-token')).status === 404);
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: false } } });
+  ok('disabled flag 404 even with valid token', (await fetch(ROOT + '/public/api/donations/' + donToken)).status === 404);
+
+  // Đóng quỹ = quyết toán: còn khoản dở thì không cho đóng; đã đóng thì không duyệt / sửa gì nữa.
+  // Dọn các khoản dở do test phía trên để lại, như người duyệt phải làm thật trước khi đóng.
+  for (const st of ['draft', 'submitted']) {
+    for (const e of (await cj('cadm', '/funds/' + fid + '/entries?status=' + st)).data.entries) {
+      if (st === 'draft') await cj('c-treasurer', '/fund-entries/' + e.id + '/submit', { method: 'POST' });
+      await cj('c-approver', '/fund-entries/' + e.id + '/reject', { method: 'POST', body: { reason: 'dọn trước khi đóng' } });
+    }
+  }
+  const openDraft = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, note: 'dở', attachment: receipt } });
+  const closeBlocked = await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'closed' } });
+  ok('cannot close fund with open entries', !closeBlocked.ok && /Còn 1 khoản/.test(closeBlocked.error), closeBlocked.error);
+  await cj('c-treasurer', '/fund-entries/' + openDraft.data.id + '/submit', { method: 'POST' });
+  await cj('c-approver', '/fund-entries/' + openDraft.data.id + '/reject', { method: 'POST', body: { reason: 'đóng quỹ' } });
+  ok('close fund once nothing is open', (await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'closed' } })).data?.status === 'closed');
+  ok('closed fund takes no entries', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).ok);
+  ok('closed fund: no transitions on its entries', !(await cj('c-treasurer', '/fund-entries/' + openDraft.data.id + '/submit', { method: 'POST' })).ok);
+  ok('closed fund: donor can still be anonymised (FR-20)', (await cj('c-treasurer', '/fund-entries/' + cashIn.data.id + '/anonymous', { method: 'POST', body: { anonymous: false } })).ok);
+  await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'active' } });
+  ok('reopen allowed', (await cj('c-treasurer', '/funds/' + fid)).data.status === 'active');
+
+  // ---------- Ca biên và tấn công thử (rà soát GĐ1–2) ----------
+  ok('amount over 100 billion rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1e20 } })).ok);
+  const badJson = await fetch(B + '/funds/' + fid + '/entries', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: jars['c-treasurer'] }, body: '{bad json' });
+  ok('malformed JSON -> 400, not 500', badJson.status === 400);
+  {
+    await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 100000 } });
+    const bal = (await cj('c-treasurer', '/funds/' + fid)).data.balance;
+    const mk = async () => { const o = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: Math.ceil(bal * 0.6), note: 'race', attachment: receipt } }); await cj('c-treasurer', '/fund-entries/' + o.data.id + '/submit', { method: 'POST' }); return o.data.id; };
+    const [x1, x2] = [await mk(), await mk()];
+    const res = await Promise.all([x1, x2].map((id) => cj('c-approver', '/fund-entries/' + id + '/approve', { method: 'POST' })));
+    ok('concurrent approvals cannot overdraw', res.filter((r) => r.ok).length === 1 && (await cj('c-treasurer', '/funds/' + fid)).data.balance >= 0);
+    const loser = res[0].ok ? x2 : x1;
+    await cj('c-approver', '/fund-entries/' + loser + '/reject', { method: 'POST', body: { reason: 'race test' } });
+  }
+
+  // ---------- Phạm vi thủ quỹ (BR-08, FR-02) ----------
+  await req('cadm', '/users', { method: 'POST', body: { username: 'qa-treasurer2', password: '123456', role: 'treasurer' } });
+  await req('c-treasurer2', '/auth/login', { method: 'POST', body: { username: 'qa-treasurer2', password: '123456' } });
+  const treas = await cj('c-approver', '/fund-treasurers');
+  ok('approver lists treasurers', treas.ok && treas.data.some((t) => t.username === 'qa-treasurer2'));
+  const tq1 = treas.data.find((t) => t.username === 'qa-treasurer').id;
+  ok('manager must be a treasurer', !(await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { manager_user_id: (await cj('cadm', '/auth/me')).data.user.id } })).ok);
+  ok('assign fund to treasurer 1', (await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { manager_user_id: tq1 } })).data.manager_user_id === tq1);
+  ok('BR-08: other treasurer cannot see assigned fund', !(await cj('c-treasurer2', '/funds')).data.some((f) => f.id === fid)
+    && (await req('c-treasurer2', '/funds/' + fid)).status === 404
+    && (await req('c-treasurer2', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).status === 404
+    && (await req('c-treasurer2', '/fund-entries/' + out.data.id + '/attachment')).status === 404);
+  ok('assigned treasurer and leader still see it', (await cj('c-treasurer', '/funds')).data.some((f) => f.id === fid)
+    && (await cj('c-community_leader', '/funds')).data.some((f) => f.id === fid));
+  await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { manager_user_id: null } });
+  ok('unassigned fund open to every treasurer', (await cj('c-treasurer2', '/funds')).data.some((f) => f.id === fid));
+
+  // ---------- QR quỹ (GĐ2.3 — reuse generateQR, tài khoản quỹ luôn riêng theo BR-02) ----------
+  const fund2 = await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-chung', name: 'Quỹ chung', bank_account: 'QUYCHUNG01' } });
+  ok('fund without bank_bin blocks QR', (await req('cadm', '/funds/' + fund2.data.id + '/qr')).status === 400);
+  ok('bank BIN must be 6 digits', !(await cj('c-approver', '/funds/' + fund2.data.id, { method: 'PATCH', body: { bank_bin: 'MB: 970422' } })).ok);
+  await cj('c-approver', '/funds/' + fund2.data.id, { method: 'PATCH', body: { bank_bin: '970422', bank_name: 'MB Bank' } });
+  const staticQr = await cj('c-community_leader', '/funds/' + fund2.data.id + '/qr');
+  ok('static fund QR has no amount', staticQr.ok && !!staticQr.data.qrDataUrl && !/54\d\d\d/.test(staticQr.data.qrCode.split('5303704')[1].split('5802VN')[0]) && staticQr.data.qrCode.includes('QUYCHUNG01'));
+  ok('leader cannot request dynamic QR', (await req('c-community_leader', '/funds/' + fund2.data.id + '/qr', { method: 'POST', body: { amount: 100000 } })).status === 403);
+  const dynQr = await cj('c-treasurer', '/funds/' + fund2.data.id + '/qr', { method: 'POST', body: { amount: 250000 } });
+  ok('dynamic fund QR carries amount', dynQr.ok && dynQr.data.amount === 250000 && dynQr.data.qrCode.includes('250000'));
+  const balBefore = (await cj('cadm', '/funds/' + fund2.data.id)).data.balance;
+  const syncFund = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
+  ok('webhook routes to fund by bank account', syncFund.error === false);
+  ok('fund balance increases from webhook', (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
+  const syncFundAgain = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 250000, content: 'Ung ho quy chung', transType: 'C', transactionid: 'FUND-TXN-1' }) })).json();
+  ok('webhook fund payment idempotent', syncFundAgain.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
+  const syncNoId = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 7000, content: 'x', transType: 'C' }) })).json();
+  ok('webhook without transactionid not booked', /Thiếu mã/.test(syncNoId.toastMessage) && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
+  ok('BR-02: shop cannot take a fund account', !(await api('/settings', { method: 'PUT', body: { bank_account: 'QUY CHUNG 01' } })).ok);
+  const syncNeg = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tokRoute.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: -5000, content: 'x', transType: 'C', transactionid: 'FUND-TXN-NEG' }) })).json();
+  ok('webhook ignores non-positive amount', syncNeg.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
+
+  // ---------- Phạm vi cộng đồng (GĐ1.4 — BR-07, BR-09, ERR-08) ----------
+  const day = new Date().toISOString().slice(0, 10);
+  // Cộng đồng B với người bán riêng: số của B không được lẫn vào A
+  const comB = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-b', name: 'Thôn B', type: 'village' } });
+  await rootJ('/platform/tenants', { method: 'POST', body: { code: 'seller-b', name: 'Người bán B', owner_username: 'sellerb', owner_password: '123456', kind: 'seller', community_id: comB.data.id } });
+  await req('selb', '/auth/login', { method: 'POST', body: { username: 'sellerb', password: '123456' } });
+  await req('selb', '/invoices', { method: 'POST', body: { items: [{ name: 'Gạo', price: 777000, qty: 1 }], payment_method: 'cash', paid_amount: 777000 } });
+  // Người bán A có thêm một hóa đơn đã thanh toán
+  const paidA = await (await req('sel', '/invoices', { method: 'POST', body: { items: [{ name: 'Rau', price: 5000, qty: 2 }], payment_method: 'cash', paid_amount: 10000 } })).json();
+  ok('seller A paid invoice', paidA.ok);
+  // AC-03-3: người bán A không thấy dữ liệu của người bán B, kể cả đoán id
+  const listA = await (await req('sel', '/invoices')).json();
+  const listB = await (await req('selb', '/invoices')).json();
+  const idB = listB.data.items ? listB.data.items[0].id : listB.data[0].id;
+  ok('AC-03-3: seller A list has none of B', !JSON.stringify(listA).includes('777000') && !JSON.stringify(listA).includes('Gạo'));
+  const peek = await req('sel', '/invoices/' + idB);
+  ok('AC-03-3: seller A cannot open B invoice by id', !(await peek.text()).includes('Gạo'));
+  ok('AC-03-3: seller A reports exclude B', !JSON.stringify(await (await req('sel', '/reports/summary?from=2000-01-01&to=2999-12-31')).json()).includes('777000'));
+  const sumRes = await req('c-community_leader', '/community/summary?from=' + day + '&to=' + day);
+  const summ = (await sumRes.json()).data;
+  ok('BR-09: leader gets community summary', sumRes.status === 200 && summ.sellers === 2 && summ.community_id === com.data.id);
+  // Thôn A: seller-a (1 hóa đơn 10.000) + iso-shop đã gia nhập (3 hóa đơn 1.000 + 2.000 + 100). Hóa đơn chờ VietQR không tính.
+  ok('BR-07: converted = sellers with a paid sale', summ.converted_sellers === 2);
+  ok('summary counts only own community', summ.transactions === 4 && summ.amount === 13100);
+  ok('BR-09: summary has no per-seller data', !/seller-a|iso-shop|Người bán|Quán A/.test(JSON.stringify(summ)) && Object.values(summ).every((v) => typeof v !== 'object'));
+  ok('summary rejects inverted range', (await req('c-community_leader', '/community/summary?from=' + day + '&to=2000-01-01')).status === 400);
+  ok('ERR-08: seller owner cannot read community summary', (await req('sel', '/community/summary')).status === 403);
+  ok('ERR-08: shop owner cannot read community summary', (await req('admin', '/community/summary')).status === 403);
+  ok('ERR-08: treasurer lacks community.report', (await req('c-treasurer', '/community/summary')).status === 403);
+  ok('ERR-08: leader cannot list invoices', (await req('c-community_leader', '/invoices')).status === 403);
+  ok('ERR-08: leader cannot read POS reports', (await req('c-community_leader', '/reports/summary')).status === 403);
+  ok('ERR-08: platform root has no community summary', (await req('root', '/community/summary')).status === 403);
+
+  // ---------- Cấu hình loại cộng đồng + CRUD cộng đồng (GĐ1.6 — NFR-05, US-13, FR-02) ----------
+  const types0 = await rootJ('/platform/community-types');
+  ok('community types seeded with village', types0.ok && types0.data.some((t) => t.code === 'village' && t.name === 'Thôn' && t.approver_label === 'Trưởng thôn'));
+  ok('preset community types seeded', ['village', 'residential-group', 'parish', 'pagoda', 'market', 'association'].every((c) => types0.data.some((t) => t.code === c)));
+  ok('community without type rejected', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'no-type', name: 'Không loại' } })).ok);
+  ok('non-root cannot list community types', (await req('admin', '/platform/community-types')).status === 403);
+  ok('non-root cannot create community type', (await req('admin', '/platform/community-types', { method: 'POST', body: { code: 'x-type', name: 'X' } })).status === 403);
+  const gx = await rootJ('/platform/community-types', { method: 'POST', body: { code: 'giao-xu', name: 'Giáo xứ', approver_label: 'Cha xứ', leader_label: 'Hội đồng giáo xứ', sort_order: 2 } });
+  ok('community type create', gx.ok && gx.data.code === 'giao-xu' && gx.data.status === 'active');
+  ok('community type dup code rejected', !(await rootJ('/platform/community-types', { method: 'POST', body: { code: 'giao-xu', name: 'Trùng' } })).ok);
+  ok('community type code immutable', !(await rootJ('/platform/community-types/' + gx.data.id, { method: 'PUT', body: { code: 'khac' } })).ok);
+  const gxU = await rootJ('/platform/community-types/' + gx.data.id, { method: 'PUT', body: { name: 'Giáo xứ (sửa)', sort_order: 3 } });
+  ok('community type update', gxU.ok && gxU.data.name === 'Giáo xứ (sửa)' && gxU.data.sort_order === 3 && gxU.data.approver_label === 'Cha xứ');
+  const tmpT = await rootJ('/platform/community-types', { method: 'POST', body: { code: 'tmp-type', name: 'Tạm' } });
+  ok('unused community type delete', (await rootJ('/platform/community-types/' + tmpT.data.id, { method: 'DELETE' })).ok
+    && !(await rootJ('/platform/community-types')).data.some((t) => t.code === 'tmp-type'));
+  const vil = types0.data.find((t) => t.code === 'village');
+  const delUsed = await rootJ('/platform/community-types/' + vil.id, { method: 'DELETE' });
+  ok('community type in use cannot be deleted', !delUsed.ok && /đang dùng/.test(delUsed.error || ''));
+  await rootJ('/platform/community-types/' + gx.data.id, { method: 'PUT', body: { status: 'suspended' } });
+  ok('suspended type blocks new community', !(await rootJ('/platform/communities', { method: 'POST', body: { code: 'gx-bad', name: 'x', type: 'giao-xu' } })).ok);
+  await rootJ('/platform/community-types/' + gx.data.id, { method: 'PUT', body: { status: 'active' } });
+
+  // Cấu hình từng cộng đồng
+  const gxc = await rootJ('/platform/communities', { method: 'POST', body: { code: 'gx-a', name: 'Giáo xứ A', type: 'giao-xu', contact_name: 'Ông B', contact_phone: '0900000000', note: 'Thí điểm' } });
+  ok('community with contact + default settings', gxc.ok && gxc.data.contact_name === 'Ông B' && gxc.data.settings.public_donations === false && gxc.data.settings.unclassified_alert_days === 3);
+  ok('community settings unknown key rejected', !(await rootJ('/platform/communities/' + gxc.data.id, { method: 'PUT', body: { settings: { foo: 1 } } })).ok);
+  ok('community settings bad value rejected', !(await rootJ('/platform/communities/' + gxc.data.id, { method: 'PUT', body: { settings: { unclassified_alert_days: 0 } } })).ok
+    && !(await rootJ('/platform/communities/' + gxc.data.id, { method: 'PUT', body: { settings: { public_donations: 'yes' } } })).ok);
+  const gxs = await rootJ('/platform/communities/' + gxc.data.id, { method: 'PUT', body: { settings: { unclassified_alert_days: 5 } } });
+  ok('community settings update merges', gxs.ok && gxs.data.settings.unclassified_alert_days === 5 && gxs.data.settings.public_donations === false);
+  ok('change type of empty community', (await rootJ('/platform/communities/' + gxc.data.id, { method: 'PUT', body: { type: 'village' } })).data.type === 'village');
+  await rootJ('/platform/communities/' + gxc.data.id, { method: 'PUT', body: { type: 'giao-xu' } });
+  ok('change type of community with tenants rejected', !(await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { type: 'giao-xu' } })).ok);
+
+  // Nhãn vai trò theo loại cộng đồng (chỉ đổi tên hiển thị)
+  await rootJ('/platform/tenants', { method: 'POST', body: { code: 'quy-gx', name: 'Quỹ giáo xứ', owner_username: 'quygx', owner_password: '123456', kind: 'community', community_id: gxc.data.id } });
+  await req('gxadm', '/auth/login', { method: 'POST', body: { username: 'quygx', password: '123456' } });
+  const gxRoles = (await (await req('gxadm', '/roles')).json()).data;
+  ok('role labels follow community type', gxRoles.find((r) => r.code === 'approver').name === 'Cha xứ' && gxRoles.find((r) => r.code === 'community_leader').name === 'Hội đồng giáo xứ');
+  const gxAp = await (await req('gxadm', '/users', { method: 'POST', body: { username: 'gx-approver', password: '123456', role: 'approver' } })).json();
+  ok('user role_name uses type label', gxAp.ok && gxAp.data.role_name === 'Cha xứ');
+  const gxLogin = await (await req('gxap', '/auth/login', { method: 'POST', body: { username: 'gx-approver', password: '123456' } })).json();
+  ok('login role_name uses type label, same perms', gxLogin.data.user.role_name === 'Cha xứ' && gxLogin.data.permissions.includes('fund.approve'));
+  ok('village labels on village community', (await (await req('cadm', '/roles')).json()).data.find((r) => r.code === 'approver').name === 'Trưởng thôn');
+  ok('platform users list uses type label', (await rootJ('/platform/users')).data.find((u) => u.username === 'gx-approver').role_name === 'Cha xứ');
+
+  // Thành viên, gỡ, xóa
+  const members = await rootJ('/platform/communities/' + com.data.id + '/tenants');
+  ok('community members list', members.ok && members.data.some((t) => t.code === 'seller-a') && members.data.some((t) => t.code === 'quy-a'));
+  const delCom = await rootJ('/platform/communities/' + com.data.id, { method: 'DELETE' });
+  ok('delete community with tenants rejected', !delCom.ok && /còn \d+ cửa hàng/.test(delCom.error || ''));
+  const shopM = await rootJ('/platform/tenants', { method: 'POST', body: { code: 'shop-gx', name: 'Shop GX', owner_username: 'shopgx', owner_password: '123456', kind: 'shop', community_id: gxc.data.id } });
+  ok('remove shop from community', (await rootJ('/platform/communities/' + gxc.data.id + '/remove-tenant', { method: 'POST', body: { tenant_id: shopM.data.id } })).ok
+    && (await rootJ('/platform/tenants')).data.find((t) => t.code === 'shop-gx').community_id === null);
+  const selId = members.data.find((t) => t.code === 'seller-a').id;
+  ok('cannot remove seller from community', !(await rootJ('/platform/communities/' + com.data.id + '/remove-tenant', { method: 'POST', body: { tenant_id: selId } })).ok);
+  const emptyC = await rootJ('/platform/communities', { method: 'POST', body: { code: 'thon-rong', name: 'Thôn rỗng', type: 'village' } });
+  ok('delete empty community', (await rootJ('/platform/communities/' + emptyC.data.id, { method: 'DELETE' })).ok
+    && !(await rootJ('/platform/communities')).data.some((c) => c.code === 'thon-rong'));
+  ok('non-root cannot delete community', (await req('admin', '/platform/communities/' + com.data.id, { method: 'DELETE' })).status === 403);
+
+  // Tạm ngưng cộng đồng: chặn báo cáo và gán mới, không khóa đăng nhập
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { status: 'suspended' } });
+  ok('suspended community summary 403', (await req('c-community_leader', '/community/summary')).status === 403);
+  ok('suspended community blocks new assignment', !(await rootJ('/platform/tenants/' + shopM.data.id, { method: 'PUT', body: { community_id: com.data.id } })).ok);
+  ok('suspended community keeps logins', (await (await req('c-community_leader', '/auth/me')).json()).ok);
+  ok('suspended community keeps existing tenant editable', (await rootJ('/platform/tenants/' + selId, { method: 'PUT', body: { name: 'Người bán A2' } })).ok);
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { status: 'active' } });
+  ok('reactivated community summary ok', (await req('c-community_leader', '/community/summary')).status === 200);
+
+  // ---------- GĐ1.7: vai trò nền tảng (SEC-04, ERR-08) ----------
+  const pPerms = await rootJ('/platform/permissions');
+  ok('permission catalog', pPerms.ok && pPerms.data.some((p) => p.code === 'staff.manage' && p.group));
+  const rolesL = await rootJ('/platform/roles');
+  const sys = rolesL.data.find((r) => r.code === 'platform');
+  ok('seeded platform roles', sys && sys.is_system && sys.permissions.includes('*') && ['platform_ops', 'platform_community', 'platform_support', 'platform_tech'].every((c) => rolesL.data.some((r) => r.code === c)));
+  ok('system role not editable', !(await rootJ('/platform/roles/' + sys.id, { method: 'PUT', body: { name: 'X' } })).ok);
+  ok('system role not deletable', !(await rootJ('/platform/roles/' + sys.id, { method: 'DELETE' })).ok);
+  ok('role code clashing tenant role rejected', !(await rootJ('/platform/roles', { method: 'POST', body: { code: 'cashier', name: 'X' } })).ok);
+  ok('unknown permission rejected', !(await rootJ('/platform/roles', { method: 'POST', body: { code: 'pf-x', name: 'X', permissions: ['*'] } })).ok);
+  const mkStaff = async (username, role, communities = []) => {
+    const r = await rootJ('/platform/staff', { method: 'POST', body: { username, password: 'staff123', role, communities } });
+    await req(username, '/auth/login', { method: 'POST', body: { username, password: 'staff123' } });
+    return r;
+  };
+  const pst = (who, u, o) => req(who, '/platform' + u, o).then((r) => r.status);
+  const sOps = await mkStaff('ops1', 'platform_ops');
+  ok('staff create', sOps.ok && sOps.data.role_name === 'Vận hành' && !('password_hash' in sOps.data));
+  ok('staff username validated', !(await rootJ('/platform/staff', { method: 'POST', body: { username: 'A B', password: 'staff123', role: 'platform_ops' } })).ok);
+  ok('staff bad role rejected', !(await rootJ('/platform/staff', { method: 'POST', body: { username: 'bad1', password: 'staff123', role: 'owner' } })).ok);
+  const opsMe = await (await req('ops1', '/auth/me')).json();
+  ok('staff login payload has role perms', opsMe.ok && opsMe.data.permissions.includes('tenants.manage') && !opsMe.data.permissions.includes('*'));
+  ok('ops: tenants/communities/reports 200', (await pst('ops1', '/tenants')) === 200 && (await pst('ops1', '/communities')) === 200 && (await pst('ops1', '/reports')) === 200);
+  ok('ops: vietqr/public-report/staff 403', (await pst('ops1', '/vietqr')) === 403 && (await pst('ops1', '/public-report')) === 403 && (await pst('ops1', '/staff')) === 403 && (await pst('ops1', '/roles')) === 403);
+  ok('ops: cannot create tenant owner', (await pst('ops1', '/tenants', { method: 'POST', body: { code: 'ops-t', name: 'X', owner_username: 'opst', owner_password: '123456' } })) === 403);
+  ok('ops: cannot manage community types', (await pst('ops1', '/community-types', { method: 'POST', body: { code: 'ops-ct', name: 'X' } })) === 403);
+  await mkStaff('sup1', 'platform_support');
+  ok('support: read only', (await pst('sup1', '/tenants')) === 200 && (await pst('sup1', '/tenants/' + selId, { method: 'PUT', body: { name: 'X' } })) === 403
+    && (await pst('sup1', '/communities', { method: 'POST', body: { code: 'sup-c', name: 'X', type: 'village' } })) === 403);
+  await mkStaff('tech1', 'platform_tech');
+  ok('tech: vietqr ok, communities 403', (await pst('tech1', '/vietqr')) === 200 && (await pst('tech1', '/communities')) === 403 && (await pst('tech1', '/users')) === 403);
+  const techVq = await (await req('tech1', '/platform/vietqr')).json();
+  ok('vietqr password never returned', !JSON.stringify(techVq).includes('sharedpass'));
+  // Phạm vi cộng đồng được giao (ERR-08)
+  await mkStaff('cm1', 'platform_community', [com.data.id]);
+  const cmComs = await (await req('cm1', '/platform/communities')).json();
+  ok('ERR-08: scoped staff sees only assigned community', cmComs.ok && cmComs.data.length === 1 && cmComs.data[0].id === com.data.id);
+  const cmTen = await (await req('cm1', '/platform/tenants')).json();
+  ok('ERR-08: scoped staff sees only community tenants', cmTen.ok && cmTen.data.length > 0 && cmTen.data.every((t) => t.community_id === com.data.id));
+  ok('ERR-08: scoped staff blocked on other community', (await pst('cm1', '/communities/' + gxc.data.id + '/tenants')) === 403
+    && (await pst('cm1', '/communities/' + gxc.data.id, { method: 'PUT', body: { name: 'X' } })) === 403);
+  ok('ERR-08: scoped staff blocked on out-of-scope tenant', (await pst('cm1', '/tenants/' + shopM.data.id, { method: 'PUT', body: { name: 'X' } })) === 403);
+  ok('ERR-08: scoped staff cannot move tenant out of scope', (await pst('cm1', '/tenants/' + selId, { method: 'PUT', body: { community_id: gxc.data.id } })) === 403);
+  ok('ERR-08: scoped staff cannot create community', (await pst('cm1', '/communities', { method: 'POST', body: { code: 'cm-c', name: 'X', type: 'village' } })) === 403);
+  const cmUsers = await (await req('cm1', '/platform/users')).json();
+  ok('ERR-08: scoped users list', cmUsers.ok && cmUsers.data.every((u) => cmTen.data.some((t) => t.id === u.tenant_id)));
+  const cmRep = await (await req('cm1', '/platform/reports')).json();
+  ok('ERR-08: scoped report', cmRep.ok && JSON.stringify(cmRep.data).indexOf('shop-gx') === -1);
+  await mkStaff('cm2', 'platform_community');
+  ok('ERR-08: scoped staff without assignment sees nothing', (await (await req('cm2', '/platform/tenants')).json()).data.length === 0 && (await (await req('cm2', '/platform/communities')).json()).data.length === 0);
+  // Vai trò tùy chỉnh, tạm ngưng, xóa
+  const cr = await rootJ('/platform/roles', { method: 'POST', body: { code: 'pf-audit', name: 'Kiểm tra', permissions: ['reports.view'] } });
+  ok('custom role create', cr.ok && cr.data.permissions.join() === 'reports.view');
+  ok('role code immutable', !(await rootJ('/platform/roles/' + cr.data.id, { method: 'PUT', body: { code: 'pf-other' } })).ok);
+  await mkStaff('aud1', 'pf-audit');
+  ok('custom role grants only its perms', (await pst('aud1', '/stats')) === 200 && (await pst('aud1', '/tenants')) === 403);
+  await rootJ('/platform/roles/' + cr.data.id, { method: 'PUT', body: { permissions: ['reports.view', 'tenants.view'] } });
+  ok('role perms change applies to live session', (await pst('aud1', '/tenants')) === 200);
+  await rootJ('/platform/roles/' + cr.data.id, { method: 'PUT', body: { status: 'suspended' } });
+  ok('suspended role has no access', (await pst('aud1', '/stats')) === 403);
+  ok('role with users cannot be deleted', !(await rootJ('/platform/roles/' + cr.data.id, { method: 'DELETE' })).ok);
+  const empty = await rootJ('/platform/roles', { method: 'POST', body: { code: 'pf-empty', name: 'Rỗng' } });
+  ok('unused role deleted', (await rootJ('/platform/roles/' + empty.data.id, { method: 'DELETE' })).ok);
+  // Tự bảo vệ
+  const adm = await rootJ('/platform/roles', { method: 'POST', body: { code: 'pf-staff', name: 'Quản lý nhân sự', permissions: ['staff.manage'] } });
+  const sAdm = await mkStaff('hr1', 'pf-staff');
+  ok('cannot edit own role', (await (await req('hr1', '/platform/roles/' + adm.data.id, { method: 'PUT', body: { permissions: ['staff.manage', 'vietqr.manage'] } })).json()).ok === false);
+  ok('cannot change own role', !(await (await req('hr1', '/platform/staff/' + sAdm.data.id, { method: 'PUT', body: { role: 'platform' } })).json()).ok);
+  ok('cannot lock self', !(await (await req('hr1', '/platform/staff/' + sAdm.data.id, { method: 'PUT', body: { active: false } })).json()).ok);
+  const rootId = (await rootJ('/platform/staff')).data.find((u) => u.username === 'root').id;
+  ok('last super admin cannot be locked', !(await (await req('hr1', '/platform/staff/' + rootId, { method: 'PUT', body: { active: false } })).json()).ok);
+  ok('last super admin cannot be downgraded', !(await (await req('hr1', '/platform/staff/' + rootId, { method: 'PUT', body: { role: 'platform_ops' } })).json()).ok);
+  ok('platform role not assignable to tenant user', !(await api('/users', { method: 'POST', body: { username: 'pfx', password: '123456', full_name: 'X', role: 'platform_ops' } })).ok);
+  ok('tenant owner cannot reach staff API', (await req('admin', '/platform/staff')).status === 403);
+  // Khóa và đổi mật khẩu hủy phiên
+  ok('lock staff', (await rootJ('/platform/staff/' + sOps.data.id, { method: 'PUT', body: { active: false } })).ok);
+  ok('locked staff session revoked', (await req('ops1', '/platform/tenants')).status === 401);
+  await rootJ('/platform/staff/' + sOps.data.id, { method: 'PUT', body: { active: true, password: 'newpass1' } });
+  ok('reset password', (await (await req('ops1', '/auth/login', { method: 'POST', body: { username: 'ops1', password: 'newpass1' } })).json()).ok);
+  const logs = await rootJ('/platform/staff');
+  ok('staff list hides password', logs.ok && !JSON.stringify(logs.data).includes('password_hash'));
+
   for (const f of ['/', '/style.css', '/js/app.js', '/js/util.js', '/js/views/pos.js', '/favicon.svg', '/report.html', '/report.css', '/js/report.js']) ok('static ' + f, (await fetch(ROOT + f)).status === 200);
   console.log(R.join('\n'));
   const pass = R.filter((x) => x.startsWith('PASS')).length;

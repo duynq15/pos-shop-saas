@@ -7,6 +7,7 @@ const db = require('../db');
 const { ok, fail, wrap, bad, round, num, str, bool } = require('../lib/util');
 const { requirePerm } = require('../middleware');
 const { buildVietQR } = require('../lib/vietqr');
+const { accountConflict, CONFLICT_MSG } = require('../lib/community');
 
 const router = express.Router();
 
@@ -17,6 +18,11 @@ function getSettings() {
 }
 router.get('/settings', wrap((req, res) => ok(res, getSettings())));
 router.put('/settings', requirePerm('settings.edit'), wrap((req, res) => {
+  // GĐ0.2 (BR-02, SEC-01): tài khoản nhận tiền của tenant thuộc cộng đồng phải là tài khoản riêng
+  const body = req.body || {};
+  if (body.bank_account !== undefined && req.tenant && accountConflict(req.tenant.code, body.bank_account)) {
+    return fail(res, CONFLICT_MSG);
+  }
   const up = db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
   for (const [k, v] of Object.entries(req.body || {})) up.run(str(k, 60), String(v ?? ''));
   ok(res, getSettings());
@@ -51,7 +57,7 @@ router.get('/info/qr', wrap(async (req, res) => {
 /* ===================== QR CHUYỂN KHOẢN ===================== */
 router.get('/qr', wrap(async (req, res) => {
   const s = getSettings();
-  if (!s.bank_account || !s.bank_bin) fail(res, 'Chưa cấu hình tài khoản ngân hàng trong Cài đặt');
+  if (!s.bank_account || !s.bank_bin) return fail(res, 'Chưa cấu hình tài khoản ngân hàng trong Cài đặt');
   const amount = round(req.query.amount || 0);
   const message = str(req.query.message, 120);
   const payload = buildVietQR({ bankBin: s.bank_bin, accountNo: s.bank_account, amount, message });
