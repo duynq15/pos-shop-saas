@@ -15,6 +15,19 @@ const api = async (u, o = {}) => (await req('admin', u, o)).json();
 // Ngày hôm nay theo giờ địa phương, khớp cách server tính (không UTC)
 const localDay = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeAt(0) << 8; for (let j = 0; j < 8; j++) c = c & 0x8000 ? ((c << 1) ^ 0x1021) & 0xffff : (c << 1) & 0xffff; } return c.toString(16).toUpperCase().padStart(4, '0'); };
+// Máy chủ SKHG giả cho API Làng Số (server chạy với SKHG_API_BASE=http://localhost:3112)
+const SKHG = {
+  'tok-ok': [200, { success: true, data: { user: { phone: '84912345678', email: 'Ke.Toan@Example.vn' } } }],
+  'tok-nouser': [200, { success: true, data: { phone: '0900000000' } }],
+  'tok-bad': [401, { message: 'Unauthenticated' }],
+  'tok-down': [500, {}],
+};
+require('http').createServer((rq, rs) => {
+  const [code, body] = SKHG[(rq.headers.authorization || '').replace('Bearer ', '')] || [401, {}];
+  rs.writeHead(rq.url.endsWith('/current-profile-2') && rq.headers['user-agent'] === 'ThanhToanSo/1.0' ? code : 403, { 'Content-Type': 'application/json' });
+  rs.end(JSON.stringify(body));
+}).listen(3112).unref();
+const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? { Authorization: 'Bearer ' + tok } : {} });
 (async () => {
   let lg = await req('admin', '/auth/login', { method: 'POST', body: { username: 'admin', password: 'admin123' } });
   lg = await lg.json();
@@ -516,6 +529,30 @@ const crc = (str) => { let c = 0xffff; for (const ch of str) { c ^= ch.charCodeA
   ok('BR-04: no delete route', (await req('cadm', '/fund-entries/' + out.data.id, { method: 'DELETE' })).status === 404);
   const list = await cj('c-community_leader', '/funds/' + fid + '/entries?type=out&status=approved');
   ok('entries filter', list.ok && list.data.entries.length === 1 && list.data.entries[0].id === out.data.id);
+
+  // ---------- API cho Làng Số (SKHGDT-3532) ----------
+  ok('lang-so: preflight CORS', await ls('/stats?thon=thon-a', null, { method: 'OPTIONS' }).then((r) => r.status === 204 && r.headers.get('access-control-allow-headers') === 'Authorization'));
+  ok('lang-so: no token 401', (await ls('/stats?thon=thon-a')).status === 401);
+  ok('lang-so: unknown thon 404', (await ls('/stats?thon=khong-co', 'tok-ok')).status === 404);
+  ok('lang-so: bad SKHG token 401', (await ls('/todo?thon=thon-a', 'tok-bad')).status === 401);
+  ok('lang-so: SKHG down 502', (await ls('/todo?thon=thon-a', 'tok-down')).status === 502);
+  ok('lang-so: SKHG user without fund account 403', (await ls('/todo?thon=thon-a', 'tok-nouser')).status === 403);
+  const apprId = (await cj('cadm', '/users')).data.find((u) => u.username === 'qa-approver').id;
+  await cj('cadm', '/users/' + apprId, { method: 'PUT', body: { phone: '0912345678', email: 'ke.toan@example.vn' } });
+  const lst = await ls('/stats?thon=thon-a', 'tok-ok');
+  const lsStats = (await lst.json()).data;
+  ok('lang-so: stats (phone 84… matches 0…)', lst.headers.get('access-control-allow-origin') === '*' && lsStats.months.length === 6
+    && lsStats.month.in === 600000 && lsStats.month.count === 2 && lsStats.month.out === 200000 && lsStats.pending === 1
+    && lsStats.funds.find((f) => f.name === 'Quỹ công đức').balance === 350000, JSON.stringify(lsStats));
+  const td = (await (await ls('/todo?thon=thon-a', 'tok-ok')).json()).data;
+  ok('lang-so: todo = submitted entries', td.length === 1 && td[0].amount === 400001 && td[0].type === 'out' && td[0].admin === '/?view=funds', JSON.stringify(td));
+  const ac = (await (await ls('/activity?thon=thon-a', 'tok-ok')).json()).data;
+  ok('lang-so: activity = approved entries, anonymous payer hidden', ac.length === 4 && ac[0].type === 'adjust' && ac.some((x) => x.payer === 'Ông Ba')
+    && ac.filter((x) => x.type === 'in' && x.payer == null).length === 1 && !ac.some((x) => x.amount === 400001), JSON.stringify(ac));
+  ok('lang-so: SSO bad token rejected', (await req('sso', '/auth/sso', { method: 'POST', body: { token: 'tok-bad', thon: 'thon-a' } })).status === 401);
+  const sso = await cj('sso', '/auth/sso', { method: 'POST', body: { token: 'tok-ok', thon: 'thon-a' } });
+  ok('lang-so: SSO logs in matching fund account', sso.ok && sso.data.user.username === 'qa-approver'
+    && (await cj('sso', '/auth/me')).data.user.username === 'qa-approver');
 
   // ---------- Ảnh chứng từ (GĐ2.5) ----------
   const tinyJpeg = receipt;

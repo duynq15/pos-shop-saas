@@ -92,6 +92,13 @@ Sau khi chạy, terminal in ra các địa chỉ LAN. Trong **Cài đặt → K�
 - Bật/tắt, sao chép và **đổi link** (thu hồi quyền xem) trong **Quản trị nền tảng** (tài khoản `root`).
 - Nút **Xuất PDF**: server tự render PDF A4 đầy đủ màu (không có URL/chân trang trình duyệt). Cần Playwright (đã có sẵn ở môi trường dev: `npm i -D playwright && npx playwright install chromium`). Nếu máy chủ không có Playwright, nút tự chuyển sang hộp thoại in của trình duyệt.
 
+### Kết nối Làng Số (mục Thanh toán số)
+- Cổng quản trị Làng Số (repo `lang-so`) gọi `GET /api/lang-so/stats|todo|activity?thon=<mã cộng đồng>` kèm `Authorization: Bearer <token SKHG>` (CORS mở).
+  - `stats`: thu, chi, số khoản thu đã ghi sổ theo tháng (6 tháng), số khoản chờ duyệt, số dư từng quỹ, giao dịch bán của người bán trong tháng.
+  - `todo`: các khoản đã gửi duyệt. `activity`: 30 khoản đã ghi sổ gần nhất (ẩn tên người nộp ẩn danh).
+- Token được xác minh qua `<SKHG_API_BASE>/current-profile-2` (nhớ 5 phút) rồi đối chiếu với tài khoản đang hoạt động của tenant sổ quỹ của thôn có tên đăng nhập, SĐT hoặc email trùng tài khoản SKHG. Thủ quỹ chỉ thấy quỹ được giao.
+- Nút vào quản trị bên Làng Số mở `/?thon=<mã>&view=funds#sso=<token>`: giao diện gửi token lên `POST /api/auth/sso`, đăng nhập rồi mở sổ quỹ.
+
 ## Đầu đọc mã vạch
 Cắm đầu đọc USB, để con trỏ ở ô quét rồi quét. Đa số đầu đọc gửi mã kèm Enter, phần mềm tự nhận.
 

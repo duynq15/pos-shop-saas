@@ -6,6 +6,7 @@ const { ok, fail, wrap, str } = require('../lib/util');
 const { hashPassword, verifyPassword, sessionCookie, clearCookie, parseCookies, COOKIE } = require('../lib/auth');
 const rbac = require('../lib/rbac');
 const { SESSION_TTL_MS } = require('../middleware');
+const skhg = require('../lib/skhg');
 
 const router = express.Router();
 
@@ -59,6 +60,19 @@ router.post('/login', wrap((req, res) => {
   const token = createSession(user, req);
   control.prepare("UPDATE users SET last_login=datetime('now','localtime') WHERE id=?").run(user.id);
   audit({ tenantId: user.tenant_id, userId: user.id, username: user.username, action: 'login', ip: req.ip });
+  attempts.delete(req.ip);
+  res.setHeader('Set-Cookie', sessionCookie(token, Math.floor(SESSION_TTL_MS / 1000), !!req.secure));
+  ok(res, payload(user, tenant));
+}));
+
+// Đăng nhập một lần từ Làng Số: trang mở <web>/?thon=<mã>#sso=<token SKHG>, giao diện gửi token lên đây.
+router.post('/sso', wrap(async (req, res) => {
+  if (tooMany(req.ip)) return fail(res, 'Quá nhiều lần đăng nhập sai, vui lòng thử lại sau', 429);
+  const { tenant, user } = await skhg.accountFor(str(req.body.token, 4000), str(req.body.thon, 80));
+  if (tenantExpired(tenant)) return fail(res, 'Cửa hàng đã hết hạn sử dụng', 403);
+  const token = createSession(user, req);
+  control.prepare("UPDATE users SET last_login=datetime('now','localtime') WHERE id=?").run(user.id);
+  audit({ tenantId: user.tenant_id, userId: user.id, username: user.username, action: 'login', detail: 'sso lang-so', ip: req.ip });
   attempts.delete(req.ip);
   res.setHeader('Set-Cookie', sessionCookie(token, Math.floor(SESSION_TTL_MS / 1000), !!req.secure));
   ok(res, payload(user, tenant));

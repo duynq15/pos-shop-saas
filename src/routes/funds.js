@@ -484,3 +484,4 @@ module.exports = router;
 module.exports.bookUnclassified = bookUnclassified;
 module.exports.resolveFundByBank = resolveFundByBank;
 module.exports.processFundPayment = processFundPayment;
+module.exports.balanceOf = balanceOf;

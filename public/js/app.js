@@ -1,6 +1,6 @@
 import { bootstrap, state } from './store.js';
 import { $, $$, closeModal } from './util.js';
-import { auth, loadMe, login, logout, can } from './auth.js';
+import { auth, loadMe, login, ssoLogin, logout, can } from './auth.js';
 import pos from './views/pos.js';
 import products from './views/products.js';
 import inventory from './views/inventory.js';
@@ -215,7 +215,9 @@ async function boot() {
     refreshBrand();
     renderUser();
     build();
-    const first = Object.keys(registry)[0];
+    // ?view=<id> (liên kết từ Làng Số) mở thẳng màn đó nếu tài khoản được xem
+    const want = new URLSearchParams(location.search).get('view');
+    const first = registry[want] ? want : Object.keys(registry)[0];
     if (first) showView(first);
     const ver = $('#app-version');
     if (ver && state.info) ver.textContent = `Node ${state.info.node?.replace('v', '')} · SaaS`;
@@ -235,6 +237,18 @@ async function boot() {
 }
 
 async function start() {
+  // Làng Số mở <web>/?thon=<mã>&view=funds#sso=<token SKHG>: đăng nhập bằng token rồi bỏ token khỏi thanh địa chỉ
+  const sso = /[#&]sso=([^&]+)/.exec(location.hash);
+  if (sso) {
+    history.replaceState(null, '', location.pathname + location.search);
+    try {
+      await ssoLogin(decodeURIComponent(sso[1]), new URLSearchParams(location.search).get('thon'));
+    } catch (e) {
+      showLogin();
+      $('#login-error').textContent = e.message;
+      return;
+    }
+  }
   const authed = await loadMe();
   if (!authed) { showLogin(); return; }
   await boot();

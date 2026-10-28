@@ -107,3 +107,4 @@ router.patch('/community/categories/:id', manageCategories, wrap((req, res) => {
 module.exports = router;
 module.exports.communityScope = communityScope;
 module.exports.categoryFor = categoryFor;
+module.exports.sellerStats = sellerStats;
