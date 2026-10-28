@@ -36,6 +36,11 @@ export async function login(username, password) {
   return d;
 }
 
+// Đăng nhập một lần từ Làng Số bằng token Sáng Kiến Hưng Gia
+export async function ssoLogin(token, thon) {
+  applyAuth(await post('/api/auth/sso', { token, thon }));
+}
+
 export async function logout() {
   try { await post('/api/auth/logout'); } catch { /* ignore */ }
   auth.user = null; auth.tenant = null; auth.permissions = []; auth.isPlatform = false;

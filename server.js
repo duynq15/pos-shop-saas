@@ -22,6 +22,7 @@ const vietqr = require('./src/routes/vietqr');
 const publicRoutes = require('./src/routes/public');
 const community = require('./src/routes/community');
 const funds = require('./src/routes/funds');
+const langso = require('./src/routes/langso');
 const { runChecks } = require('./src/lib/checks');
 
 const app = express();
@@ -42,6 +43,9 @@ app.use('/vqr', vietqr.webhook);
 app.get('/r/:token', publicRoutes.page);
 app.get('/congduc/:token', publicRoutes.donationsPage);
 app.use('/public/api', publicRoutes.router);
+
+// API cho cổng quản trị Làng Số (xác thực bằng token SKHG, không dùng cookie)
+app.use('/api/lang-so', langso);
 
 // Xác thực & định tuyến theo tenant
 app.use(attachSession);
