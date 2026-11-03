@@ -1,27 +1,26 @@
 # UI guide
 
-The design system comes from the ui-ux-pro-max skill, using the "Data-Dense Dashboard" style. It targets a POS and SaaS admin used in Vietnamese: dense tables, fast cashier input, and a calm, professional look. Every new screen, including the GĐ2 fund book, must use these tokens and classes. Do not add new colours inline.
+The design system comes from the ui-ux-pro-max skill, using the "Data-Dense Dashboard" style, recoloured to match Làng Số (green palette, Be Vietnam Pro, light gradient background, soft rounded cards). It targets a POS and SaaS admin used in Vietnamese: dense tables, fast cashier input, and a calm, professional look. Every new screen, including the GĐ2 fund book, must use these tokens and classes. Do not add new colours inline.
 
 ## Tokens (`public/style.css` `:root`)
 
 | Token | Value | Use |
 |---|---|---|
-| `--primary` | `#1E40AF` | Main actions, links, active tab, focus ring |
-| `--primary-soft` / `--primary-line` | `#EFF4FF` / `#DBEAFE` | Hover backgrounds, selected rows, info badges |
-| `--accent` | `#D97706` | Only the main money action, e.g. the POS pay button (`.btn.big.primary`) |
-| `--bg` / `--card` | `#F8FAFC` / `#fff` | Page background and surfaces |
-| `--text` / `--heading` / `--muted` | `#0F172A` / `#1E3A8A` / `#475569` | Body text, headings and KPI values, secondary text |
-| `--line` / `--line-2` | `#E2E8F0` / `#CBD5E1` | Dividers, input borders |
-| `--ok` / `--warn` / `--danger` | `#15803D` / `#B45309` / `#DC2626` | Status colours; each has `-soft` and `-line` variants |
-| `--sidebar` | `#0F1E4A` | Navigation background |
+| `--primary` | `#1B5E3A` | Main actions, links, active tab, focus ring |
+| `--primary-soft` / `--primary-line` | `#E6F3E8` / `#CFE5D4` | Hover backgrounds, selected rows, info badges |
+| `--accent` | `#1B5E3A` | Only the main money action, e.g. the POS pay button (`.btn.big.primary`); same green as Làng Số buttons |
+| `--bg` / `--card` | `#F3F6F2` / `#fff` | Page background (under a light blue-to-green gradient) and surfaces |
+| `--text` / `--heading` / `--muted` | `#14231B` / `#0B3B26` / `#4F5B66` | Body text, headings and KPI values, secondary text |
+| `--line` / `--line-2` | `#E3ECE4` / `#D5DCD6` | Dividers, input borders |
+| `--ok` / `--warn` / `--danger` | `#15803D` / `#B45309` / `#B3261E` | Status colours; each has `-soft` and `-line` variants |
+| `--sidebar` | `#fff` | Navigation background; the active item is green text on `--primary-soft` |
 
-All text and background pairs meet a contrast ratio of at least 4.5:1. `--muted` on `--bg` is about 7:1.
+All text and background pairs meet a contrast ratio of at least 4.5:1. `--muted` on `--bg` is about 6.5:1.
 
 ## Typography
 
-- Headings, KPI numbers and the brand use **Be Vietnam Pro** (`--font-head`).
-- Body text uses **Noto Sans** (`--font`).
-- Both are loaded from Google Fonts and fall back to system fonts. Both have full Vietnamese diacritics.
+- All text uses **Be Vietnam Pro** (`--font`, `--font-head`), the same font as Làng Số.
+- It is loaded from Google Fonts, falls back to system fonts and has full Vietnamese diacritics.
 - The base size is 14px, which suits a dense dashboard. Nothing is smaller than 12px. Table headers are 12px uppercase.
 - Money, quantities, barcodes and table cells use `font-variant-numeric: tabular-nums` so digits line up in columns.
 
