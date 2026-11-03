@@ -1,19 +1,19 @@
 # UI guide
 
-The design system comes from the ui-ux-pro-max skill, using the "Data-Dense Dashboard" style, recoloured to match Làng Số (green palette, Be Vietnam Pro, light gradient background, soft rounded cards). It targets a POS and SaaS admin used in Vietnamese: dense tables, fast cashier input, and a calm, professional look. Every new screen, including the GĐ2 fund book, must use these tokens and classes. Do not add new colours inline.
+The design system comes from the ui-ux-pro-max skill, using the "Data-Dense Dashboard" style, recoloured to match the in-app Làng Số screens (blue palette from `src/pages/TrangChu.vue`, `ViecCanLam.vue` and `BaoCao.vue`, purple as the Thanh toán số module colour, Be Vietnam Pro, light blue gradient background, soft rounded cards). It targets a POS and SaaS admin used in Vietnamese, including elderly village heads: large text, large touch targets, top tabs instead of a hidden menu, and a calm, professional look. Every new screen, including the GĐ2 fund book, must use these tokens and classes. Do not add new colours inline.
 
 ## Tokens (`public/style.css` `:root`)
 
 | Token | Value | Use |
 |---|---|---|
-| `--primary` | `#1B5E3A` | Main actions, links, active tab, focus ring |
-| `--primary-soft` / `--primary-line` | `#E6F3E8` / `#CFE5D4` | Hover backgrounds, selected rows, info badges |
-| `--accent` | `#1B5E3A` | Only the main money action, e.g. the POS pay button (`.btn.big.primary`); same green as Làng Số buttons |
-| `--bg` / `--card` | `#F3F6F2` / `#fff` | Page background (under a light blue-to-green gradient) and surfaces |
-| `--text` / `--heading` / `--muted` | `#14231B` / `#0B3B26` / `#4F5B66` | Body text, headings and KPI values, secondary text |
-| `--line` / `--line-2` | `#E3ECE4` / `#D5DCD6` | Dividers, input borders |
+| `--primary` / `--primary-h` / `--primary-d` | `#1D4ED8` / `#1E40AF` / `#1E3A8A` | Main actions, links, active tab, focus ring; hover; pressed |
+| `--primary-soft` / `--primary-line` | `#E5EEFC` / `#C7D7F5` | Hover backgrounds, active tab, selected rows, info badges |
+| `--accent` | `#1D4ED8` | Only the main money action, e.g. the POS pay button (`.btn.big.primary`) |
+| `--brand` / `--brand-soft` | `#7C3AED` / `#EDE5FD` | Thanh toán số identity only: logo tile, favicon, report page highlights. Never for buttons |
+| `--bg` / `--card` | `#F5F8FC` / `#fff` | Page background (under the `#E6EFFB` to `#F5F8FC` gradient) and surfaces |
+| `--text` / `--heading` / `--muted` | `#1F2A44` / `#1E3A8A` / `#4A5B82` | Body text, headings and KPI values, secondary text |
+| `--line` / `--line-2` | `#E3EAF5` / `#D6DEEC` | Dividers, input borders |
 | `--ok` / `--warn` / `--danger` | `#15803D` / `#B45309` / `#B3261E` | Status colours; each has `-soft` and `-line` variants |
-| `--sidebar` | `#fff` | Navigation background; the active item is green text on `--primary-soft` |
 
 All text and background pairs meet a contrast ratio of at least 4.5:1. `--muted` on `--bg` is about 6.5:1.
 
@@ -21,7 +21,7 @@ All text and background pairs meet a contrast ratio of at least 4.5:1. `--muted`
 
 - All text uses **Be Vietnam Pro** (`--font`, `--font-head`), the same font as Làng Số.
 - It is loaded from Google Fonts, falls back to system fonts and has full Vietnamese diacritics.
-- The base size is 14px, which suits a dense dashboard. Nothing is smaller than 12px. Table headers are 12px uppercase.
+- The base size is 16px so elderly users can read without zooming. Page titles are 26px (22px on phones), card titles 18px, tabs 17px. Nothing is smaller than 13px. Table headers are 14px.
 - Money, quantities, barcodes and table cells use `font-variant-numeric: tabular-nums` so digits line up in columns.
 
 ## Icons
@@ -36,14 +36,14 @@ All text and background pairs meet a contrast ratio of at least 4.5:1. `--muted`
 
 Class names are stable. Tests and views depend on them.
 
-- **Buttons (`.btn`):** 36px high.
-  - Variants: `.primary`, `.danger`, `.ok`, `.ghost`, `.sm` (28px), `.big` (52px, full width).
+- **Buttons (`.btn`):** 44px high. `.icon-btn` is 44px square.
+  - Variants: `.primary`, `.danger`, `.ok`, `.ghost`, `.sm` (38px, only inside dense tables), `.big` (52px, full width).
   - Use one primary action per area.
-- **Inputs:** `.field` is 36px high with a 3px primary focus ring. `label.fld` holds the label and field together.
+- **Inputs:** `.field` is at least 44px high, 16px text, with a 3px primary focus ring. `label.fld` holds the label and field together.
 - **Cards:** `.card`, whose `h3` acts as a header with a divider. `.stat` holds a KPI tile; set `.primary`, `.ok`, `.warn` or `.danger` for the value colour.
 - **Tables:** `.tbl-wrap > table.grid`. The header row is sticky. Right-align numbers with `.r`.
 - **Status badges:** `.badge.paid`, `.pending`, `.cancelled`, `.return`, `.sale`. Pills always carry text, never colour alone.
-- **Navigation:** the active item gets a left accent bar and a tinted background.
+- **Navigation:** a sticky top header (`.topbar`), as in Làng Số. Row 1: logo, shop name, user and Đăng xuất. Row 2: one tab per module (`.nav-item`, 52px); the active tab has a tinted background and a 3px underline. A module with sub-screens (Báo cáo) shows them as pills in `.nav-subrow` under the tabs. On phones the tab row scrolls sideways and the active tab scrolls into view.
 - **Overlays and switches:**
   - `.tabs`/`.tab` for tabs.
   - `.seg`/`.seg-btn` for segmented switches.
@@ -55,8 +55,8 @@ Class names are stable. Tests and views depend on them.
 - Everything clickable has `cursor: pointer` and a hover state. Transitions are 150ms and animate colour or border only, never layout.
 - Keyboard focus is always visible (`:focus-visible` outline).
 - `prefers-reduced-motion` turns off transitions and animations.
-- POS touch targets are at least 36–44px: the qty buttons, quick cash buttons, the delete button and the pay button.
-- The layout must work at 375, 768, 1024 and 1440px. Below 820px the sidebar becomes a drawer. The page never scrolls horizontally; only tables do.
+- Touch targets are at least 44px (38px only for `.btn.sm` inside tables): tabs, buttons, qty buttons, quick cash buttons and the pay button.
+- The layout must work at 375, 768, 1024 and 1440px. Below 820px the header tightens and the tab row scrolls; below 480px the user name hides and only Đăng xuất stays. The page never scrolls horizontally; only tables and the tab row do.
 - The public report page (`report.css`) uses the same palette with flat colours: no gradients and no animated backgrounds.
 
 ## Fund book screen (`public/js/views/funds.js`, `.fd-*` in `style.css`)

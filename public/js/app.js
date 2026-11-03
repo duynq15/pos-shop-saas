@@ -66,22 +66,15 @@ const allowed = (perm, any) => {
 
 const kindOk = (kinds) => !kinds || kinds.includes(auth.tenant?.kind || 'shop');
 const entryFor = (id) => VIEWS.find((v) => v.mod.id === id) || {};
-const collapsed = new Set();
-
-function setGroup(id, open) {
-  const wrap = document.getElementById('subs-' + id);
-  const btn = document.querySelector(`.nav-item[data-view="${id}"]`);
-  if (!wrap) return;
-  wrap.classList.toggle('hidden', !open);
-  if (btn) btn.classList.toggle('open', open);
-  if (open) collapsed.delete(id); else collapsed.add(id);
-}
-function toggleGroup(id) { setGroup(id, collapsed.has(id)); }
+// Tab cha của một màn con (Báo cáo › Thuế VAT…) để tab trên cùng vẫn sáng
+const groupOf = (id) => VIEWS.find((v) => v.subs?.some((s) => s.view === id))?.mod.id || id;
 
 function build() {
   const main = $('#main');
   const navList = $('#nav-list');
+  const subRow = $('#nav-subrow');
   navList.innerHTML = '';
+  subRow.innerHTML = '';
   for (const entry of VIEWS) {
     const { mod, perm, subs, subOnly, kinds } = entry;
     if (!allowed(perm, entry.any) || !kindOk(kinds)) continue;
@@ -97,19 +90,13 @@ function build() {
     const btn = document.createElement('button');
     btn.className = 'nav-item' + (subs ? ' has-subs' : '');
     btn.dataset.view = mod.id;
-    btn.innerHTML = `<span class="nav-icon">${mod.icon}</span><span class="nav-label">${mod.label}</span>`
-      + (subs ? '<span class="caret">▾</span>' : (mod.key ? `<kbd>${mod.key}</kbd>` : ''));
-    btn.onclick = (e) => {
-      if (subs && e.target.classList.contains('caret')) { toggleGroup(mod.id); return; }
-      showView(mod.id);
-      if (subs) setGroup(mod.id, !collapsed.has(mod.id));
-      closeMenu();
-    };
+    btn.innerHTML = `<span class="nav-icon">${mod.icon}</span><span class="nav-label">${mod.label.replace(/ · .*/, '')}</span>`;
+    btn.onclick = () => showView(mod.id);
     navList.appendChild(btn);
     registry[mod.id].btn = btn;
     if (subs) {
       const wrap = document.createElement('div');
-      wrap.className = 'nav-subs';
+      wrap.className = 'nav-subs hidden';
       wrap.id = 'subs-' + mod.id;
       for (const s of subs) {
         const se = entryFor(s.view);
@@ -119,11 +106,10 @@ function build() {
         sb.dataset.subview = s.view;
         if (s.anchor) sb.dataset.anchor = s.anchor;
         sb.textContent = s.label;
-        sb.onclick = () => { showView(s.view, s.anchor); setGroup(mod.id, true); closeMenu(); };
+        sb.onclick = () => showView(s.view, s.anchor);
         wrap.appendChild(sb);
       }
-      navList.appendChild(wrap);
-      setGroup(mod.id, true);
+      subRow.appendChild(wrap);
     }
   }
 }
@@ -135,20 +121,22 @@ export function showView(id, anchor) {
   if (current && registry[current]?.hide) registry[current].hide();
   current = id;
   $$('.view').forEach((x) => x.classList.toggle('active', x.id === 'view-' + id));
-  $$('.nav-item[data-view]').forEach((x) => x.classList.toggle('active', x.dataset.view === id));
+  const group = groupOf(id);
+  $$('.nav-item[data-view]').forEach((x) => {
+    const on = x.dataset.view === group;
+    x.classList.toggle('active', on);
+    if (on) { x.setAttribute('aria-current', 'page'); x.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } else x.removeAttribute('aria-current');
+  });
+  $$('.nav-subs').forEach((x) => x.classList.toggle('hidden', x.id !== 'subs-' + group));
   $$('.nav-sub').forEach((x) => {
     const match = x.dataset.subview === id && (anchor || '') === (x.dataset.anchor || '');
     x.classList.toggle('active', match);
   });
   if (!mounted.has(id)) { r.mount(r.el); mounted.add(id); }
   if (!same && r.show) r.show();
-  $('#mobile-title').textContent = r.label;
   if (anchor) setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30);
 }
 window.showView = showView;
-
-function openMenu() { document.body.classList.add('menu-open'); }
-function closeMenu() { document.body.classList.remove('menu-open'); }
 
 document.addEventListener('keydown', (e) => {
   const r = registry[current];
@@ -164,7 +152,7 @@ document.addEventListener('keydown', (e) => {
 export function refreshBrand() {
   const name = state.settings.shop_name || 'POS Shop';
   const el = $('#brand-name');
-  if (el) el.textContent = name.length > 22 ? 'POS Shop' : name;
+  if (el) { el.textContent = name; el.title = name; }
   document.title = `${name} – POS Shop`;
 }
 
@@ -174,15 +162,14 @@ function renderUser() {
   const u = auth.user;
   if (!u) { el.innerHTML = ''; return; }
   const roleName = u.role_name || u.role;
-  el.innerHTML = `<div class="su-name">${esc(u.full_name || u.username)}</div>
-    <div class="su-meta">${esc(roleName)}${auth.tenant ? ' · ' + esc(auth.tenant.name) : ''}</div>
-    <button class="btn sm" id="btn-logout">Đăng xuất</button>`;
+  el.innerHTML = `<div class="su-text"><div class="su-name">${esc(u.full_name || u.username)}</div>
+    <div class="su-meta">${esc(roleName)}</div></div>
+    <button class="btn" id="btn-logout">Đăng xuất</button>`;
   $('#btn-logout').onclick = async () => { await logout(); location.reload(); };
 }
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function showLogin() {
-  document.body.classList.remove('menu-open');
   $('#app-loading')?.classList.add('hidden');
   $('#login-screen')?.classList.remove('hidden');
   setTimeout(() => $('#login-user')?.focus(), 50);
@@ -219,10 +206,8 @@ async function boot() {
     const want = new URLSearchParams(location.search).get('view');
     const first = registry[want] ? want : Object.keys(registry)[0];
     if (first) showView(first);
-    const ver = $('#app-version');
-    if (ver && state.info) ver.textContent = `Node ${state.info.node?.replace('v', '')} · SaaS`;
-    $('#btn-menu')?.addEventListener('click', openMenu);
-    $('#nav-overlay')?.addEventListener('click', closeMenu);
+    // Sổ quỹ thôn và tài khoản nền tảng không dùng máy bán hàng trong mạng LAN
+    $('#btn-lan').hidden = auth.isPlatform || auth.tenant?.kind === 'community';
     $('#btn-lan')?.addEventListener('click', async () => {
       if (auth.isPlatform) return;
       const { showLanInfo } = await import('./views/lan.js');
