@@ -1,6 +1,6 @@
 import { bootstrap, state } from './store.js';
 import { $, $$, closeModal } from './util.js';
-import { auth, loadMe, login, ssoLogin, logout, can } from './auth.js';
+import { auth, loadMe, login, ssoLogin, skhgLogin, logout, can } from './auth.js';
 import pos from './views/pos.js';
 import products from './views/products.js';
 import inventory from './views/inventory.js';
@@ -176,23 +176,48 @@ function showLogin() {
 }
 
 let loginBound = false;
+let skhgMode = false; // true: đăng nhập bằng tài khoản Sáng Kiến Hưng Gia (SĐT/email + mật khẩu SKHG)
+function setLoginMode(on) {
+  skhgMode = on;
+  $('#login-user-label').textContent = on ? 'Số điện thoại hoặc email Sáng Kiến Hưng Gia' : 'Tài khoản';
+  $('#login-submit').textContent = on ? 'Đăng nhập bằng Sáng Kiến Hưng Gia' : 'Đăng nhập';
+  $('#login-mode').textContent = on ? 'Đăng nhập bằng tài khoản Thanh toán số' : 'Đăng nhập bằng tài khoản Sáng Kiến Hưng Gia';
+  $('#login-choose').hidden = true;
+  $('#login-error').textContent = '';
+  $('#login-user').focus();
+}
+
 function bindLogin() {
   if (loginBound) return;
   loginBound = true;
-  $('#login-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
+  $('#login-mode').onclick = () => setLoginMode(!skhgMode);
+  const send = async (thon) => {
     const btn = $('#login-submit');
     const err = $('#login-error');
+    const label = btn.textContent;
     err.textContent = '';
     btn.disabled = true; btn.textContent = 'Đang đăng nhập…';
     try {
-      await login($('#login-user').value.trim(), $('#login-pass').value);
+      const user = $('#login-user').value.trim(), pass = $('#login-pass').value;
+      if (skhgMode) {
+        const d = await skhgLogin(user, pass, thon);
+        if (d.choose) { showChoose(d.choose); btn.disabled = false; btn.textContent = label; return; }
+      } else await login(user, pass);
       await start();
     } catch (ex) {
       err.textContent = ex.message || 'Đăng nhập thất bại';
-      btn.disabled = false; btn.textContent = 'Đăng nhập';
+      btn.disabled = false; btn.textContent = label;
     }
-  });
+  };
+  // Một tài khoản SKHG quản lý sổ quỹ của nhiều thôn: chọn thôn rồi đăng nhập lại
+  const showChoose = (list) => {
+    const box = $('#login-choose');
+    box.innerHTML = '<p>Bạn quản lý sổ quỹ của nhiều thôn. Chọn thôn để vào:</p>'
+      + list.map((t) => `<button type="button" class="btn big" data-thon="${esc(t.code)}">${esc(t.name)}</button>`).join('');
+    box.querySelectorAll('[data-thon]').forEach((b) => { b.onclick = () => send(b.dataset.thon); });
+    box.hidden = false;
+  };
+  $('#login-form').addEventListener('submit', (e) => { e.preventDefault(); send(); });
   window.addEventListener('auth:required', () => { if (auth.user) { auth.user = null; } showLogin(); });
 }
 

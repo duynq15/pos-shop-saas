@@ -69,14 +69,26 @@ router.post('/login', wrap((req, res) => {
 router.post('/sso', wrap(async (req, res) => {
   if (tooMany(req.ip)) return fail(res, 'Quá nhiều lần đăng nhập sai, vui lòng thử lại sau', 429);
   const { tenant, user } = await skhg.accountFor(str(req.body.token, 4000), str(req.body.thon, 80));
+  skhgSession(req, res, user, tenant, 'sso lang-so');
+}));
+
+// Đăng nhập bằng SĐT/email + mật khẩu Sáng Kiến Hưng Gia (như Làng Văn hiến). Khớp nhiều thôn: trả { choose } để chọn rồi gửi lại kèm `thon`.
+router.post('/skhg', wrap(async (req, res) => {
+  if (tooMany(req.ip)) return fail(res, 'Quá nhiều lần đăng nhập sai, vui lòng thử lại sau', 429);
+  const r = await skhg.loginWithPassword(str(req.body.account, 120), String(req.body.password || ''), str(req.body.thon, 80));
+  if (r.choose) return ok(res, r);
+  skhgSession(req, res, r.user, r.tenant, 'skhg password');
+}));
+
+function skhgSession(req, res, user, tenant, detail) {
   if (tenantExpired(tenant)) return fail(res, 'Cửa hàng đã hết hạn sử dụng', 403);
   const token = createSession(user, req);
   control.prepare("UPDATE users SET last_login=datetime('now','localtime') WHERE id=?").run(user.id);
-  audit({ tenantId: user.tenant_id, userId: user.id, username: user.username, action: 'login', detail: 'sso lang-so', ip: req.ip });
+  audit({ tenantId: user.tenant_id, userId: user.id, username: user.username, action: 'login', detail, ip: req.ip });
   attempts.delete(req.ip);
   res.setHeader('Set-Cookie', sessionCookie(token, Math.floor(SESSION_TTL_MS / 1000), !!req.secure));
   ok(res, payload(user, tenant));
-}));
+}
 
 router.post('/logout', wrap((req, res) => {
   const token = parseCookies(req.headers.cookie)[COOKIE];

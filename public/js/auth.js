@@ -41,6 +41,13 @@ export async function ssoLogin(token, thon) {
   applyAuth(await post('/api/auth/sso', { token, thon }));
 }
 
+// Đăng nhập bằng SĐT/email + mật khẩu Sáng Kiến Hưng Gia. Khớp nhiều thôn: trả { choose: [{code,name}] }, gọi lại kèm `thon`.
+export async function skhgLogin(account, password, thon) {
+  const d = await post('/api/auth/skhg', { account, password, thon });
+  if (!d.choose) applyAuth(d);
+  return d;
+}
+
 export async function logout() {
   try { await post('/api/auth/logout'); } catch { /* ignore */ }
   auth.user = null; auth.tenant = null; auth.permissions = []; auth.isPlatform = false;

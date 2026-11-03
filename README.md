@@ -98,6 +98,10 @@ Sau khi chạy, terminal in ra các địa chỉ LAN. Trong **Cài đặt → K�
   - `todo`: các khoản đã gửi duyệt. `activity`: 30 khoản đã ghi sổ gần nhất (ẩn tên người nộp ẩn danh).
 - Token được xác minh qua `<SKHG_API_BASE>/current-profile-2` (nhớ 5 phút) rồi đối chiếu với tài khoản đang hoạt động của tenant sổ quỹ của thôn có tên đăng nhập, SĐT hoặc email trùng tài khoản SKHG. Thủ quỹ chỉ thấy quỹ được giao.
 - Nút vào quản trị bên Làng Số mở `/?thon=<mã>&view=funds#sso=<token>`: giao diện gửi token lên `POST /api/auth/sso`, đăng nhập rồi mở sổ quỹ.
+- Đăng nhập trực tiếp bằng tài khoản Sáng Kiến Hưng Gia (như Làng Văn hiến): màn đăng nhập có nút "Đăng nhập bằng tài khoản Sáng Kiến Hưng Gia", gửi SĐT/email + mật khẩu lên `POST /api/auth/skhg`.
+  - Máy chủ gọi `<SKHG_API_BASE>/login` lấy token, xác minh qua `current-profile-2`, đối chiếu như trên với mọi sổ quỹ của thôn, rồi gọi `/logout` của SKHG. Mật khẩu SKHG chỉ chuyển tiếp, không lưu.
+  - Tên trần (không có `@`, không phải SĐT) được hiểu là `<tên>@xaphuongvietnam.vn`, giống Làng Số.
+  - Khớp nhiều thôn: trả `{ choose: [{code, name}] }`, người dùng chọn thôn rồi gửi lại kèm `thon`. Không khớp sổ quỹ nào: báo lỗi, chủ sổ quỹ tự thêm người ở mục Người dùng (SĐT hoặc email trùng tài khoản SKHG).
 
 ## Đầu đọc mã vạch
 Cắm đầu đọc USB, để con trỏ ở ô quét rồi quét. Đa số đầu đọc gửi mã kèm Enter, phần mềm tự nhận.

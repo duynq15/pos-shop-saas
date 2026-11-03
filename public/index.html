@@ -22,10 +22,13 @@
   <form id="login-form" class="login-card">
     <div class="login-brand"><span class="brand-logo" data-icon="wallet"></span><b>POS Shop</b></div>
     <p class="muted" id="login-tenant">Đăng nhập vào cửa hàng của bạn</p>
-    <label class="fld">Tài khoản<input class="field" id="login-user" autocomplete="username" autocapitalize="none" autofocus></label>
+    <label class="fld"><span id="login-user-label">Tài khoản</span><input class="field" id="login-user" autocomplete="username" autocapitalize="none" autofocus></label>
     <label class="fld">Mật khẩu<input class="field" id="login-pass" type="password" autocomplete="current-password"></label>
-    <div id="login-error" class="login-error"></div>
+    <div id="login-choose" class="login-choose" hidden></div>
+    <div id="login-error" class="login-error" role="alert"></div>
     <button class="btn primary big" id="login-submit" type="submit">Đăng nhập</button>
+    <div class="login-or">hoặc</div>
+    <button class="btn big" id="login-mode" type="button">Đăng nhập bằng tài khoản Sáng Kiến Hưng Gia</button>
   </form>
 </div>
 
