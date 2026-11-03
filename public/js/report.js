@@ -117,11 +117,11 @@ function renderDayChart(rows) {
   for (const i of ticks) xlabels += `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" class="rp-axis">${dayLabel(rows[i].day)}</text>`;
   el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Giá trị giao dịch theo ngày">
     <defs><linearGradient id="rpg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#1B5E3A" stop-opacity=".4"/><stop offset="100%" stop-color="#1B5E3A" stop-opacity=".03"/>
+      <stop offset="0%" stop-color="#1D4ED8" stop-opacity=".4"/><stop offset="100%" stop-color="#1D4ED8" stop-opacity=".03"/>
     </linearGradient></defs>
     ${grid}
     <path class="rp-area" d="${area}" fill="url(#rpg)"/>
-    <path class="rp-line" d="${line}" fill="none" stroke="#1B5E3A" stroke-width="2.4" stroke-linejoin="round"/>
+    <path class="rp-line" d="${line}" fill="none" stroke="#1D4ED8" stroke-width="2.4" stroke-linejoin="round"/>
     ${xlabels}
   </svg>`;
   const p = el.querySelector('.rp-line');
@@ -178,7 +178,7 @@ function renderGroups(rows) {
 }
 
 /* ---------- Cơ cấu thanh toán ---------- */
-const PAY_COLORS = ['#1B5E3A', '#8A968E'];
+const PAY_COLORS = ['#1D4ED8', '#8A97B0'];
 function renderDigital(t) {
   const el = $('#rp-donut'), lg = $('#rp-legend');
   const digital = Number(t.value) || 0;

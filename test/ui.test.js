@@ -290,7 +290,7 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await page.setViewportSize({ width: 400, height: 820 });
     await view('pos'); await wait(400);
     ok('No horizontal overflow 400px', !(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
-    ok('Mobile topbar visible', await page.locator('.mobile-topbar').isVisible());
+    ok('Mobile topbar visible', await page.locator('.topbar .nav-list').isVisible());
 
     // ================= CỘNG ĐỒNG (GĐ1.5, NFR-05, FR-02) =================
     const loginAs = async (user, pass, sel) => {

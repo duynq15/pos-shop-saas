@@ -22,10 +22,27 @@ const SKHG = {
   'tok-bad': [401, { message: 'Unauthenticated' }],
   'tok-down': [500, {}],
 };
+// POST /login: tài khoản (đã chuẩn hóa) -> token; mật khẩu đúng là 'skhg-pass'. Ghi lại token đã /logout.
+const SKHG_LOGIN = { '0912345678': 'tok-ok', 'khong.co@xaphuongvietnam.vn': 'tok-nouser', '0988000111': 'tok-multi' };
+SKHG['tok-multi'] = [200, { success: true, data: { user: { phone: '0988000111' } } }];
+const skhgLoggedOut = [];
 require('http').createServer((rq, rs) => {
-  const [code, body] = SKHG[(rq.headers.authorization || '').replace('Bearer ', '')] || [401, {}];
-  rs.writeHead(rq.url.endsWith('/current-profile-2') && rq.headers['user-agent'] === 'ThanhToanSo/1.0' ? code : 403, { 'Content-Type': 'application/json' });
-  rs.end(JSON.stringify(body));
+  const send = (code, body) => { rs.writeHead(rq.headers['user-agent'] === 'ThanhToanSo/1.0' ? code : 403, { 'Content-Type': 'application/json' }); rs.end(JSON.stringify(body)); };
+  const auth = (rq.headers.authorization || '').replace('Bearer ', '');
+  if (rq.url.endsWith('/login') && rq.method === 'POST') {
+    let raw = '';
+    rq.on('data', (c) => { raw += c; });
+    rq.on('end', () => {
+      const { email, password } = JSON.parse(raw || '{}');
+      if (email === 'sap@xaphuongvietnam.vn') return send(503, {});
+      const tok = password === 'skhg-pass' && SKHG_LOGIN[email];
+      send(tok ? 200 : 422, tok ? { status: true, data: { access_token: tok } } : { status: false, message: 'Sai tài khoản hoặc mật khẩu' });
+    });
+    return;
+  }
+  if (rq.url.endsWith('/logout')) { skhgLoggedOut.push(auth); return send(200, { status: true }); }
+  const [code, body] = SKHG[auth] || [401, {}];
+  send(rq.url.endsWith('/current-profile-2') ? code : 403, body);
 }).listen(3112).unref();
 const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? { Authorization: 'Bearer ' + tok } : {} });
 (async () => {
@@ -553,6 +570,31 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   const sso = await cj('sso', '/auth/sso', { method: 'POST', body: { token: 'tok-ok', thon: 'thon-a' } });
   ok('lang-so: SSO logs in matching fund account', sso.ok && sso.data.user.username === 'qa-approver'
     && (await cj('sso', '/auth/me')).data.user.username === 'qa-approver');
+
+  // ---------- Đăng nhập bằng mật khẩu SKHG (SKHGDT-3573) ----------
+  const sk = (body) => cj('skhg', '/auth/skhg', { method: 'POST', body });
+  const skWrong = await sk({ account: '0912 345 678', password: 'sai' });
+  ok('skhg login: wrong password shows SKHG message', !skWrong.ok && skWrong.error === 'Sai tài khoản hoặc mật khẩu', JSON.stringify(skWrong));
+  ok('skhg login: SKHG down 502', (await req('skhg', '/auth/skhg', { method: 'POST', body: { account: 'sap', password: 'x' } })).status === 502);
+  const skNo = await sk({ account: 'khong.co', password: 'skhg-pass' });
+  ok('skhg login: bare name -> @xaphuongvietnam.vn, no fund account 403', !skNo.ok && /chưa có tài khoản sổ quỹ/.test(skNo.error), JSON.stringify(skNo));
+  const skOk = await sk({ account: '0912.345.678', password: 'skhg-pass' });
+  ok('skhg login: SKHG token logged out after check (in background)', skhgLoggedOut.includes('tok-nouser'));
+  ok('skhg login: phone matches fund account, session works', skOk.ok && skOk.data.user.username === 'qa-approver' && skOk.data.tenant.kind === 'community'
+    && (await cj('skhg', '/auth/me')).data.user.username === 'qa-approver' && skhgLoggedOut.includes('tok-ok'), JSON.stringify(skOk));
+  // Cùng SĐT ở hai sổ quỹ: phải chọn thôn
+  await cj('cadm', '/users/' + apprId, { method: 'PUT', body: { phone: '0988000111', email: 'ke.toan@example.vn' } });
+  await rootJ('/platform/tenants', { method: 'POST', body: { code: 'quy-a2', name: 'Quỹ thôn A (2)', owner_username: 'quya2admin', owner_password: '123456', kind: 'community', community_id: com.data.id } });
+  await cj('a2', '/auth/login', { method: 'POST', body: { username: 'quya2admin', password: '123456' } });
+  const a2Id = (await cj('a2', '/users')).data.find((u) => u.username === 'quya2admin').id;
+  await cj('a2', '/users/' + a2Id, { method: 'PUT', body: { phone: '0988000111' } });
+  const skMulti = await sk({ account: '0988000111', password: 'skhg-pass' });
+  ok('skhg login: several villages -> choose list, no session', skMulti.ok && skMulti.data.choose?.length === 2
+    && skMulti.data.choose.some((t) => t.code === 'quy-a2') && !skMulti.data.user, JSON.stringify(skMulti));
+  const skPick = await sk({ account: '0988000111', password: 'skhg-pass', thon: 'quy-a2' });
+  ok('skhg login: chosen village logs in', skPick.ok && skPick.data.user.username === 'quya2admin' && skPick.data.tenant.code === 'quy-a2', JSON.stringify(skPick));
+  ok('skhg login: unknown village code 403', !(await sk({ account: '0988000111', password: 'skhg-pass', thon: 'khong-co' })).ok);
+  await cj('cadm', '/users/' + apprId, { method: 'PUT', body: { phone: '0912345678', email: 'ke.toan@example.vn' } });
 
   // ---------- Ảnh chứng từ (GĐ2.5) ----------
   const tinyJpeg = receipt;

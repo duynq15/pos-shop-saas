@@ -15,7 +15,9 @@ async function request(url, { method = 'GET', body, raw } = {}) {
   if (raw) return res;
   if (res.status === 401) {
     try { window.dispatchEvent(new Event('auth:required')); } catch { /* ignore */ }
-    throw Object.assign(new Error('Chưa đăng nhập hoặc phiên hết hạn'), { status: 401 });
+    // Giữ lời báo của máy chủ (vd. sai mật khẩu khi đăng nhập), không thì báo hết phiên
+    const msg = await res.json().then((j) => j.error, () => '');
+    throw Object.assign(new Error(msg || 'Chưa đăng nhập hoặc phiên hết hạn'), { status: 401 });
   }
   let json;
   try { json = await res.json(); } catch { throw new Error('Phản hồi không hợp lệ từ máy chủ'); }

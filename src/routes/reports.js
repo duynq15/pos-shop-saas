@@ -80,7 +80,7 @@ router.get('/reports/summary', requirePerm('report.view'), wrap((req, res) => {
     WHERE i.status='paid' AND i.type='sale' AND ${DATE}>=date(?) AND ${DATE}<=date(?)
     GROUP BY category ORDER BY revenue DESC`).all(...P);
 
-  const lowStock = db.prepare('SELECT id,name,stock,min_stock,unit FROM products WHERE active=1 AND stock<=min_stock ORDER BY stock LIMIT 100').all();
+  const lowStock = db.prepare(`SELECT id,name,stock,min_stock,unit FROM products WHERE active=1 AND IFNULL(product_type,'')<>'service' AND stock<=min_stock ORDER BY stock LIMIT 100`).all();
 
   const vatRow = db.prepare(`SELECT COALESCE(SUM(CASE WHEN i.type='return' THEN -i.vat_amount ELSE i.vat_amount END),0) AS vat,
       COALESCE(SUM(CASE WHEN i.type='return' THEN -i.net_amount ELSE i.net_amount END),0) AS net
@@ -130,7 +130,7 @@ router.get('/reports/products', requirePerm('report.view'), wrap((req, res) => {
 router.get('/reports/inventory', requirePerm('report.view'), wrap((req, res) => {
   const rows = db.prepare(`SELECT p.id, p.name, p.sku, p.barcode, p.unit, p.stock, p.min_stock, p.cost_price, p.sell_price,
       (p.stock*p.cost_price) AS stock_value, COALESCE(c.name,'') AS category_name
-    FROM products p LEFT JOIN categories c ON c.id=p.category_id WHERE p.active=1 ORDER BY stock_value DESC`).all();
+    FROM products p LEFT JOIN categories c ON c.id=p.category_id WHERE p.active=1 AND IFNULL(p.product_type,'')<>'service' ORDER BY stock_value DESC`).all();
   const totals = rows.reduce((a, r) => ({ stock_value: a.stock_value + r.stock_value, retail_value: a.retail_value + r.stock * r.sell_price }), { stock_value: 0, retail_value: 0 });
   ok(res, { items: rows, ...totals });
 }));
@@ -142,7 +142,7 @@ router.get('/reports/slow-moving', requirePerm('report.view'), wrap((req, res) =
     FROM products p
     LEFT JOIN invoice_items ii ON ii.product_id=p.id
     LEFT JOIN invoices i ON i.id=ii.invoice_id AND i.status='paid' AND i.type='sale' AND date(i.created_at)>=date(?) AND date(i.created_at)<=date(?)
-    WHERE p.active=1
+    WHERE p.active=1 AND IFNULL(p.product_type,'')<>'service'
     GROUP BY p.id ORDER BY sold ASC, stock_value DESC LIMIT 200`).all(from, to);
   ok(res, rows);
 }));
@@ -223,7 +223,7 @@ router.get('/reports/analytics', requirePerm('report.view'), wrap((req, res) => 
   const reorder = db.prepare(`SELECT p.id, p.name, p.unit, p.stock, p.min_stock,
       COALESCE((SELECT SUM(ii.base_qty) FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id
         WHERE ii.product_id=p.id AND i.status='paid' AND i.type='sale' AND date(i.created_at)>=date(?) AND date(i.created_at)<=date(?)),0) AS sold
-    FROM products p WHERE p.active=1`).all(from, to).map((p) => {
+    FROM products p WHERE p.active=1 AND IFNULL(p.product_type,'')<>'service'`).all(from, to).map((p) => {
     const perDay = p.sold / days;
     const cover = perDay > 0 ? p.stock / perDay : 999;
     const suggest = Math.max(0, Math.ceil(perDay * days * 0.5 - p.stock));

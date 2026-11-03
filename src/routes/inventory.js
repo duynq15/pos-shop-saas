@@ -321,9 +321,9 @@ router.get('/stock/moves', wrap((req, res) => {
 
 router.get('/stock/summary', wrap((req, res) => {
   const r = db.prepare(`SELECT COUNT(*) skus, COALESCE(SUM(stock),0) total_qty, COALESCE(SUM(stock*cost_price),0) total_value,
-      COALESCE(SUM(stock*sell_price),0) retail_value FROM products WHERE active=1`).get();
-  const low = db.prepare('SELECT COUNT(*) c FROM products WHERE active=1 AND min_stock>0 AND stock<=min_stock').get().c;
-  const out = db.prepare('SELECT COUNT(*) c FROM products WHERE active=1 AND stock<=0').get().c;
+      COALESCE(SUM(stock*sell_price),0) retail_value FROM products WHERE active=1 AND IFNULL(product_type,'')<>'service'`).get();
+  const low = db.prepare(`SELECT COUNT(*) c FROM products WHERE active=1 AND IFNULL(product_type,'')<>'service' AND min_stock>0 AND stock<=min_stock`).get().c;
+  const out = db.prepare(`SELECT COUNT(*) c FROM products WHERE active=1 AND IFNULL(product_type,'')<>'service' AND stock<=0`).get().c;
   ok(res, { ...r, low_stock: low, out_of_stock: out });
 }));
 
