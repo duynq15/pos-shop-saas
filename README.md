@@ -103,6 +103,8 @@ Sau khi chạy, terminal in ra các địa chỉ LAN. Trong **Cài đặt → K�
   - Tên trần (không có `@`, không phải SĐT) được hiểu là `<tên>@xaphuongvietnam.vn`, giống Làng Số.
   - Khớp nhiều thôn: trả `{ choose: [{code, name}] }`, người dùng chọn thôn rồi gửi lại kèm `thon`. Không khớp sổ quỹ nào: báo lỗi, chủ sổ quỹ tự thêm người ở mục Người dùng (SĐT hoặc email trùng tài khoản SKHG).
 
+- Thành viên cộng đồng SKHG: quản trị nền tảng điền mã cộng đồng SKHG (vd. `LGHZKS`) ở màn Cộng đồng. Thành viên đã duyệt chưa có tài khoản được tự tạo tài khoản, chỉ vào qua SKHG: admin cộng đồng (`nhom_truong`) là Người duyệt chi, thành viên khác chỉ xem, không bao giờ tự cấp thủ quỹ. Vai trò đồng bộ mỗi lần đăng nhập; rời cộng đồng thì bị chặn và mất phiên.
+
 ## Đầu đọc mã vạch
 Cắm đầu đọc USB, để con trỏ ở ô quét rồi quét. Đa số đầu đọc gửi mã kèm Enter, phần mềm tự nhận.
 
