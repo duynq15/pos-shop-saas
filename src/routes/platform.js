@@ -109,6 +109,9 @@ function ensureDonationsToken(c, settings) {
   if (!settings.public_donations || c.donations_token) return c.donations_token || null;
   return crypto.randomBytes(16).toString('hex');
 }
+// Mã cộng đồng SKHG (vd. LGHZKS): null khi bỏ trống, false khi sai dạng
+const skhgCodeOf = (v) => { const s = str(v, 40).toUpperCase(); return !s ? null : /^[A-Z0-9]{3,20}$/.test(s) ? s : false; };
+const SKHG_CODE_ERR = 'Mã cộng đồng Sáng Kiến Hưng Gia chỉ gồm chữ và số (3–20 ký tự)';
 const communityById = (id) => control.prepare('SELECT * FROM communities WHERE id=?').get(id);
 const communityTenantCount = (id) => control.prepare('SELECT COUNT(*) c FROM tenants WHERE community_id=?').get(id).c;
 
@@ -131,9 +134,11 @@ router.post('/communities', need('communities.manage'), wrap((req, res) => {
   const st = validateCommunitySettings(req.body.settings === undefined ? {} : req.body.settings, '{}');
   if (st.error) return fail(res, st.error);
   const donationsToken = st.value.public_donations ? crypto.randomBytes(16).toString('hex') : null;
-  const r = control.prepare('INSERT INTO communities(code,name,type,area,contact_name,contact_phone,note,settings,donations_token) VALUES (?,?,?,?,?,?,?,?,?)')
+  const skhgCode = skhgCodeOf(req.body.skhg_code);
+  if (skhgCode === false) return fail(res, SKHG_CODE_ERR);
+  const r = control.prepare('INSERT INTO communities(code,name,type,area,contact_name,contact_phone,note,settings,donations_token,skhg_code) VALUES (?,?,?,?,?,?,?,?,?,?)')
     .run(code, name, type, str(req.body.area, 120) || null, str(req.body.contact_name, 120) || null,
-      str(req.body.contact_phone, 30) || null, str(req.body.note, 500) || null, JSON.stringify(st.value), donationsToken);
+      str(req.body.contact_phone, 30) || null, str(req.body.note, 500) || null, JSON.stringify(st.value), donationsToken, skhgCode);
   const id = Number(r.lastInsertRowid);
   audit({ userId: req.user.id, username: req.user.username, action: 'community.create', entity: 'community', entityId: id, detail: code, ip: req.ip });
   ok(res, communityOut(communityById(id)));
@@ -162,9 +167,11 @@ router.put('/communities/:id', need('communities.manage'), wrap((req, res) => {
     donationsToken = ensureDonationsToken(c, st.value);
   }
   const keep = (k, n) => (req.body[k] === undefined ? c[k] : (str(req.body[k], n) || null));
-  control.prepare('UPDATE communities SET name=?, type=?, area=?, status=?, contact_name=?, contact_phone=?, note=?, settings=?, donations_token=? WHERE id=?')
+  const skhgCode = req.body.skhg_code === undefined ? c.skhg_code : skhgCodeOf(req.body.skhg_code);
+  if (skhgCode === false) return fail(res, SKHG_CODE_ERR);
+  control.prepare('UPDATE communities SET name=?, type=?, area=?, status=?, contact_name=?, contact_phone=?, note=?, settings=?, donations_token=?, skhg_code=? WHERE id=?')
     .run(str(req.body.name, 160) || c.name, type, keep('area', 120), status, keep('contact_name', 120), keep('contact_phone', 30),
-      keep('note', 500), settings, donationsToken, id);
+      keep('note', 500), settings, donationsToken, skhgCode, id);
   audit({ userId: req.user.id, username: req.user.username, action: 'community.update', entity: 'community', entityId: id,
     detail: status !== c.status ? `status=${status}` : undefined, ip: req.ip });
   ok(res, communityOut(communityById(id)));

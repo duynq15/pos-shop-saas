@@ -25,6 +25,12 @@ const SKHG = {
 // POST /login: tài khoản (đã chuẩn hóa) -> token; mật khẩu đúng là 'skhg-pass'. Ghi lại token đã /logout.
 const SKHG_LOGIN = { '0912345678': 'tok-ok', 'khong.co@xaphuongvietnam.vn': 'tok-nouser', '0988000111': 'tok-multi' };
 SKHG['tok-multi'] = [200, { success: true, data: { user: { phone: '0988000111' } } }];
+// Thành viên cộng đồng SKHG "LGHZKS" (family id 98): admin, thành viên thường, chưa duyệt, đã rời cộng đồng
+const member = (id, approved, slug) => [200, { success: true, data: { user: { id, name: 'Thành viên ' + id, families: [{ id: 98, code: 'LGHZKS' }, { id: 7, code: 'KHAC01' }],
+  user_families: slug ? [{ family_id: 98, approved, family_role: { slug } }, { family_id: 7, approved: 1, family_role: { slug: 'nhom_truong' } }] : [] } } }];
+Object.assign(SKHG, { 'tok-m-admin': member(901, 1, 'nhom_truong'), 'tok-m-user': member(902, 1, 'thanh_vien_thuong'),
+  'tok-m-wait': member(903, 0, 'thanh_vien_thuong'), 'tok-m-left': member(901, 1, null) });
+Object.assign(SKHG_LOGIN, { '0977000901': 'tok-m-admin', '0977000902': 'tok-m-user', '0977000903': 'tok-m-wait' });
 const skhgLoggedOut = [];
 require('http').createServer((rq, rs) => {
   const send = (code, body) => { rs.writeHead(rq.headers['user-agent'] === 'ThanhToanSo/1.0' ? code : 403, { 'Content-Type': 'application/json' }); rs.end(JSON.stringify(body)); };
@@ -594,6 +600,27 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   const skPick = await sk({ account: '0988000111', password: 'skhg-pass', thon: 'quy-a2' });
   ok('skhg login: chosen village logs in', skPick.ok && skPick.data.user.username === 'quya2admin' && skPick.data.tenant.code === 'quy-a2', JSON.stringify(skPick));
   ok('skhg login: unknown village code 403', !(await sk({ account: '0988000111', password: 'skhg-pass', thon: 'khong-co' })).ok);
+
+  // ---------- Thành viên cộng đồng SKHG vào sổ quỹ (SKHGDT-3577) ----------
+  const mem = (jar, account) => cj(jar, '/auth/skhg', { method: 'POST', body: { account, password: 'skhg-pass', thon: 'quy-a' } });
+  ok('skhg member: not linked yet 403', !(await mem('m1', '0977000901')).ok);
+  ok('skhg member: bad SKHG community code rejected', !(await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { skhg_code: 'x!' } })).ok);
+  ok('skhg member: link community code', (await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { skhg_code: 'lghzks' } })).data.skhg_code === 'LGHZKS');
+  const m1 = await mem('m1', '0977000901');
+  ok('skhg member: community admin -> approver account created', m1.ok && m1.data.user.role === 'approver' && m1.data.tenant.code === 'quy-a'
+    && (await cj('m1', '/auth/me')).data.user.username === m1.data.user.username, JSON.stringify(m1));
+  const m1b = await mem('m1', '0977000901');
+  ok('skhg member: second login reuses account', m1b.ok && m1b.data.user.username === m1.data.user.username);
+  ok('skhg member: approved member -> view only', (await mem('m2', '0977000902')).data?.user.role === 'community_leader');
+  ok('skhg member: viewer cannot add entries', !(await cj('m2', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).ok);
+  ok('skhg member: pending member 403', !(await mem('m3', '0977000903')).ok);
+  ok('skhg member: no password login', !(await cj('m4', '/auth/login', { method: 'POST', body: { username: m1.data.user.username, password: '' } })).ok);
+  // Rời cộng đồng trên SKHG: lần xác minh kế tiếp bị chặn, phiên cũ bị xóa
+  SKHG_LOGIN['0977000901'] = 'tok-m-left';
+  ok('skhg member: left community 403', !(await mem('m5', '0977000901')).ok);
+  ok('skhg member: left community kills old session', (await req('m1', '/auth/me')).status === 401);
+  await mem('m2', '0977000902'); // đăng nhập đúng xóa đếm lần sai theo IP, để các test đăng nhập sau không bị 429
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { skhg_code: '' } });
   await cj('cadm', '/users/' + apprId, { method: 'PUT', body: { phone: '0912345678', email: 'ke.toan@example.vn' } });
 
   // ---------- Ảnh chứng từ (GĐ2.5) ----------
@@ -693,7 +720,7 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   await req('cadm', '/users', { method: 'POST', body: { username: 'qa-treasurer2', password: '123456', role: 'treasurer' } });
   await req('c-treasurer2', '/auth/login', { method: 'POST', body: { username: 'qa-treasurer2', password: '123456' } });
   const treas = await cj('c-approver', '/fund-treasurers');
-  ok('approver lists treasurers', treas.ok && treas.data.some((t) => t.username === 'qa-treasurer2'));
+  ok('approver lists treasurers', treas.ok && treas.data.some((t) => t.username === 'qa-treasurer2'), JSON.stringify(treas));
   const tq1 = treas.data.find((t) => t.username === 'qa-treasurer').id;
   ok('manager must be a treasurer', !(await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { manager_user_id: (await cj('cadm', '/auth/me')).data.user.id } })).ok);
   ok('assign fund to treasurer 1', (await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { manager_user_id: tq1 } })).data.manager_user_id === tq1);
@@ -1018,4 +1045,4 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   const pass = R.filter((x) => x.startsWith('PASS')).length;
   console.log(`\n${pass}/${R.length} passed`);
   process.exit(pass === R.length ? 0 : 1);
-})().catch((e) => { console.error(e); process.exit(1); });
+})().catch((e) => { console.log(R.filter((x) => x.startsWith('FAIL')).join('\n')); console.error(e); process.exit(1); });

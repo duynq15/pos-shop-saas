@@ -33,7 +33,7 @@ router.post('/users', requirePerm('user.manage'), wrap((req, res) => {
   if (control.prepare('SELECT id FROM users WHERE lower(username)=?').get(username)) return fail(res, 'Tên đăng nhập đã tồn tại');
   const tenant = control.prepare('SELECT * FROM tenants WHERE id=?').get(req.user.tenant_id);
   const plan = planOf(tenant);
-  const ucnt = control.prepare('SELECT COUNT(*) c FROM users WHERE tenant_id=? AND active=1').get(req.user.tenant_id).c;
+  const ucnt = control.prepare('SELECT COUNT(*) c FROM users WHERE tenant_id=? AND active=1 AND skhg_id IS NULL').get(req.user.tenant_id).c; // thành viên SKHG tự tạo không chiếm suất gói
   if (plan && plan.max_users && ucnt >= plan.max_users) return fail(res, `Gói "${plan.name}" chỉ cho tối đa ${plan.max_users} người dùng`);
   const r = control.prepare('INSERT INTO users(tenant_id,username,password_hash,full_name,phone,email,role,pin_hash) VALUES (?,?,?,?,?,?,?,?)')
     .run(req.user.tenant_id, username, hashPassword(password), str(req.body.full_name, 120) || null, str(req.body.phone, 40) || null,
