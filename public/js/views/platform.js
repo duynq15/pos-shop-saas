@@ -441,6 +441,8 @@ function openCommunity(c) {
       <label class="fld">Địa bàn<input class="field" id="cf-area" value="${esc(d.area || '')}"></label>
       <label class="fld">Người liên hệ<input class="field" id="cf-contact" value="${esc(d.contact_name || '')}"></label>
       <label class="fld">Điện thoại liên hệ<input class="field" id="cf-phone" type="tel" value="${esc(d.contact_phone || '')}"></label>
+      <label class="fld full">Mã cộng đồng trên Sáng Kiến Hưng Gia<input class="field" id="cf-skhg" placeholder="vd: LGHZKS" autocapitalize="characters" value="${esc(d.skhg_code || '')}">
+        <small class="muted">Thành viên cộng đồng này đăng nhập bằng Sáng Kiến Hưng Gia được vào sổ quỹ: admin cộng đồng là Người duyệt chi, thành viên khác chỉ xem. Bỏ trống để tắt.</small></label>
       <label class="fld full">Ghi chú<input class="field" id="cf-note" value="${esc(d.note || '')}"></label>
       <label class="fld">Cảnh báo giao dịch chưa phân loại sau (ngày)<input class="field" id="cf-alert-days" type="number" min="1" max="90" value="${Number(st.unclassified_alert_days) || 3}"></label>
       <label class="chk"><input type="checkbox" id="cf-public" ${st.public_donations ? 'checked' : ''}> Công khai danh sách công đức</label>
@@ -458,7 +460,7 @@ function openCommunity(c) {
   $('#cf-save').onclick = async () => {
     const body = {
       name: $('#cf-name').value.trim(), area: $('#cf-area').value.trim(), type: $('#cf-type').value,
-      contact_name: $('#cf-contact').value.trim(), contact_phone: $('#cf-phone').value.trim(), note: $('#cf-note').value.trim(),
+      contact_name: $('#cf-contact').value.trim(), contact_phone: $('#cf-phone').value.trim(), note: $('#cf-note').value.trim(), skhg_code: $('#cf-skhg').value.trim(),
       settings: { public_donations: $('#cf-public').checked, unclassified_alert_days: Number($('#cf-alert-days').value) },
     };
     if (isNew) body.code = $('#cf-code').value.trim();

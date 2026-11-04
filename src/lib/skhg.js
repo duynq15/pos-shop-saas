@@ -3,8 +3,10 @@
 // Tài khoản Sáng Kiến Hưng Gia (SKHG) của cổng quản trị Làng Số (repo lang-so).
 // Làng Số gửi token SKHG của người dùng; token được xác minh bằng GET <SKHG_API_BASE>/current-profile-2 (như Làng Văn hiến,
 // Trạm hỗ trợ) rồi đối chiếu SĐT / email với tài khoản quản trị sổ quỹ của thôn.
-const { control } = require('../control');
+const crypto = require('crypto');
+const { control, audit } = require('../control');
 const { ApiError, bad } = require('./util');
+const { hashPassword } = require('./auth');
 
 const API = (process.env.SKHG_API_BASE || 'https://app.sangkienhunggia.vn/api/v1').replace(/\/+$/, '');
 const TTL = 5 * 60 * 1000;
@@ -57,14 +59,56 @@ const matchArgs = (u) => {
   const email = String(u.email || '').trim().toLowerCase() || null;
   return [phone, email, phone, email];
 };
-const NO_ACCOUNT = 'Tài khoản Sáng Kiến Hưng Gia chưa có tài khoản sổ quỹ của thôn (SĐT hoặc email phải trùng). Nhờ chủ sổ quỹ thêm bạn ở mục Người dùng.';
+const NO_ACCOUNT = 'Tài khoản Sáng Kiến Hưng Gia chưa có tài khoản sổ quỹ của thôn (SĐT hoặc email phải trùng) và không là thành viên cộng đồng của thôn trên Sáng Kiến Hưng Gia. Nhờ chủ sổ quỹ thêm bạn ở mục Người dùng.';
+
+// Vai trò sổ quỹ theo tư cách thành viên cộng đồng SKHG `code` (current-profile-2: families = cộng đồng {id, code},
+// user_families = thành viên {family_id, approved, family_role.slug}, như lang-so src/auth.js). Admin cộng đồng (nhom_truong) duyệt chi,
+// thành viên đã duyệt chỉ xem; không phải thành viên: null. Không bao giờ tự cấp thủ quỹ (cầm tiền), chủ sổ quỹ gán tay.
+function memberRole(u, code) {
+  code = String(code || '').toUpperCase();
+  if (!code) return null;
+  const ids = (u.families || []).filter((f) => String(f?.code || '').toUpperCase() === code).map((f) => f.id);
+  const m = (u.user_families || []).filter((x) => ids.includes(x?.family_id) && (x.approved === 1 || x.approved === true));
+  if (!m.length) return null;
+  return m.some((x) => x.family_role?.slug === 'nhom_truong') ? 'approver' : 'community_leader';
+}
+
+// Tài khoản tự tạo cho thành viên cộng đồng SKHG của thôn; vai trò đồng bộ theo SKHG ở mỗi lần xác minh.
+// Rời cộng đồng: chặn và xóa phiên. Chủ sổ quỹ khóa tài khoản: chặn (không tự mở lại).
+// ponytail: phiên đang mở chỉ bị thu hồi ở lần xác minh SKHG kế tiếp; muốn tức thì thì cần SKHG gọi webhook khi rời cộng đồng.
+function memberUser(u, tenant) {
+  const sid = u.id == null ? '' : String(u.id);
+  const c = sid && tenant.community_id && control.prepare("SELECT skhg_code FROM communities WHERE id=? AND status='active'").get(tenant.community_id);
+  if (!c?.skhg_code) return null;
+  const role = memberRole(u, c.skhg_code);
+  let user = control.prepare('SELECT * FROM users WHERE tenant_id=? AND skhg_id=?').get(tenant.id, sid);
+  if (!role) {
+    if (user) control.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);
+    return null;
+  }
+  if (!user) {
+    // Mật khẩu ngẫu nhiên không ai biết: tài khoản này chỉ vào được qua SKHG
+    const id = control.prepare('INSERT INTO users(tenant_id,username,password_hash,full_name,role,skhg_id) VALUES (?,?,?,?,?,?)')
+      .run(tenant.id, `skhg${sid}.${tenant.code}`, hashPassword(crypto.randomBytes(24).toString('hex')), String(u.name || u.user_name || '').slice(0, 120) || null, role, sid).lastInsertRowid;
+    audit({ tenantId: tenant.id, action: 'user.create', entity: 'user', entityId: Number(id), detail: `thành viên cộng đồng SKHG (${role})` });
+    user = control.prepare('SELECT * FROM users WHERE id=?').get(id);
+  } else if (user.role !== role) {
+    control.prepare('UPDATE users SET role=? WHERE id=?').run(role, user.id);
+    user.role = role;
+  }
+  return user.active ? user : null;
+}
+
+// Tài khoản sổ quỹ khớp người dùng SKHG: tài khoản chủ sổ quỹ đã thêm (SĐT/email trùng) trước, không có thì theo thành viên cộng đồng.
+const userFor = (u, tenant) => control.prepare(`SELECT * FROM users WHERE tenant_id=? AND active=1 AND skhg_id IS NULL AND ${MATCH} ORDER BY id LIMIT 1`)
+  .get(tenant.id, ...matchArgs(u)) || memberUser(u, tenant);
 
 // Tài khoản quản trị sổ quỹ của thôn ứng với token SKHG.
 async function accountFor(token, code) {
   const { community, tenant } = communityOf(code);
   const u = await profile(token);
   if (!u) bad('Phiên đăng nhập Sáng Kiến Hưng Gia không hợp lệ', 401);
-  const user = control.prepare(`SELECT * FROM users WHERE tenant_id=? AND active=1 AND ${MATCH} ORDER BY id LIMIT 1`).get(tenant.id, ...matchArgs(u));
+  const user = userFor(u, tenant);
   if (!user) bad(NO_ACCOUNT, 403);
   return { community, tenant, user };
 }
@@ -109,7 +153,7 @@ async function loginWithPassword(account, password, tenantCode) {
     const found = new Map(); // mã sổ quỹ -> { user, tenant }, tài khoản đầu tiên khớp của mỗi sổ quỹ
     for (const t of control.prepare("SELECT * FROM tenants WHERE kind='community' AND status<>'suspended' ORDER BY name").all()) {
       if (tenantCode && t.code !== tenantCode) continue;
-      const user = control.prepare(`SELECT * FROM users WHERE tenant_id=? AND active=1 AND ${MATCH} ORDER BY id LIMIT 1`).get(t.id, ...matchArgs(u));
+      const user = userFor(u, t);
       if (user) found.set(t.code, { user, tenant: t });
     }
     if (!found.size) bad(NO_ACCOUNT, 403);
