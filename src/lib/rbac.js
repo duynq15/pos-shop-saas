@@ -79,7 +79,9 @@ const ROLES = {
   community_leader: {
     name: 'Ban lãnh đạo',
     kinds: COMMUNITY_KINDS,
-    perms: ['community.report', 'fund.view'],
+    // Ban lãnh đạo được xem toàn bộ sổ quỹ và cấu hình quỹ/tài khoản nhận tiền,
+    // nhưng vẫn tách khỏi thủ quỹ (nhập liệu) và người duyệt chi.
+    perms: ['community.report', 'fund.view', 'fund.manage'],
     maxDiscount: 0,
   },
 };
@@ -109,6 +111,8 @@ const rolesFor = (kind) => Object.keys(ROLES).filter((code) => roleAllowed(code,
 const LABEL_FIELD = { approver: 'approver_label', community_leader: 'leader_label' };
 const roleName = (r, labels) => {
   if (r === 'platform') return 'Quản trị nền tảng';
+  // Chủ tài khoản của tenant cộng đồng là người quản trị sổ quỹ, không phải chủ cửa hàng.
+  if (r === 'owner' && labels) return 'Quản trị sổ quỹ';
   if (labels && LABEL_FIELD[r] && labels[LABEL_FIELD[r]]) return labels[LABEL_FIELD[r]];
   return ROLES[r] ? ROLES[r].name : r;
 };

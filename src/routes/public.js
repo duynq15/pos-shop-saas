@@ -18,6 +18,7 @@ const db = require('../db');
 const { ok, wrap, str } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
 const { renderPdf, available } = require('../lib/pdf');
+const { fundQr } = require('./funds');
 
 const router = express.Router(); // mount tại /public/api
 const CACHE_TTL_MS = 60 * 1000;
@@ -296,37 +297,82 @@ function page(req, res) {
   res.sendFile(path.join(__dirname, '..', '..', 'public', 'report.html'));
 }
 
-/* ===================== Danh sách công đức công khai (GĐ2.9, FR-20) ===================== */
+/* ===================== Đợt thu & công đức công khai (GĐ2.9, FR-20) ===================== */
 // Token duy nhất trên communities.donations_token; 404 như nhau dù token sai hay cờ đang tắt.
-function donationsData(token) {
+function publicCommunity(token) {
   if (!token) return null;
   const c = control.prepare('SELECT id,name,settings,donations_token FROM communities WHERE donations_token=?').get(String(token));
-  if (!c || !communitySettings(c.settings).public_donations) return null;
-  const tenant = control.prepare("SELECT code FROM tenants WHERE community_id=? AND kind='community'").get(c.id);
+  return c && communitySettings(c.settings).public_donations ? c : null;
+}
+const communityTenant = (communityId) => control.prepare("SELECT code FROM tenants WHERE community_id=? AND kind='community'").get(communityId);
+const PUBLIC_FUND_SELECT = `SELECT id,code,name,kind,category,description,start_date,end_date,target_amount,is_public,
+  bank_account,bank_bin,bank_name,account_holder FROM funds
+  WHERE status='active' AND (kind='donation' OR is_public=1)`;
+const publicFundSql = `${PUBLIC_FUND_SELECT} ORDER BY id`;
+
+async function donationsData(token) {
+  const c = publicCommunity(token);
+  if (!c) return null;
+  const tenant = communityTenant(c.id);
   if (!tenant) return { community_name: c.name, programs: [] };
-  const programs = db.runWith(tenant.code, () => {
-    const funds = db.prepare("SELECT id,name FROM funds WHERE kind='donation' ORDER BY id").all();
-    return funds.map((f) => {
-      const entries = db.prepare(`SELECT payer_name, anonymous, amount, created_at FROM fund_entries
-        WHERE fund_id=? AND type='in' AND status='approved' ORDER BY created_at DESC`).all(f.id);
-      return {
-        name: f.name,
-        total: entries.reduce((s, e) => s + e.amount, 0),
-        entries: entries.map((e) => ({ name: e.anonymous ? null : (e.payer_name || null), anonymous: !!e.anonymous, amount: e.amount, date: (e.created_at || '').slice(0, 10) })),
-      };
-    });
+  const programs = await db.runWith(tenant.code, async () => {
+    const funds = db.prepare(publicFundSql).all();
+    const out = [];
+    for (const f of funds) {
+      const entries = db.prepare(`SELECT type, payer_name, anonymous, amount, note, created_at FROM fund_entries
+        WHERE fund_id=? AND status='approved' ORDER BY created_at DESC, id DESC LIMIT 300`).all(f.id);
+      let qr = null;
+      try { qr = await fundQr(f); } catch { qr = null; }
+      const totalIn = entries.filter((e) => e.type === 'in').reduce((s, e) => s + e.amount, 0);
+      const totalOut = entries.filter((e) => e.type === 'out').reduce((s, e) => s + e.amount, 0);
+      const totalAdjust = entries.filter((e) => e.type === 'adjust').reduce((s, e) => s + e.amount, 0);
+      out.push({
+        id: f.id, name: f.name, kind: f.kind, category: f.category, description: f.description,
+        start_date: f.start_date, end_date: f.end_date, target_amount: f.target_amount,
+        bank_account: f.bank_account, bank_name: f.bank_name, account_holder: f.account_holder,
+        qrDataUrl: qr ? qr.qrDataUrl : null,
+        total: totalIn, spent: totalOut, balance: totalIn - totalOut + totalAdjust,
+        entries: entries.map((e) => ({
+          type: e.type,
+          name: e.anonymous ? null : (e.payer_name || null),
+          anonymous: !!e.anonymous,
+          amount: e.amount,
+          note: e.note || '',
+          date: (e.created_at || '').slice(0, 10),
+        })),
+      });
+    }
+    return out;
   });
   return { community_name: c.name, programs };
 }
 
-router.get('/donations/:token', wrap((req, res) => {
-  const data = donationsData(req.params.token);
+router.get('/donations/:token', wrap(async (req, res) => {
+  const data = await donationsData(req.params.token);
   if (!data) return res.status(404).json({ error: 'Không tìm thấy' });
   ok(res, data);
 }));
 
-function donationsPage(req, res) {
-  if (!donationsData(req.params.token)) return res.status(404).type('html').send('<h1>404</h1><p>Không tìm thấy trang.</p>');
+// QR đúng số tiền cho người nộp; chỉ với đợt thu công khai / công đức đang hoạt động.
+router.get('/donations/:token/funds/:id/qr', wrap(async (req, res) => {
+  const c = publicCommunity(req.params.token);
+  if (!c) return res.status(404).json({ error: 'Không tìm thấy' });
+  const tenant = communityTenant(c.id);
+  if (!tenant) return res.status(404).json({ error: 'Không tìm thấy' });
+  const f = db.runWith(tenant.code, () => db.prepare(PUBLIC_FUND_SELECT + ' AND id=?').get(Number(req.params.id)));
+  if (!f) return res.status(404).json({ error: 'Không tìm thấy đợt thu' });
+  let amount;
+  if (req.query.amount !== undefined && req.query.amount !== '') {
+    amount = Math.round(Number(String(req.query.amount).replace(/[^\d]/g, '')));
+    if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 100_000_000_000) {
+      return res.status(400).json({ error: 'Số tiền không hợp lệ' });
+    }
+  }
+  try { ok(res, { ...(await fundQr(f, amount)), amount }); } catch (e) { res.status(400).json({ error: e.message }); }
+}));
+
+async function donationsPage(req, res) {
+  if (!(await donationsData(req.params.token))) return res.status(404).type('html').send('<h1>404</h1><p>Không tìm thấy trang.</p>');
   res.sendFile(path.join(__dirname, '..', '..', 'public', 'donations.html'));
 }
 

@@ -69,7 +69,7 @@ export const platformViews = [
   </tr></thead><tbody id="ct-body"></tbody></table></div>
 </div>
 <div class="card" style="margin-bottom:14px" id="pc-card"><div class="toolbar"><h3 style="margin:0">Cộng đồng</h3><span class="spacer"></span><button class="btn primary" id="pc-new">+ Thêm cộng đồng</button></div>
-  <p class="muted">Cộng đồng (thôn, tổ dân phố, giáo xứ, chợ…) gom người bán và sổ quỹ. Gán cửa hàng vào cộng đồng ở form Sửa cửa hàng. Tài khoản thủ quỹ, người duyệt chi, ban lãnh đạo (nhãn theo loại cộng đồng) do chủ tenant sổ quỹ tạo trong màn Người dùng.</p>
+  <p class="muted">Cộng đồng (thôn, tổ dân phố, giáo xứ, chợ…) gom người bán và sổ quỹ. Gán cửa hàng vào cộng đồng ở form Sửa cửa hàng. Hạng mục hàng dùng chung của người bán quản lý ở nút “Hạng mục”. Tài khoản thủ quỹ, người duyệt chi, ban lãnh đạo (nhãn theo loại cộng đồng) do chủ tenant sổ quỹ tạo trong màn Người dùng.</p>
   <div class="tbl-wrap" style="box-shadow:none"><table class="grid"><thead><tr>
     <th>Mã</th><th>Tên</th><th>Loại</th><th>Địa bàn</th><th class="r">Số tenant</th><th>Trạng thái</th><th></th>
   </tr></thead><tbody id="pc-body"></tbody></table></div>
@@ -94,6 +94,7 @@ export const platformViews = [
       const c = communities.find((x) => x.id === Number(btn.closest('tr').dataset.id));
       if (btn.dataset.act === 'edit') openCommunity(c);
       if (btn.dataset.act === 'members') openMembers(c);
+      if (btn.dataset.act === 'categories') openCategories(c);
       if (btn.dataset.act === 'del') {
         if (!(await confirmDialog(`Xóa cộng đồng "${c.name}"?`))) return;
         try { await api('/api/platform/communities/' + c.id, { method: 'DELETE' }); toast('Đã xóa'); load(); } catch (err) { toast(err.message, true); }
@@ -298,6 +299,7 @@ async function load() {
     <td class="r">${num(c.tenant_count)}</td>
     <td>${statusBadge(c.status)}</td>
     <td class="r"><button class="btn sm" data-act="members">Thành viên</button>
+      <button class="btn sm" data-act="categories">Hạng mục</button>
       ${mCom ? `<button class="btn sm" data-act="edit">Sửa</button>
       <button class="btn sm" data-act="toggle">${c.status === 'active' ? 'Tạm ngưng' : 'Mở lại'}</button>
       <button class="btn sm" data-act="del">Xóa</button>` : ''}</td>
@@ -426,6 +428,45 @@ async function openMembers(c) {
   };
 }
 
+async function openCategories(c) {
+  let rows;
+  try { rows = await api('/api/platform/communities/' + c.id + '/categories'); } catch (e) { return toast(e.message, true); }
+  const canManage = can('communities.manage');
+  const body = () => rows.map((r) => `<tr data-id="${r.id}">
+    <td>${canManage ? `<input class="field" value="${esc(r.name)}" maxlength="60" aria-label="Tên hạng mục" style="width:100%;max-width:280px">` : esc(r.name)}</td>
+    <td>${r.status === 'active' ? '<span class="badge paid">Đang dùng</span>' : '<span class="badge">Đã ẩn</span>'}</td>
+    ${canManage ? `<td class="r" style="white-space:nowrap"><button class="btn sm" data-act="rename">Lưu tên</button>
+      ${r.status === 'active' ? '<button class="btn sm" data-act="hide">Ẩn</button>' : '<button class="btn sm" data-act="show">Dùng lại</button>'}</td>` : ''}
+  </tr>`).join('') || `<tr><td colspan="${canManage ? 3 : 2}" class="empty">Chưa có hạng mục</td></tr>`;
+  modal(`<h2>Hạng mục hàng – ${esc(c.name)}</h2>
+    <p class="muted" style="margin:-6px 0 12px;font-size:13px">Người bán trong cộng đồng chọn hạng mục từ danh sách này khi nhận tiền. Hạng mục đã dùng thì không xóa, chỉ ẩn.</p>
+    ${canManage ? `<form class="toolbar" id="pc-cat-form"><input class="field" id="pc-cat-name" placeholder="Tên hạng mục mới, ví dụ: Rau củ" maxlength="60" style="flex:1;min-width:180px">
+      <button class="btn primary" type="submit">Thêm</button></form>` : ''}
+    <div class="tbl-wrap"><table class="grid"><thead><tr><th>Hạng mục</th><th>Trạng thái</th>${canManage ? '<th></th>' : ''}</tr></thead><tbody id="pc-cat-body">${body()}</tbody></table></div>
+    <div class="modal-actions"><button class="btn" id="pc-cat-close">Đóng</button></div>`);
+  $('#pc-cat-close').onclick = closeModal;
+  if (!canManage) return;
+  const redraw = () => { $('#pc-cat-body').innerHTML = body(); };
+  $('#pc-cat-form').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      rows = await api('/api/platform/communities/' + c.id + '/categories', { method: 'POST', body: { name: $('#pc-cat-name').value } });
+      $('#pc-cat-name').value = ''; redraw(); toast('Đã thêm hạng mục');
+    } catch (err) { toast(err.message, true); }
+  };
+  $('#pc-cat-body').onclick = async (e) => {
+    const btn = e.target.closest('[data-act]'); if (!btn) return;
+    const id = Number(btn.closest('tr').dataset.id);
+    const body = btn.dataset.act === 'rename'
+      ? { name: btn.closest('tr').querySelector('input').value }
+      : { status: btn.dataset.act === 'hide' ? 'hidden' : 'active' };
+    try {
+      rows = await api('/api/platform/communities/' + c.id + '/categories/' + id, { method: 'PATCH', body });
+      redraw(); toast('Đã cập nhật');
+    } catch (err) { toast(err.message, true); }
+  };
+}
+
 function openCommunity(c) {
   const isNew = !c;
   const d = c || { type: communityTypes.find((t) => t.status === 'active')?.code, settings: {} };
@@ -445,8 +486,8 @@ function openCommunity(c) {
         <small class="muted">Thành viên cộng đồng này đăng nhập bằng Sáng Kiến Hưng Gia được vào sổ quỹ: admin cộng đồng là Người duyệt chi, thành viên khác chỉ xem. Bỏ trống để tắt.</small></label>
       <label class="fld full">Ghi chú<input class="field" id="cf-note" value="${esc(d.note || '')}"></label>
       <label class="fld">Cảnh báo giao dịch chưa phân loại sau (ngày)<input class="field" id="cf-alert-days" type="number" min="1" max="90" value="${Number(st.unclassified_alert_days) || 3}"></label>
-      <label class="chk"><input type="checkbox" id="cf-public" ${st.public_donations ? 'checked' : ''}> Công khai danh sách công đức</label>
-      ${!isNew && d.donations_url ? `<label class="fld full">Link công khai<div style="display:flex;gap:8px">
+      <label class="chk"><input type="checkbox" id="cf-public" ${st.public_donations ? 'checked' : ''}> Công khai đợt thu &amp; công đức</label>
+      ${!isNew && d.donations_url ? `<label class="fld full">Link người nộp (đợt thu &amp; công đức)<div style="display:flex;gap:8px">
         <input class="field" id="cf-public-url" readonly value="${esc(location.origin + d.donations_url)}" style="flex:1">
         <button type="button" class="btn sm" id="cf-public-copy">Sao chép</button></div></label>` : ''}
     </div>
@@ -483,7 +524,7 @@ function openForm(t) {
         <label class="fld">Mã cửa hàng *<input class="field" id="tf-code" placeholder="vd: taphoa-an" autocapitalize="none"></label>
         <label class="fld">Tài khoản chủ *<input class="field" id="tf-owner" autocapitalize="none"></label>
         <label class="fld">Mật khẩu chủ *<input class="field" id="tf-pass" type="password"></label>
-        <label class="fld">Tên chủ cửa hàng<input class="field" id="tf-owner-name"></label>` : ''}
+        <label class="fld">Tên người quản trị<input class="field" id="tf-owner-name"></label>` : ''}
       <label class="fld">Tên đối tác *<input class="field" id="tf-name" value="${esc(d.name || '')}"></label>
       <label class="fld">Khu vực<input class="field" id="tf-area" placeholder="VD: Thôn A (để trống = ngoài khu vực)" value="${esc(d.area || '')}"></label>
       <label class="fld">Loại<select class="field" id="tf-kind">${Object.entries(KIND_LABEL).map(([k, v]) => `<option value="${k}" ${k === (d.kind || 'shop') ? 'selected' : ''}>${v}</option>`).join('')}</select></label>

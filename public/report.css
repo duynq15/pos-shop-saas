@@ -352,5 +352,23 @@ main.rp-wrap > section:last-of-type { margin-bottom: 0; }
   #rp-toast { display: none !important; }
 }
 
+/* ---------- Đợt thu & công đức ---------- */
+.dn-facts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 8px; }
+.dn-chip { background: #E5EEFC; border: 1px solid #C7D7F5; color: #1D4ED8; border-radius: 999px; padding: 4px 12px; font-weight: 700; font-size: 15px; }
+.dn-desc { margin: 12px 0 0; color: var(--rp-muted); font-size: 17px; }
+.dn-pay { display: grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 22px; align-items: center; margin: 20px 0; padding: 18px; border: 1px solid var(--rp-line); border-radius: 18px; background: #F8FBFF; }
+.dn-qr img { width: 100%; max-width: 260px; display: block; border-radius: 14px; background: #fff; padding: 10px; box-shadow: var(--rp-shadow); }
+.dn-pay-side { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.dn-bank { display: flex; flex-direction: column; gap: 3px; font-size: 16px; }
+.dn-bank b { font-size: 18px; }
+.dn-amt { display: flex; flex-direction: column; gap: 6px; font-size: 15px; font-weight: 700; color: var(--rp-muted); width: 100%; max-width: 340px; }
+.dn-amt input { border: 1px solid var(--rp-line); border-radius: 12px; padding: 11px 13px; font: inherit; font-size: 18px; background: #fff; color: var(--rp-ink); }
+.dn-sum { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 6px 0 16px; font-size: 16px; color: var(--rp-muted); }
+.dn-in { color: var(--rp-emerald); }
+.dn-out { color: var(--rp-rose); }
+@media (max-width: 720px) {
+  .dn-pay { grid-template-columns: minmax(0, 1fr); }
+  .dn-qr img { margin: 0 auto; }
+}
 h1, h2, h3 { font-family: "Be Vietnam Pro", sans-serif; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }

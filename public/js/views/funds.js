@@ -81,8 +81,13 @@ function bodyTemplate(f) {
   return `
 <div class="fd-meta muted">
   ${f.kind === 'donation' ? '<span class="badge sale">Công đức</span>' : '<span class="badge">Quỹ chung</span>'}
+  ${f.category ? `<span class="badge">${esc(f.category)}</span>` : ''}
   ${f.status === 'active' ? '' : '<span class="badge cancelled">Đã đóng</span>'}
+  ${f.is_public ? '<span class="badge paid">Công khai</span>' : ''}
+  <span>Phụ trách: ${esc(f.manager_name || 'chưa giao')}</span>
   <span>${f.bank_account ? `TK ${esc(f.bank_account)}${f.bank_name ? ' · ' + esc(f.bank_name) : ''}` : 'Chưa khai tài khoản nhận'}</span>
+  ${f.target_amount ? `<span>Mức đóng dự kiến: ${money(f.target_amount)}</span>` : ''}
+  ${f.end_date ? `<span>Hạn: ${esc(f.end_date)}</span>` : ''}
 </div>
 <div class="stats fd-stats">
   <div class="stat primary"><div class="k">Tồn quỹ</div><div class="v">${money(f.balance)}</div></div>
@@ -94,6 +99,7 @@ function bodyTemplate(f) {
   ${entry ? `<button class="btn primary fd-desk" id="fd-in">+ Thu tiền</button>
   <button class="btn fd-desk" id="fd-out">+ Lập phiếu chi</button>` : ''}
   <button class="btn" id="fd-qr">${icon('card')} QR nhận tiền</button>
+  <button class="btn" id="fd-share">Chia sẻ / nhắc đóng quỹ</button>
   ${entry || can('fund.manage') ? `<details class="fd-menu"><summary class="btn" aria-label="Thao tác khác">Thêm ▾</summary><div>
     ${entry ? '<button class="mi" id="fd-adjust">Lập bút toán điều chỉnh</button>' : ''}
     ${can('fund.manage') ? '<button class="mi" id="fd-edit-fund">Sửa thông tin quỹ</button>' : ''}
@@ -161,6 +167,7 @@ async function render() {
   body.innerHTML = bodyTemplate(f);
   const on = (id, fn) => { const el = $('#' + id); if (el) el.onclick = fn; };
   on('fd-qr', () => openQr(f));
+  on('fd-share', () => openShare(f));
   on('fd-edit-fund', () => { $('.fd-menu').open = false; openFundForm(f); });
   on('fd-adjust', () => { $('.fd-menu').open = false; openEntryForm(f, 'adjust'); });
   for (const id of ['fd-in', 'fd-in-m']) on(id, () => openEntryForm(f, 'in'));
@@ -417,6 +424,45 @@ function printReport(f) {
     </table>`);
 }
 
+/* ---------------- Chia sẻ / nhắc đóng quỹ ---------------- */
+async function openShare(f) {
+  let link;
+  try { link = await api('/api/community/public-link'); } catch (e) { toast(e.message, true); return; }
+  if (!link.enabled) {
+    modal(`<h2>Chia sẻ đợt thu</h2>
+      <p class="muted">Cộng đồng chưa bật trang công khai cho người nộp. Nhờ quản trị nền tảng bật
+        <b>Công khai đợt thu &amp; công đức</b> ở màn Cộng đồng, sau đó thử lại.</p>
+      <div class="modal-actions"><button class="btn primary" id="fd-sh-close">Đóng</button></div>`);
+    $('#fd-sh-close').onclick = closeModal;
+    return;
+  }
+  const url = location.origin + link.url + '#fund-' + f.id;
+  const bits = [`Thông báo thu quỹ "${f.name}"${f.category ? ` (${f.category})` : ''}.`];
+  if (f.target_amount) bits.push(`Mức đóng dự kiến: ${money(f.target_amount)}.`);
+  if (f.end_date) bits.push(`Hạn đóng: ${f.end_date}.`);
+  if (f.bank_account) bits.push(`Chuyển khoản: ${f.bank_account}${f.bank_name ? ' - ' + f.bank_name : ''}${f.account_holder ? ' - ' + f.account_holder : ''}.`);
+  bits.push(`Xem và quét mã tại: ${url}`);
+  const message = bits.join(' ');
+  modal(`<h2>Chia sẻ / nhắc đóng quỹ</h2>
+    <p class="muted fd-form-hint">Sao chép nội dung dưới đây gửi vào nhóm Zalo / loa truyền thanh. Người dân mở link để xem QR và số tiền đã đóng.</p>
+    <label class="fld">Nội dung nhắc<textarea class="field fd-textarea" id="fd-sh-msg" rows="5">${esc(message)}</textarea></label>
+    <label class="fld">Link trang người nộp<input class="field" id="fd-sh-url" readonly value="${esc(url)}"></label>
+    <div class="modal-actions"><button class="btn" id="fd-sh-open">Mở trang</button>
+      <button class="btn primary" id="fd-sh-copy">Sao chép nội dung</button>
+      <button class="btn" id="fd-sh-close">Đóng</button></div>`);
+  $('#fd-sh-close').onclick = closeModal;
+  $('#fd-sh-open').onclick = () => window.open(url, '_blank', 'noopener');
+  $('#fd-sh-copy').onclick = async () => {
+    const text = $('#fd-sh-msg').value;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Đã sao chép nội dung nhắc');
+    } catch {
+      $('#fd-sh-msg').select(); toast('Trình duyệt không cho sao chép, hãy bấm Ctrl+C', true);
+    }
+  };
+}
+
 /* ---------------- QR ---------------- */
 async function openQr(f) {
   modal(`<h2>QR nhận tiền — ${esc(f.name)}</h2>
@@ -456,6 +502,13 @@ async function openFundForm(f) {
       <label class="fld">Loại<select class="field" id="fd-f-kind">
         <option value="general" ${d.kind === 'general' ? 'selected' : ''}>Quỹ chung</option>
         <option value="donation" ${d.kind === 'donation' ? 'selected' : ''}>Công đức (được công khai)</option></select></label>
+      <label class="fld">Loại đợt thu<input class="field" id="fd-f-category" list="fd-cat-list" placeholder="Thôn, Xóm, Đoàn thể…" value="${esc(d.category || '')}">
+        <datalist id="fd-cat-list"><option>Thôn</option><option>Xóm</option><option>Đoàn thể</option><option>Thiện nguyện</option><option>Khác</option></datalist></label>
+      <label class="fld">Mức đóng dự kiến (mỗi hộ)<input class="field fd-amount" id="fd-f-target" inputmode="numeric" autocomplete="off" placeholder="0"
+        value="${d.target_amount ? nf.format(d.target_amount) : ''}"></label>
+      <label class="fld">Bắt đầu<input class="field" id="fd-f-start" type="date" value="${esc(d.start_date || '')}"></label>
+      <label class="fld">Kết thúc<input class="field" id="fd-f-end" type="date" value="${esc(d.end_date || '')}"></label>
+      <label class="chk full"><input type="checkbox" id="fd-f-public" ${d.is_public ? 'checked' : ''}> Công khai trên trang người nộp (ai có link đều xem được khoản thu)</label>
       <label class="fld">Thủ quỹ phụ trách<select class="field" id="fd-f-manager">${tOpts}</select>
         <span class="muted fd-field-hint" id="fd-f-manager-hint"></span></label>
       ${!isNew ? `<label class="fld">Trạng thái<select class="field" id="fd-f-status">
@@ -474,12 +527,16 @@ async function openFundForm(f) {
       ? `Quỹ chưa giao: cả ${treasurers.length} thủ quỹ đều xem và nhập được.` : '';
   };
   $('#fd-f-manager').onchange = hint; hint();
+  bindMoney($('#fd-f-target'));
   $('#fd-f-close').onclick = closeModal;
   $('#fd-f-save').onclick = async () => {
     const bank = bankOf($('#fd-f-bin').value);
     if (bank === undefined) { toast('Chọn ngân hàng trong danh sách gợi ý', true); $('#fd-f-bin').focus(); return; }
     const body = {
       name: $('#fd-f-name').value, kind: $('#fd-f-kind').value, bank_account: $('#fd-f-account').value,
+      category: $('#fd-f-category').value, target_amount: parseMoney($('#fd-f-target').value) || null,
+      is_public: $('#fd-f-public').checked ? 1 : 0,
+      start_date: $('#fd-f-start').value || null, end_date: $('#fd-f-end').value || null,
       bank_bin: bank ? bank[0] : '', bank_name: bank ? bank[1] : '', account_holder: $('#fd-f-holder').value,
       manager_user_id: $('#fd-f-manager').value || null,
     };

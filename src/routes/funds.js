@@ -36,9 +36,14 @@ const log = (req, action, entity, id, detail) => audit({ tenantId: req.user.tena
 // Tồn quỹ = thu − chi ± điều chỉnh, chỉ tính bút toán đã duyệt
 const BALANCE = `COALESCE(SUM(CASE WHEN status='approved' THEN CASE type WHEN 'out' THEN -amount ELSE amount END END),0)`;
 const balanceOf = (fundId) => Number(db.prepare(`SELECT ${BALANCE} b FROM fund_entries WHERE fund_id=?`).get(fundId).b);
+const managerName = (userId) => {
+  if (!userId) return null;
+  const u = control.prepare('SELECT full_name, username FROM users WHERE id=?').get(userId);
+  return u ? (u.full_name || u.username) : null;
+};
 const getFund = (id) => {
   const f = db.prepare('SELECT * FROM funds WHERE id=?').get(Number(id));
-  return f ? { ...f, balance: balanceOf(f.id) } : null;
+  return f ? { ...f, balance: balanceOf(f.id), manager_name: managerName(f.manager_user_id) } : null;
 };
 const getEntry = (id) => db.prepare('SELECT * FROM fund_entries WHERE id=?').get(Number(id));
 
@@ -78,6 +83,11 @@ function fundInput(b, current = {}) {
   const v = {
     name: b.name !== undefined ? str(b.name, 160) : current.name,
     kind: b.kind !== undefined ? b.kind : current.kind || 'general',
+    category: b.category !== undefined ? str(b.category, 80) || null : current.category ?? null,
+    target_amount: b.target_amount !== undefined
+      ? (b.target_amount === '' || b.target_amount === null ? null : int(b.target_amount))
+      : current.target_amount ?? null,
+    is_public: b.is_public !== undefined ? (b.is_public ? 1 : 0) : (current.is_public ?? 0),
     bank_account: b.bank_account !== undefined ? normAccount(str(b.bank_account, 40)) || null : current.bank_account ?? null,
     bank_bin: b.bank_bin !== undefined ? str(b.bank_bin, 20) || null : current.bank_bin ?? null,
     bank_name: b.bank_name !== undefined ? str(b.bank_name, 80) || null : current.bank_name ?? null,
@@ -91,6 +101,9 @@ function fundInput(b, current = {}) {
   if (!v.name) bad('Tên quỹ không được để trống');
   if (!['general', 'donation'].includes(v.kind)) bad('Loại quỹ không hợp lệ');
   if (!['active', 'closed'].includes(v.status)) bad('Trạng thái quỹ không hợp lệ');
+  if (v.target_amount != null && (!Number.isSafeInteger(v.target_amount) || v.target_amount < 0 || v.target_amount > MAX_AMOUNT)) {
+    bad('Mức đóng dự kiến không hợp lệ (tối đa 100 tỷ đồng)');
+  }
   if (v.bank_bin && !/^\d{6}$/.test(v.bank_bin)) bad('Mã ngân hàng không hợp lệ, chọn ngân hàng trong danh sách');
   for (const d of [v.start_date, v.end_date]) if (d && !DAY.test(d)) bad('Ngày không hợp lệ');
   if (v.start_date && v.end_date && v.start_date > v.end_date) bad('Ngày kết thúc phải sau ngày bắt đầu');
@@ -125,7 +138,8 @@ function entryFor(req, id) {
 router.get('/funds', requirePerm('fund.view'), wrap((req, res) => {
   const where = scoped(req) ? 'WHERE ' + SCOPE_SQL : '';
   const args = scoped(req) ? [req.user.id] : [];
-  ok(res, db.prepare(`SELECT f.*, (SELECT ${BALANCE} FROM fund_entries WHERE fund_id=f.id) balance FROM funds f ${where} ORDER BY f.status, f.id`).all(...args));
+  const rows = db.prepare(`SELECT f.*, (SELECT ${BALANCE} FROM fund_entries WHERE fund_id=f.id) balance FROM funds f ${where} ORDER BY f.status, f.id`).all(...args);
+  ok(res, rows.map((f) => ({ ...f, manager_name: managerName(f.manager_user_id) })));
 }));
 
 // Danh sách thủ quỹ để chọn người phụ trách quỹ (người có fund.manage không cần quyền user.manage).
@@ -147,8 +161,8 @@ router.post('/funds', requirePerm('fund.manage'), wrap((req, res) => {
   const v = fundInput(b);
   checkManager(req, v.manager_user_id);
   if (fundAccountTaken(v.bank_account)) bad('Tài khoản nhận của quỹ phải là tài khoản riêng, không trùng cửa hàng hay quỹ khác (BR-02)');
-  const r = db.prepare(`INSERT INTO funds(code,name,kind,bank_account,bank_bin,bank_name,account_holder,manager_user_id,description,start_date,end_date,status,created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code, v.name, v.kind, v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, req.user.id);
+  const r = db.prepare(`INSERT INTO funds(code,name,kind,category,target_amount,is_public,bank_account,bank_bin,bank_name,account_holder,manager_user_id,description,start_date,end_date,status,created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code, v.name, v.kind, v.category, v.target_amount, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, req.user.id);
   const f = getFund(r.lastInsertRowid);
   log(req, 'fund.create', 'fund', f.id, { code, name: v.name });
   ok(res, f);
@@ -165,8 +179,8 @@ router.patch('/funds/:id', requirePerm('fund.manage'), wrap((req, res) => {
     const open = db.prepare("SELECT COUNT(*) n FROM fund_entries WHERE fund_id=? AND status IN ('draft','submitted')").get(cur.id).n;
     if (open) bad(`Còn ${open} khoản nháp hoặc chờ duyệt. Duyệt, từ chối hoặc để người lập xử lý trước khi đóng quỹ`);
   }
-  db.prepare(`UPDATE funds SET name=?,kind=?,bank_account=?,bank_bin=?,bank_name=?,account_holder=?,manager_user_id=?,description=?,start_date=?,end_date=?,status=? WHERE id=?`)
-    .run(v.name, v.kind, v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, cur.id);
+  db.prepare(`UPDATE funds SET name=?,kind=?,category=?,target_amount=?,is_public=?,bank_account=?,bank_bin=?,bank_name=?,account_holder=?,manager_user_id=?,description=?,start_date=?,end_date=?,status=? WHERE id=?`)
+    .run(v.name, v.kind, v.category, v.target_amount, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, cur.id);
   const action = v.status === cur.status ? 'fund.update' : v.status === 'closed' ? 'fund.close' : 'fund.reopen';
   log(req, action, 'fund', cur.id, req.body);
   ok(res, getFund(cur.id));
@@ -485,3 +499,4 @@ module.exports.bookUnclassified = bookUnclassified;
 module.exports.resolveFundByBank = resolveFundByBank;
 module.exports.processFundPayment = processFundPayment;
 module.exports.balanceOf = balanceOf;
+module.exports.fundQr = fundQr;

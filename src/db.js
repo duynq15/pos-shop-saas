@@ -288,6 +288,9 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     code TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','donation')),
+    category TEXT,
+    target_amount INTEGER,
+    is_public INTEGER NOT NULL DEFAULT 0,
     bank_account TEXT,
     bank_bin TEXT,
     bank_name TEXT,
@@ -412,6 +415,10 @@ function ensureSchema(conn, { withDemo = false } = {}) {
       BEGIN SELECT RAISE(ABORT, 'Biên bản đối soát không sửa được (BR-04)'); END;
     CREATE TRIGGER IF NOT EXISTS trg_fund_recon_no_delete BEFORE DELETE ON fund_reconciliations
       BEGIN SELECT RAISE(ABORT, 'Biên bản đối soát không xóa được (BR-04)'); END;`);
+  // Đợt thu: loại quỹ/đợt, mức đóng dự kiến và cờ công khai trên trang người nộp
+  ensureColumn('funds', 'category', 'TEXT');
+  ensureColumn('funds', 'target_amount', 'INTEGER');
+  ensureColumnWithDefault('funds', 'is_public', 'INTEGER NOT NULL DEFAULT 0', '0');
   // GĐ3.1 (FR-08, BR-01): mỗi giao dịch thuộc đúng một loại. Suy ra lúc ghi; không chắc thì 'unclassified' (ERR-03).
   // ADD COLUMN ... DEFAULT gán 'unclassified' cho mọi dòng cũ, nên phải suy loại ngay lúc thêm cột (chỉ chạy một lần):
   // khớp hóa đơn -> sale, tiền ra -> refund, còn lại giữ 'unclassified' chờ phân loại.

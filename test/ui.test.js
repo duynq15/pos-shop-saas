@@ -314,6 +314,9 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('Root sees community card', await root.pg.locator('#pc-card').isVisible());
     const cm = await rapi('/api/platform/communities', { code: 'ui-thon', name: 'Thôn UI', type: 'village', area: 'Xã UI' });
     const qt = await rapi('/api/platform/tenants', { code: 'ui-quy', name: 'Quỹ thôn UI', kind: 'community', community_id: cm.data.id, owner_username: 'uiquy', owner_password: 'uiquy123' });
+    // Hạng mục hàng dùng chung của người bán do Quản trị nền tảng quản lý (không còn trong sổ quỹ)
+    await rapi('/api/platform/communities/' + cm.data.id + '/categories', { name: 'Rau củ' });
+    await rapi('/api/platform/communities/' + cm.data.id + '/categories', { name: 'Đồ uống' });
     // GĐ4: một người bán trong thôn UI, có tài khoản riêng để tạo QR
     await rapi('/api/platform/tenants', { code: 'ui-seller', name: 'Người bán UI', kind: 'seller', community_id: cm.data.id, owner_username: 'uiseller', owner_password: 'uiseller1' });
     await root.pg.reload(); await root.pg.waitForSelector('#pf-body tr[data-id]'); await root.pg.waitForTimeout(500);
@@ -354,9 +357,10 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     const quy = await loginAs('uiquy', 'uiquy123', '.nav-item[data-view]');
     const navs = await quy.pg.locator('.nav-item[data-view]').evaluateAll((els) => els.map((x) => x.dataset.view));
     ok('Community tenant has no POS menu', !['pos', 'products', 'inventory', 'promotions'].some((v) => navs.includes(v)), navs.join(','));
-    ok('Community tenant has community menu', navs.includes('community'));
-    await quy.pg.evaluate(() => window.showView('community')); await quy.pg.waitForTimeout(700);
-    ok('Community summary renders', (await quy.pg.locator('#cm-stats .stat').count()) === 4);
+    ok('Community tenant has no sales/report/community menu', !['invoices', 'reports', 'community'].some((v) => navs.includes(v)), navs.join(','));
+    ok('Community tenant starts on fund book', await quy.pg.evaluate(() => document.querySelector('.view.active')?.id) === 'view-funds');
+    const quyMe = await quy.pg.evaluate(async () => (await (await fetch('/api/auth/me')).json()).data);
+    ok('Community owner label is fund admin', quyMe.user.role_name === 'Quản trị sổ quỹ', quyMe.user.role_name);
     // ---------- Sổ quỹ (GĐ2.8) ----------
     ok('Funds menu present', navs.includes('funds'));
     await quy.pg.evaluate(() => window.showView('funds')); await quy.pg.waitForTimeout(500);
@@ -401,10 +405,8 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.setViewportSize({ width: 400, height: 820 }); await quy.pg.waitForTimeout(300);
     ok('Funds: no horizontal overflow 400px', !(await quy.pg.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
     ok('Funds: mobile action bar visible', await quy.pg.locator('.fd-bar').isVisible());
-    // Trưởng thôn (chủ tenant quỹ) thêm hạng mục cho người bán chọn
-    await quy.pg.evaluate(() => window.showView('community')); await quy.pg.waitForTimeout(600);
-    for (const n of ['Rau củ', 'Đồ uống']) { await quy.pg.fill('#cm-cat-name', n); await quy.pg.click('#cm-cat-form button[type=submit]'); await quy.pg.waitForTimeout(400); }
-    ok('Community categories card adds items', (await quy.pg.locator('#cm-cat-body tr').count()) === 2);
+    const fundCats = await quy.pg.evaluate(async () => (await (await fetch('/api/community/categories')).json()).data);
+    ok('Platform categories available to community sellers', fundCats.length === 2, JSON.stringify(fundCats));
     await quy.c.close();
 
     // ================= GĐ4: Nhận tiền nhanh (người bán, điện thoại) =================

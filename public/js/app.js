@@ -11,7 +11,6 @@ import promotions from './views/promotions.js';
 import usersView from './views/users.js';
 import settings from './views/settings.js';
 import { platformViews } from './views/platform.js';
-import communityView from './views/community.js';
 import fundsView from './views/funds.js';
 import quickpay from './views/quickpay.js';
 import { icon } from './icons.js';
@@ -30,9 +29,9 @@ const VIEWS = [
   { mod: pos, perm: 'pos.sell', kinds: POS_KINDS },
   { mod: products, perm: 'product.view', kinds: POS_KINDS },
   { mod: inventory, perm: 'stock.view', kinds: POS_KINDS },
-  { mod: invoices, perm: 'invoice.view' },
+  { mod: invoices, perm: 'invoice.view', kinds: POS_KINDS },
   {
-    mod: reportOverview, perm: 'report.view',
+    mod: reportOverview, perm: 'report.view', kinds: POS_KINDS,
     subs: [
       { view: 'report-overview', label: 'Tổng quan' },
       { view: 'report-products', label: 'Báo cáo sản phẩm' },
@@ -41,12 +40,11 @@ const VIEWS = [
       { view: 'vietqr', label: 'Giao dịch VietQR' },
     ],
   },
-  { mod: reportProducts, perm: 'report.view', subOnly: true },
-  { mod: reportVat, perm: 'report.view', subOnly: true },
-  { mod: reportAnalytics, perm: 'report.view', subOnly: true },
-  { mod: vietqr, perm: 'report.view', subOnly: true },
+  { mod: reportProducts, perm: 'report.view', kinds: POS_KINDS, subOnly: true },
+  { mod: reportVat, perm: 'report.view', kinds: POS_KINDS, subOnly: true },
+  { mod: reportAnalytics, perm: 'report.view', kinds: POS_KINDS, subOnly: true },
+  { mod: vietqr, perm: 'report.view', kinds: POS_KINDS, subOnly: true },
   { mod: promotions, perm: 'promo.manage', kinds: POS_KINDS },
-  { mod: communityView, perm: 'community.report', kinds: ['community'] },
   { mod: fundsView, perm: 'fund.view', kinds: ['community'] },
   { mod: usersView, perm: 'user.manage' },
   { mod: settings, perm: 'settings.edit' },

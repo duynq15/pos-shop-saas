@@ -481,6 +481,8 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   const cLogin = await (await req('cadm', '/auth/login', { method: 'POST', body: { username: 'quyaadmin', password: '123456' } })).json();
   ok('login payload has tenant kind + community', cLogin.data.tenant.kind === 'community' && cLogin.data.tenant.community_id === com.data.id);
   ok('me has tenant kind', (await (await req('cadm', '/auth/me')).json()).data.tenant.kind === 'community');
+  const cOwner = (await (await req('cadm', '/users')).json()).data.find((u) => u.username === 'quyaadmin');
+  ok('community owner label is fund admin', cOwner && cOwner.role_name === 'Quản trị sổ quỹ', cOwner && cOwner.role_name);
   const cRoles = (await (await req('cadm', '/roles')).json()).data.map((r) => r.code);
   ok('FR-02: community roles list', ['owner', 'treasurer', 'approver', 'community_leader'].every((r) => cRoles.includes(r)) && !cRoles.includes('cashier'));
   const sRoles = (await api('/roles')).data.map((r) => r.code);
@@ -497,8 +499,9 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('SEC-04: treasurer cannot approve', perms.treasurer.includes('fund.entry') && !perms.treasurer.includes('fund.approve'));
   ok('BR-05: approver approves, does not enter', perms.approver.includes('fund.approve') && !perms.approver.includes('fund.entry'));
   ok('BR-11: approver manages categories', perms.approver.includes('community.categories'));
-  ok('BR-09: leader only aggregate + fund view', perms.community_leader.includes('community.report') && perms.community_leader.includes('fund.view')
-    && !['pos.sell', 'report.view', 'fund.entry'].some((p) => perms.community_leader.includes(p)));
+  ok('BR-09: leader sees aggregate + configures fund, not entry/approve', perms.community_leader.includes('community.report')
+    && perms.community_leader.includes('fund.view') && perms.community_leader.includes('fund.manage')
+    && !['pos.sell', 'report.view', 'fund.entry', 'fund.approve'].some((p) => perms.community_leader.includes(p)));
   ok('community role cannot sell', (await (await req('c-community_leader', '/invoices', { method: 'POST', body: { items: [{ name: 'x', price: 1000, qty: 1 }] } })).json()).ok === false);
   const leaderId = (await (await req('cadm', '/users')).json()).data.find((u) => u.username === 'qa-community_leader').id;
   ok('FR-02: cannot switch community user to POS role', !(await (await req('cadm', '/users/' + leaderId, { method: 'PUT', body: { role: 'manager' } })).json()).ok);
@@ -507,6 +510,13 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   const cj = async (who, u, o) => (await req(who, u, o)).json();
   const fund = await cj('c-approver', '/funds', { method: 'POST', body: { code: 'cong-duc', name: 'Quỹ công đức', kind: 'donation', bank_account: 'QUY-A 001' } });
   ok('fund create (account normalised)', fund.ok && fund.data.bank_account === 'QUYA001' && fund.data.balance === 0);
+  const fundMeta = await cj('cadm', '/funds/' + fund.data.id, { method: 'PATCH', body: { category: 'Thôn', target_amount: 200000, is_public: 1, bank_bin: '970422', bank_name: 'MB Bank', account_holder: 'Thôn A' } });
+  ok('fund campaign fields saved', fundMeta.ok && fundMeta.data.category === 'Thôn' && fundMeta.data.target_amount === 200000 && fundMeta.data.is_public === 1, JSON.stringify(fundMeta.data));
+  // Ban lãnh đạo được cấu hình quỹ và tài khoản nhận tiền, nhưng không nhập/duyệt chi
+  const leaderFund = await cj('c-community_leader', '/funds', { method: 'POST', body: { code: 'quy-lanh-dao', name: 'Quỹ Ban lãnh đạo', bank_account: 'QUY-LD 001' } });
+  ok('leader can create fund with bank account', leaderFund.ok && leaderFund.data.bank_account === 'QUYLD001');
+  const leaderEdit = await cj('c-community_leader', '/funds/' + leaderFund.data.id, { method: 'PATCH', body: { category: 'Thôn', target_amount: 100000 } });
+  ok('leader can configure fund campaign', leaderEdit.ok && leaderEdit.data.category === 'Thôn' && leaderEdit.data.target_amount === 100000);
   ok('fund dup account rejected', !(await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-2', name: 'Quỹ 2', bank_account: 'QUYA001' } })).ok);
   ok('fund cannot reuse shop account', !(await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-3', name: 'Quỹ 3', bank_account: 'SELLERA01' } })).ok);
   ok('treasurer cannot create fund', (await req('c-treasurer', '/funds', { method: 'POST', body: { code: 'quy-4', name: 'Quỹ 4' } })).status === 403);
@@ -552,6 +562,17 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('BR-04: no delete route', (await req('cadm', '/fund-entries/' + out.data.id, { method: 'DELETE' })).status === 404);
   const list = await cj('c-community_leader', '/funds/' + fid + '/entries?type=out&status=approved');
   ok('entries filter', list.ok && list.data.entries.length === 1 && list.data.entries[0].id === out.data.id);
+  // Trang người nộp: chỉ mở khi nền tảng bật công khai; hiện QR + số tiền tuỳ chọn
+  ok('public link hidden before platform enables', (await cj('cadm', '/community/public-link')).data.enabled === false);
+  const pubCom = await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: true } } });
+  ok('community public donations enabled', pubCom.ok && pubCom.data.settings.public_donations && /^\/congduc\/[a-f0-9]+$/.test(pubCom.data.donations_url || ''));
+  ok('public link exposed to fund account after enabling', (await cj('cadm', '/community/public-link')).data.url === pubCom.data.donations_url);
+  const donTok = (pubCom.data.donations_url || '').split('/').pop();
+  const pubFunds = await (await fetch(ROOT + '/public/api/donations/' + donTok)).json();
+  const pubProg = pubFunds.ok && pubFunds.data.programs.find((p) => p.id === fid);
+  ok('public payer page lists campaign with QR + totals', !!pubProg && !!pubProg.qrDataUrl && pubProg.total === 600000 && pubProg.balance === 350000, JSON.stringify(pubProg && { total: pubProg.total, balance: pubProg.balance }));
+  const pubQr = await (await fetch(ROOT + '/public/api/donations/' + donTok + '/funds/' + fid + '/qr?amount=150000')).json();
+  ok('public payer page creates QR with amount', pubQr.ok && pubQr.data.amount === 150000 && !!pubQr.data.qrDataUrl);
 
   // ---------- API cho Làng Số (SKHGDT-3532) ----------
   ok('lang-so: preflight CORS', await ls('/stats?thon=thon-a', null, { method: 'OPTIONS' }).then((r) => r.status === 204 && r.headers.get('access-control-allow-headers') === 'Authorization'));

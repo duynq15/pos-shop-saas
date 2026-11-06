@@ -70,7 +70,7 @@ router.delete('/users/:id', requirePerm('user.manage'), wrap((req, res) => {
   const u = control.prepare('SELECT * FROM users WHERE id=? AND tenant_id=?').get(id, req.user.tenant_id);
   if (!u) return fail(res, 'Không tìm thấy người dùng', 404);
   if (u.role === 'owner' && control.prepare("SELECT COUNT(*) c FROM users WHERE tenant_id=? AND role='owner' AND active=1").get(req.user.tenant_id).c <= 1) {
-    return fail(res, 'Phải còn ít nhất một chủ cửa hàng');
+    return fail(res, tenantKind(req) === 'community' ? 'Phải còn ít nhất một quản trị sổ quỹ' : 'Phải còn ít nhất một chủ cửa hàng');
   }
   control.prepare('UPDATE users SET active=0 WHERE id=?').run(id);
   audit({ tenantId: req.user.tenant_id, userId: req.user.id, username: req.user.username, action: 'user.disable', entity: 'user', entityId: id, ip: req.ip });
