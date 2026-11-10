@@ -90,12 +90,20 @@ function renderChips() {
 }
 
 function bodyTemplate(f) {
-  const entry = can('fund.entry') && f.status === 'active';
+  const active = f.status === 'active';
+  const entry = can('fund.entry') && active;
+  const manage = can('fund.manage');
+  const overdue = active && f.end_date && f.end_date < today();
   return `
+${overdue ? `<div class="card fd-overdue">Đợt này đã quá hạn (${esc(f.end_date)}) nhưng chưa kết thúc.
+  ${manage ? '<button class="btn sm primary" id="fd-close-2">Kết thúc đợt</button>' : 'Nhờ người quản lý quỹ kết thúc đợt.'}</div>` : ''}
+${active ? '' : `<div class="card fd-closed"><b>Đợt đã kết thúc</b> ${esc((f.closed_at || '').slice(0, 10))}${f.closed_by_name ? ' · ' + esc(f.closed_by_name) : ''}
+  ${f.close_note ? `<p>${esc(f.close_note)}</p>` : ''}
+  ${manage ? '<button class="btn sm" id="fd-reopen">Mở lại đợt</button>' : ''}</div>`}
 <div class="fd-meta muted">
   <span class="badge ${f.kind === 'donation' ? 'sale' : ''}">${esc(f.fund_type || (f.kind === 'donation' ? 'Công đức' : 'Quỹ chung'))}</span>
   ${f.category ? `<span class="badge">${esc(f.category)}</span>` : ''}
-  ${f.status === 'active' ? '' : '<span class="badge cancelled">Đã đóng</span>'}
+  ${active ? '' : '<span class="badge cancelled">Đã kết thúc</span>'}
   ${f.is_public ? '<span class="badge paid">Công khai</span>' : ''}
   <span>Phụ trách: ${esc(f.manager_name || 'chưa giao')}</span>
   <span>${f.bank_account ? `TK ${esc(f.bank_account)}${f.bank_name ? ' · ' + esc(f.bank_name) : ''}` : 'Chưa khai tài khoản nhận'}</span>
@@ -111,12 +119,13 @@ function bodyTemplate(f) {
 <div class="toolbar fd-actions">
   ${entry ? `<button class="btn primary fd-desk" id="fd-in">+ Thu tiền</button>
   <button class="btn fd-desk" id="fd-out">+ Lập phiếu chi</button>` : ''}
-  <button class="btn" id="fd-qr">${icon('card')} QR nhận tiền</button>
-  <button class="btn" id="fd-share">Chia sẻ / nhắc đóng quỹ</button>
-  ${entry || can('fund.manage') ? `<details class="fd-menu"><summary class="btn" aria-label="Thao tác khác">Thêm ▾</summary><div>
+  ${active ? `<button class="btn" id="fd-qr">${icon('card')} QR nhận tiền</button>
+  <button class="btn" id="fd-share">Chia sẻ / nhắc đóng quỹ</button>` : ''}
+  ${entry || manage ? `<details class="fd-menu"><summary class="btn" aria-label="Thao tác khác">Thêm ▾</summary><div>
     ${entry ? '<button class="mi" id="fd-import">Nhập khoản thu từ Excel</button>' : ''}
     ${entry ? '<button class="mi" id="fd-adjust">Lập bút toán điều chỉnh</button>' : ''}
-    ${can('fund.manage') ? '<button class="mi" id="fd-edit-fund">Sửa thông tin quỹ</button>' : ''}
+    ${manage ? '<button class="mi" id="fd-edit-fund">Sửa thông tin quỹ</button>' : ''}
+    ${manage && active ? '<button class="mi" id="fd-close">Kết thúc đợt kêu gọi</button>' : ''}
   </div></details>` : ''}
 </div>
 <div class="tabs" id="fd-subtabs">
@@ -185,6 +194,9 @@ async function render() {
   on('fd-edit-fund', () => { $('.fd-menu').open = false; openFundForm(f); });
   on('fd-adjust', () => { $('.fd-menu').open = false; openEntryForm(f, 'adjust'); });
   on('fd-import', () => { $('.fd-menu').open = false; openImport(f); });
+  on('fd-close', () => { $('.fd-menu').open = false; openClose(f); });
+  on('fd-close-2', () => openClose(f));
+  on('fd-reopen', () => reopenFund(f));
   for (const id of ['fd-in', 'fd-in-m']) on(id, () => openEntryForm(f, 'in'));
   for (const id of ['fd-out', 'fd-out-m']) on(id, () => openEntryForm(f, 'out'));
   $('#fd-subtabs').onclick = (e) => { const b = e.target.closest('[data-tab]'); if (b) showTab(b.dataset.tab, f); };
@@ -478,6 +490,43 @@ async function openShare(f) {
   };
 }
 
+/* ---------------- Kết thúc đợt kêu gọi ---------------- */
+// Xem tổng kết rồi đóng. Còn phiếu nháp / chờ duyệt thì chưa đóng được.
+async function openClose(f) {
+  let s;
+  try { s = await api(`/api/funds/${f.id}/summary`); } catch (e) { toast(e.message, true); return; }
+  const row = (k, v) => `<div><span class="muted">${k}</span><b>${v}</b></div>`;
+  modal(`<h2>Kết thúc đợt — ${esc(f.name)}</h2>
+    <div class="fd-recon-row fd-sum">
+      ${row('Đã thu', money(s.total_in))}${row('Đã chi', money(s.total_out))}${row('Còn lại', money(s.balance))}
+      ${row('Lượt đóng góp', nf.format(s.donors))}${s.progress != null ? row('Đạt mục tiêu', s.progress + '%') : ''}
+    </div>
+    ${s.pending ? `<p class="low">Còn ${s.pending} phiếu nháp hoặc chờ duyệt. Xử lý xong ở "Việc cần làm" rồi mới kết thúc được.</p>` : ''}
+    <p class="muted fd-form-hint">Sau khi kết thúc: không thu, không chi, không tạo QR cho đợt này nữa. Tiền chuyển vào tài khoản sau đó nằm ở mục chưa phân loại.
+      Số dư còn lại muốn chuyển sang quỹ khác thì lập phiếu chi trước khi kết thúc.</p>
+    <label class="fld">Kết quả / quyết toán<textarea class="field fd-textarea" id="fd-cl-note" rows="3" placeholder="Ví dụ: Đã hoàn thành tu sửa mái đình. Số dư chuyển vào quỹ chung."></textarea></label>
+    ${f.is_public ? '<label class="chk fd-chk"><input type="checkbox" id="fd-cl-public" checked> Công khai tổng kết trên trang người dân</label>' : ''}
+    <div class="modal-actions"><button class="btn" id="fd-cl-cancel">Hủy</button>
+      <button class="btn danger" id="fd-cl-save" ${s.pending ? 'disabled' : ''}>Kết thúc đợt</button></div>`, { focus: '#fd-cl-note' });
+  $('#fd-cl-cancel').onclick = closeModal;
+  $('#fd-cl-save').onclick = async () => {
+    const body = { close_note: $('#fd-cl-note').value, result_public: $('#fd-cl-public') ? $('#fd-cl-public').checked : false };
+    try {
+      await api(`/api/funds/${f.id}/close`, { method: 'POST', body });
+      toast('Đã kết thúc đợt ' + f.name); closeModal(); await loadFunds();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+async function reopenFund(f) {
+  const reason = prompt(`Mở lại đợt "${f.name}"? Ghi lý do (lưu vào nhật ký):`);
+  if (reason === null) return;
+  try {
+    await api(`/api/funds/${f.id}/reopen`, { method: 'POST', body: { reason } });
+    toast('Đã mở lại đợt'); await loadFunds();
+  } catch (e) { toast(e.message, true); }
+}
+
 /* ---------------- Nhập khoản thu từ Excel / CSV ---------------- */
 // Kiểm file trước (dry), báo lỗi từng dòng; chỉ ghi sổ khi cả file hợp lệ.
 function openImport(f) {
@@ -567,10 +616,6 @@ async function openFundForm(f) {
       <label class="chk full"><input type="checkbox" id="fd-f-public" ${d.is_public ? 'checked' : ''}> Công khai trên trang người nộp (ai có link đều xem được khoản thu)</label>
       <label class="fld">Thủ quỹ phụ trách<select class="field" id="fd-f-manager">${tOpts}</select>
         <span class="muted fd-field-hint" id="fd-f-manager-hint"></span></label>
-      ${!isNew ? `<label class="fld">Trạng thái<select class="field" id="fd-f-status">
-        <option value="active" ${d.status === 'active' ? 'selected' : ''}>Đang hoạt động</option>
-        <option value="closed" ${d.status === 'closed' ? 'selected' : ''}>Đã đóng (quyết toán xong)</option></select>
-        <span class="muted fd-field-hint">Đóng khi đã xử lý hết khoản nháp / chờ duyệt. Sau khi đóng không nhập, duyệt hay sửa được nữa.</span></label>` : ''}
       <div class="full fd-section">Tài khoản nhận tiền (riêng của quỹ)</div>
       <label class="fld">Số tài khoản<input class="field" id="fd-f-account" inputmode="numeric" value="${esc(d.bank_account || '')}"></label>
       <label class="fld">Ngân hàng${bankField('fd-f-bin', d.bank_bin, d.bank_name)}</label>
@@ -603,7 +648,6 @@ async function openFundForm(f) {
       bank_bin: bank ? bank[0] : '', bank_name: bank ? bank[1] : '', account_holder: $('#fd-f-holder').value,
       manager_user_id: $('#fd-f-manager').value || null,
     };
-    if (!isNew) body.status = $('#fd-f-status').value;
     try {
       const saved = await api(isNew ? '/api/funds' : `/api/funds/${f.id}`, { method: isNew ? 'POST' : 'PATCH', body });
       toast('Đã lưu quỹ'); closeModal();

@@ -425,6 +425,11 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     conn.exec("UPDATE funds SET fund_type = CASE kind WHEN 'donation' THEN 'Công đức' ELSE 'Quỹ chung' END, is_public = CASE kind WHEN 'donation' THEN 1 ELSE is_public END");
   }
   ensureColumn('funds', 'contribution', "TEXT DEFAULT 'household'");
+  // Kết thúc đợt kêu gọi: ai đóng, khi nào, kết quả / quyết toán; result_public = vẫn hiện tổng kết trên trang người dân
+  ensureColumn('funds', 'closed_at', 'TEXT');
+  ensureColumn('funds', 'closed_by_name', 'TEXT');
+  ensureColumn('funds', 'close_note', 'TEXT');
+  ensureColumn('funds', 'result_public', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumnWithDefault('funds', 'is_public', 'INTEGER NOT NULL DEFAULT 0', '0');
   // GĐ3.1 (FR-08, BR-01): mỗi giao dịch thuộc đúng một loại. Suy ra lúc ghi; không chắc thì 'unclassified' (ERR-03).
   // ADD COLUMN ... DEFAULT gán 'unclassified' cho mọi dòng cũ, nên phải suy loại ngay lúc thêm cột (chỉ chạy một lần):

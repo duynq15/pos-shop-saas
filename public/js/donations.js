@@ -41,13 +41,16 @@ function programCard(p) {
     p.start_date || p.end_date ? `<span class="rp-hint">${esc(p.start_date || '…')} → ${esc(p.end_date || '…')}</span>` : '',
     p.contribution === 'voluntary' ? '<span class="rp-hint">Đóng góp tùy tâm</span>'
       : p.target_amount ? `<span class="rp-hint">${CONTRIB[p.contribution] || CONTRIB.household}: <b>${money(p.target_amount)}</b></span>` : '',
+    p.progress != null ? `<span class="rp-hint">Đạt <b>${p.progress}%</b> mục tiêu</span>` : '',
   ].filter(Boolean).join(' ');
+  const closed = p.status === 'closed';
   return `<div class="rp-card" id="fund-${p.id}">
-    <div class="rp-card-head"><div><h2>${esc(p.name)}</h2><div class="dn-facts">${facts}</div></div>
+    <div class="rp-card-head"><div><h2>${esc(p.name)}</h2><div class="dn-facts">${closed ? `<span class="dn-chip">Đã kết thúc ${esc((p.closed_at || '').slice(0, 10))}</span> ` : ''}${facts}</div></div>
       <div class="rp-hint">Đã thu: <b>${money(p.total)}</b></div></div>
     ${p.description ? `<p class="dn-desc">${esc(p.description)}</p>` : ''}
-    ${qrBlock(p)}
+    ${closed ? (p.close_note ? `<p class="dn-desc"><b>Kết quả:</b> ${esc(p.close_note)}</p>` : '') : qrBlock(p)}
     <div class="dn-sum">
+      <span>${nf.format(p.donors || 0)} lượt đóng góp</span>
       <span>Đã thu <b class="dn-in">${money(p.total)}</b></span>
       <span>Đã chi <b class="dn-out">${money(p.spent)}</b></span>
       <span>Còn lại <b>${money(p.balance)}</b></span>
@@ -91,9 +94,10 @@ function bindQr(programs) {
     $('#dn-title').textContent = data.community_name;
     document.title = `Đợt thu & công đức — ${data.community_name}`;
     $('#dn-loading').remove();
-    $('#dn-programs').innerHTML = data.programs.length
-      ? data.programs.map(programCard).join('')
-      : '<div class="rp-empty">Chưa có đợt thu nào được công khai</div>';
+    const open = data.programs.filter((p) => p.status !== 'closed');
+    const done = data.programs.filter((p) => p.status === 'closed');
+    $('#dn-programs').innerHTML = (open.length ? open.map(programCard).join('') : '<div class="rp-empty">Hiện chưa có đợt thu nào đang kêu gọi</div>')
+      + (done.length ? `<h2 class="dn-done-title">Các đợt đã kết thúc</h2>${done.map(programCard).join('')}` : '');
     bindQr(data.programs);
   } catch (e) {
     $('#dn-loading').textContent = e.message;

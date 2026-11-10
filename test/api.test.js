@@ -743,6 +743,32 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'active' } });
   ok('reopen allowed', (await cj('c-treasurer', '/funds/' + fid)).data.status === 'active');
 
+  // ---------- Kết thúc đợt kêu gọi (SKHGDT-3643) ----------
+  const callSum = await cj('c-treasurer', '/funds/' + fid + '/summary');
+  ok('summary totals', callSum.ok && callSum.data.total_in === 600000 && callSum.data.balance === 350000 && callSum.data.donors === 2 && callSum.data.pending === 0, JSON.stringify(callSum.data));
+  ok('treasurer cannot end a call', (await req('c-treasurer', '/funds/' + fid + '/close', { method: 'POST', body: {} })).status === 403);
+  const pendingOut = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, note: 'dở', attachment: receipt } });
+  ok('end blocked while entries open', !(await cj('c-approver', '/funds/' + fid + '/close', { method: 'POST', body: {} })).ok
+    && (await cj('c-approver', '/funds/' + fid + '/summary')).data.pending === 1);
+  await cj('c-treasurer', '/fund-entries/' + pendingOut.data.id + '/submit', { method: 'POST' });
+  await cj('c-approver', '/fund-entries/' + pendingOut.data.id + '/reject', { method: 'POST', body: { reason: 'kết thúc đợt' } });
+  const ended = await cj('c-approver', '/funds/' + fid + '/close', { method: 'POST', body: { close_note: 'Đã tu sửa xong mái đình', result_public: true } });
+  ok('end call stores who, when, result', ended.ok && ended.data.status === 'closed' && ended.data.close_note === 'Đã tu sửa xong mái đình'
+    && ended.data.closed_by_name === 'qa-approver' && !!ended.data.closed_at, JSON.stringify(ended.data));
+  ok('cannot end twice', !(await cj('c-approver', '/funds/' + fid + '/close', { method: 'POST', body: {} })).ok);
+  ok('ended call: no QR with amount', !(await cj('c-treasurer', '/funds/' + fid + '/qr', { method: 'POST', body: { amount: 1000 } })).ok);
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: true } } });
+  const pubEnded = (await (await fetch(ROOT + '/public/api/donations/' + donTok)).json()).data.programs.find((p) => p.id === fid);
+  ok('public shows ended call with result, no QR, no bank account', pubEnded && pubEnded.status === 'closed' && pubEnded.close_note === 'Đã tu sửa xong mái đình'
+    && pubEnded.qrDataUrl === null && pubEnded.bank_account === null && pubEnded.total === 600000, JSON.stringify(pubEnded && { ...pubEnded, entries: undefined }));
+  ok('public QR refused for ended call', (await fetch(ROOT + '/public/api/donations/' + donTok + '/funds/' + fid + '/qr')).status === 404);
+  const reopened = await cj('c-approver', '/funds/' + fid + '/reopen', { method: 'POST', body: { reason: 'Thu thêm' } });
+  ok('reopen clears close info', reopened.ok && reopened.data.status === 'active' && reopened.data.closed_at === null && reopened.data.close_note === null);
+  await cj('c-approver', '/funds/' + fid + '/close', { method: 'POST', body: { result_public: false } });
+  ok('ended call hidden when result not public', !(await (await fetch(ROOT + '/public/api/donations/' + donTok)).json()).data.programs.some((p) => p.id === fid));
+  await cj('c-approver', '/funds/' + fid + '/reopen', { method: 'POST', body: {} });
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: false } } });
+
   // ---------- Ca biên và tấn công thử (rà soát GĐ1–2) ----------
   ok('amount over 100 billion rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1e20 } })).ok);
   const badJson = await fetch(B + '/funds/' + fid + '/entries', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: jars['c-treasurer'] }, body: '{bad json' });

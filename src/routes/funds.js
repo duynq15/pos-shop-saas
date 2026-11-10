@@ -8,7 +8,7 @@ const path = require('path');
 const express = require('express');
 const db = require('../db');
 const { control, audit } = require('../control');
-const { ok, fail, wrap, bad, int, str, round, today } = require('../lib/util');
+const { ok, fail, wrap, bad, int, str, bool, round, today } = require('../lib/util');
 const { makeCode } = require('../lib/codes');
 const { normAccount, bankAccountOf, fundByAccount } = require('../lib/community');
 const { requirePerm, can } = require('../middleware');
@@ -196,19 +196,69 @@ router.post('/funds', requirePerm('fund.manage'), wrap((req, res) => {
   ok(res, f);
 }));
 
+/* ===================== Kết thúc đợt kêu gọi ===================== */
+// Đóng quỹ = quyết toán xong: phải xử lý hết khoản nháp / chờ duyệt trước, để số liệu sau khi đóng không đổi nữa.
+// Sau khi đóng: không ghi sổ, không tạo QR; tiền chuyển vào sau đó nằm ở mục chưa phân loại (processFundPayment).
+function assertClosable(fundId) {
+  const open = db.prepare("SELECT COUNT(*) n FROM fund_entries WHERE fund_id=? AND status IN ('draft','submitted')").get(fundId).n;
+  if (open) bad(`Còn ${open} khoản nháp hoặc chờ duyệt. Duyệt, từ chối hoặc để người lập xử lý trước khi kết thúc đợt`);
+}
+function stampClose(req, fundId, status, b) {
+  if (status === 'closed') {
+    db.prepare("UPDATE funds SET closed_at=datetime('now','localtime'), closed_by_name=?, close_note=?, result_public=? WHERE id=?")
+      .run(req.user.full_name || req.user.username, str(b.close_note, 1000) || null, b.result_public === undefined ? 1 : bool(b.result_public), fundId);
+  } else db.prepare('UPDATE funds SET closed_at=NULL, closed_by_name=NULL, close_note=NULL WHERE id=?').run(fundId);
+}
+// Tổng kết đợt: số liệu để xem trước khi đóng và để công khai sau khi đóng
+function fundSummary(f) {
+  const s = db.prepare(`SELECT COUNT(CASE WHEN type='in' THEN 1 END) donors,
+      COALESCE(SUM(CASE WHEN type='in' THEN amount END),0) total_in, COALESCE(SUM(CASE WHEN type='out' THEN amount END),0) total_out,
+      COALESCE(SUM(CASE WHEN type='adjust' THEN amount END),0) adjust
+    FROM fund_entries WHERE fund_id=? AND status='approved'`).get(f.id);
+  const pending = db.prepare("SELECT COUNT(*) n FROM fund_entries WHERE fund_id=? AND status IN ('draft','submitted')").get(f.id).n;
+  const balance = s.total_in - s.total_out + s.adjust;
+  // % chỉ có nghĩa với mục tiêu huy động (tổng); mức theo hộ / người không biết số hộ nên không tính
+  const progress = f.contribution === 'goal' && f.target_amount ? Math.round((s.total_in / f.target_amount) * 100) : null;
+  return { donors: s.donors, total_in: s.total_in, total_out: s.total_out, adjust: s.adjust, balance, pending, progress };
+}
+
+router.get('/funds/:id/summary', requirePerm('fund.view'), wrap((req, res) => {
+  const f = fundFor(req, req.params.id);
+  if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
+  ok(res, fundSummary(f));
+}));
+
+router.post('/funds/:id/close', requirePerm('fund.manage'), wrap((req, res) => {
+  const f = fundFor(req, req.params.id);
+  if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
+  if (f.status === 'closed') bad('Đợt này đã kết thúc');
+  assertClosable(f.id);
+  db.prepare("UPDATE funds SET status='closed' WHERE id=?").run(f.id);
+  stampClose(req, f.id, 'closed', req.body || {});
+  log(req, 'fund.close', 'fund', f.id, { ...fundSummary(f), close_note: (req.body || {}).close_note });
+  ok(res, getFund(f.id));
+}));
+
+router.post('/funds/:id/reopen', requirePerm('fund.manage'), wrap((req, res) => {
+  const f = fundFor(req, req.params.id);
+  if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
+  if (f.status !== 'closed') bad('Đợt này đang hoạt động');
+  db.prepare("UPDATE funds SET status='active' WHERE id=?").run(f.id);
+  stampClose(req, f.id, 'active');
+  log(req, 'fund.reopen', 'fund', f.id, { reason: str((req.body || {}).reason, 500) || null });
+  ok(res, getFund(f.id));
+}));
+
 router.patch('/funds/:id', requirePerm('fund.manage'), wrap((req, res) => {
   const cur = fundFor(req, req.params.id);
   if (!cur) return fail(res, 'Không tìm thấy quỹ', 404);
   const v = fundInput(req.body || {}, cur);
   checkManager(req, v.manager_user_id);
   if (v.bank_account !== cur.bank_account && fundAccountTaken(v.bank_account, cur.id)) bad('Tài khoản nhận của quỹ phải là tài khoản riêng, không trùng cửa hàng hay quỹ khác (BR-02)');
-  // Đóng quỹ = quyết toán xong: phải xử lý hết khoản nháp / chờ duyệt trước, để số liệu sau khi đóng không đổi nữa
-  if (v.status === 'closed' && cur.status !== 'closed') {
-    const open = db.prepare("SELECT COUNT(*) n FROM fund_entries WHERE fund_id=? AND status IN ('draft','submitted')").get(cur.id).n;
-    if (open) bad(`Còn ${open} khoản nháp hoặc chờ duyệt. Duyệt, từ chối hoặc để người lập xử lý trước khi đóng quỹ`);
-  }
+  if (v.status === 'closed' && cur.status !== 'closed') assertClosable(cur.id);
   db.prepare(`UPDATE funds SET name=?,kind=?,category=?,fund_type=?,contribution=?,target_amount=?,is_public=?,bank_account=?,bank_bin=?,bank_name=?,account_holder=?,manager_user_id=?,description=?,start_date=?,end_date=?,status=? WHERE id=?`)
     .run(v.name, v.kind, v.category, v.fund_type, v.contribution, v.target_amount, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, cur.id);
+  if (v.status !== cur.status) stampClose(req, cur.id, v.status, {});
   const action = v.status === cur.status ? 'fund.update' : v.status === 'closed' ? 'fund.close' : 'fund.reopen';
   log(req, action, 'fund', cur.id, req.body);
   ok(res, getFund(cur.id));
@@ -621,3 +671,4 @@ module.exports.resolveFundByBank = resolveFundByBank;
 module.exports.processFundPayment = processFundPayment;
 module.exports.balanceOf = balanceOf;
 module.exports.fundQr = fundQr;
+module.exports.fundSummary = fundSummary;

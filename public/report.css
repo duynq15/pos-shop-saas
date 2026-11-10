@@ -356,6 +356,7 @@ main.rp-wrap > section:last-of-type { margin-bottom: 0; }
 .dn-facts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 8px; }
 .dn-chip { background: #E5EEFC; border: 1px solid #C7D7F5; color: #1D4ED8; border-radius: 999px; padding: 4px 12px; font-weight: 700; font-size: 15px; }
 .dn-desc { margin: 12px 0 0; color: var(--rp-muted); font-size: 17px; }
+.dn-done-title { margin: 28px 0 12px; font-size: 20px; color: var(--rp-muted); }
 .dn-pay { display: grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); gap: 22px; align-items: center; margin: 20px 0; padding: 18px; border: 1px solid var(--rp-line); border-radius: 18px; background: #F8FBFF; }
 .dn-qr img { width: 100%; max-width: 260px; display: block; border-radius: 14px; background: #fff; padding: 10px; box-shadow: var(--rp-shadow); }
 .dn-pay-side { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }

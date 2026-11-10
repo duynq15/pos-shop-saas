@@ -427,6 +427,11 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.locator('#fd-new-fund').click(); await quy.pg.waitForTimeout(400);
     ok('Fund scope lists groups from settings', (await quy.pg.locator('#fd-f-category option').allInnerTexts()).join('|') === 'Cả thôn|Xóm 1|Hội Phụ nữ');
     await quy.pg.locator('#fd-f-close').click();
+    // Kết thúc đợt: còn phiếu nháp "Mua nước" nên nút bị khóa
+    await quy.pg.locator('.fd-menu summary').click(); await quy.pg.locator('#fd-close').click(); await quy.pg.waitForTimeout(500);
+    ok('End-call modal shows summary, blocked by open draft', (await quy.pg.locator('.fd-sum').innerText()).includes('50.000')
+      && await quy.pg.locator('#fd-cl-save').isDisabled());
+    await quy.pg.locator('#fd-cl-cancel').click();
     await quy.c.close();
 
     // ================= GĐ4: Nhận tiền nhanh (người bán, điện thoại) =================

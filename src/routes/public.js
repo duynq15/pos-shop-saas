@@ -18,7 +18,7 @@ const db = require('../db');
 const { ok, wrap, str } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
 const { renderPdf, available } = require('../lib/pdf');
-const { fundQr } = require('./funds');
+const { fundQr, fundSummary } = require('./funds');
 
 const router = express.Router(); // mount tại /public/api
 // API công khai, chỉ đọc: App / Web người dân gọi thẳng từ trình duyệt (docs/API-SO-QUY.md)
@@ -311,10 +311,12 @@ function publicCommunity(token) {
   return c && communitySettings(c.settings).public_donations ? c : null;
 }
 const communityTenant = (communityId) => control.prepare("SELECT code FROM tenants WHERE community_id=? AND kind='community'").get(communityId);
-const PUBLIC_FUND_SELECT = `SELECT id,code,name,kind,category,fund_type,contribution,description,start_date,end_date,target_amount,is_public,
-  bank_account,bank_bin,bank_name,account_holder FROM funds
-  WHERE status='active' AND is_public=1`;
-const publicFundSql = `${PUBLIC_FUND_SELECT} ORDER BY id`;
+const PUBLIC_COLS = `id,code,name,kind,category,fund_type,contribution,description,start_date,end_date,target_amount,is_public,status,
+  closed_at,close_note,bank_account,bank_bin,bank_name,account_holder`;
+// QR chỉ cho đợt đang thu; đợt đã kết thúc vẫn hiện (không QR) nếu chọn công khai kết quả
+const PUBLIC_FUND_SELECT = `SELECT ${PUBLIC_COLS} FROM funds WHERE status='active' AND is_public=1`;
+const publicFundSql = `SELECT ${PUBLIC_COLS} FROM funds WHERE is_public=1 AND (status='active' OR result_public=1)
+  ORDER BY status='closed', CASE WHEN status='closed' THEN closed_at END DESC, id`;
 
 async function donationsData(token) {
   const c = publicCommunity(token);
@@ -327,17 +329,18 @@ async function donationsData(token) {
     for (const f of funds) {
       const entries = db.prepare(`SELECT type, payer_name, anonymous, amount, note, created_at FROM fund_entries
         WHERE fund_id=? AND status='approved' ORDER BY created_at DESC, id DESC LIMIT 300`).all(f.id);
+      const active = f.status === 'active';
       let qr = null;
-      try { qr = await fundQr(f); } catch { qr = null; }
-      const totalIn = entries.filter((e) => e.type === 'in').reduce((s, e) => s + e.amount, 0);
-      const totalOut = entries.filter((e) => e.type === 'out').reduce((s, e) => s + e.amount, 0);
-      const totalAdjust = entries.filter((e) => e.type === 'adjust').reduce((s, e) => s + e.amount, 0);
+      if (active) try { qr = await fundQr(f); } catch { qr = null; }
+      // Tổng tính trên toàn bộ bút toán, không chỉ 300 dòng hiển thị
+      const sum = fundSummary(f);
       out.push({
         id: f.id, name: f.name, kind: f.kind, fund_type: f.fund_type, contribution: f.contribution, category: f.category, description: f.description,
         start_date: f.start_date, end_date: f.end_date, target_amount: f.target_amount,
-        bank_account: f.bank_account, bank_name: f.bank_name, account_holder: f.account_holder,
+        status: f.status, closed_at: f.closed_at || null, close_note: active ? null : f.close_note || null,
+        bank_account: active ? f.bank_account : null, bank_name: active ? f.bank_name : null, account_holder: active ? f.account_holder : null,
         qrDataUrl: qr ? qr.qrDataUrl : null,
-        total: totalIn, spent: totalOut, balance: totalIn - totalOut + totalAdjust,
+        total: sum.total_in, spent: sum.total_out, balance: sum.balance, donors: sum.donors, progress: sum.progress,
         entries: entries.map((e) => ({
           type: e.type,
           name: e.anonymous ? null : (e.payer_name || null),

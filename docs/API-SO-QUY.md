@@ -22,7 +22,7 @@ Có hai nhóm API:
 1. Quản trị nền tảng bật **Công khai đợt thu & công đức** cho thôn (màn Cộng đồng).
 2. Trong sổ quỹ, bấm **Chia sẻ / nhắc đóng quỹ**. Link có dạng `https://<máy chủ>/congduc/<TOKEN>`. Phần `<TOKEN>` là mã dùng cho API.
 
-Chỉ những quỹ đang hoạt động và được đánh dấu **Công khai trên trang người nộp** mới xuất hiện trong API công khai.
+Chỉ những quỹ được đánh dấu **Công khai trên trang người nộp** mới xuất hiện trong API công khai: đợt đang thu, và đợt đã kết thúc nếu ban quản lý chọn công khai tổng kết (`status: "closed"`, không có QR và tài khoản nhận).
 Nếu thôn tắt công khai, mọi API dưới đây trả về `404`.
 
 API công khai cho phép gọi từ trình duyệt ở tên miền khác (CORS `Access-Control-Allow-Origin: *`) và chỉ cho đọc.
@@ -81,8 +81,12 @@ Ví dụ trả về:
 | `contribution` | Cách đóng: `household` theo hộ, `person` theo nhân khẩu, `voluntary` tùy tâm, `goal` huy động theo mục tiêu |
 | `target_amount` | Mức đóng mỗi hộ (`household`), mỗi người (`person`) hoặc tổng mục tiêu (`goal`). `null` khi tùy tâm |
 | `start_date`, `end_date` | Thời gian thu (có thể `null`) |
-| `bank_account`, `bank_name`, `account_holder` | Tài khoản nhận tiền riêng của quỹ |
-| `qrDataUrl` | Ảnh mã QR chuyển khoản (người nộp tự nhập số tiền), dạng data URL PNG, dùng thẳng trong `<img src>`. `null` nếu quỹ chưa khai tài khoản |
+| `status` | `active` đang kêu gọi, `closed` đã kết thúc. Danh sách xếp đợt đang thu trước |
+| `closed_at`, `close_note` | Thời điểm kết thúc và kết quả / quyết toán (chỉ có khi `closed`) |
+| `donors` | Số lượt đóng góp |
+| `progress` | % đạt mục tiêu, chỉ với `contribution = goal` (còn lại `null`) |
+| `bank_account`, `bank_name`, `account_holder` | Tài khoản nhận tiền riêng của quỹ (`null` khi đợt đã kết thúc) |
+| `qrDataUrl` | Ảnh mã QR chuyển khoản (người nộp tự nhập số tiền), dạng data URL PNG, dùng thẳng trong `<img src>`. `null` nếu quỹ chưa khai tài khoản hoặc đợt đã kết thúc |
 | `total` | Tổng đã thu |
 | `spent` | Tổng đã chi |
 | `balance` | Còn lại (đã tính bút toán điều chỉnh) |
@@ -233,7 +237,22 @@ POST /api/funds/<id>/import                   # ghi sổ
   "errors": [ { "line": 4, "error": "Số tiền không hợp lệ" } ] } }
 ```
 
-### 2.5. Sổ thu chi và báo cáo
+### 2.5. Kết thúc đợt kêu gọi
+
+```
+GET  /api/funds/<id>/summary      # tổng kết: donors, total_in, total_out, balance, pending, progress
+POST /api/funds/<id>/close        # quyền quản lý quỹ (Người duyệt chi, Ban lãnh đạo, Quản trị)
+{ "close_note": "Đã tu sửa xong mái đình. Số dư chuyển quỹ chung.", "result_public": true }
+POST /api/funds/<id>/reopen
+{ "reason": "Thu thêm đợt 2" }
+```
+
+- Còn phiếu nháp / chờ duyệt (`pending > 0`) thì không kết thúc được.
+- Sau khi kết thúc: không ghi thu chi, không tạo QR. Tiền chuyển vào tài khoản quỹ sau đó vào mục giao dịch chưa phân loại.
+- `result_public`: `true` (mặc định) thì đợt đã kết thúc vẫn hiện trên trang / API người dân kèm tổng kết; `false` thì ẩn.
+- Mở lại xóa thông tin kết thúc; lý do ghi vào nhật ký.
+
+### 2.6. Sổ thu chi và báo cáo
 
 ```
 GET /api/funds/<id>/entries?from=2026-11-01&to=2026-11-30&type=in&status=approved
