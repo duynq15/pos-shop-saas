@@ -105,6 +105,8 @@ Sau khi chạy, terminal in ra các địa chỉ LAN. Trong **Cài đặt → K�
 
 - Thành viên cộng đồng SKHG: quản trị nền tảng điền mã cộng đồng SKHG (vd. `LGHZKS`) ở màn Cộng đồng. Thành viên đã duyệt chưa có tài khoản được tự tạo tài khoản, chỉ vào qua SKHG: admin cộng đồng (`nhom_truong`) là Người duyệt chi, thành viên khác chỉ xem, không bao giờ tự cấp thủ quỹ. Vai trò đồng bộ mỗi lần đăng nhập; rời cộng đồng thì bị chặn và mất phiên.
 
+- API sổ quỹ cho App / Web người dân (đợt thu công khai, QR nộp tiền) và cho ban quản lý (tạo quỹ, ghi thu, nhập Excel): xem [docs/API-SO-QUY.md](docs/API-SO-QUY.md).
+
 ## Đầu đọc mã vạch
 Cắm đầu đọc USB, để con trỏ ở ô quét rồi quét. Đa số đầu đọc gửi mã kèm Enter, phần mềm tự nhận.
 
@@ -123,7 +125,7 @@ public/
   js/                     # api, auth, store, util, barcode + các màn hình (views/)
 test/
   run.sh                  # chạy toàn bộ kiểm thử trên DB tạm
-  api.test.js             # 105 test API
+  api.test.js             # test API
   ui.test.js              # 67 test giao diện (Playwright)
 ```
 

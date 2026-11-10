@@ -573,6 +573,7 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('public payer page lists campaign with QR + totals', !!pubProg && !!pubProg.qrDataUrl && pubProg.total === 600000 && pubProg.balance === 350000, JSON.stringify(pubProg && { total: pubProg.total, balance: pubProg.balance }));
   const pubQr = await (await fetch(ROOT + '/public/api/donations/' + donTok + '/funds/' + fid + '/qr?amount=150000')).json();
   ok('public payer page creates QR with amount', pubQr.ok && pubQr.data.amount === 150000 && !!pubQr.data.qrDataUrl);
+  ok('public API allows cross-origin (App người dân)', (await fetch(ROOT + '/public/api/donations/' + donTok)).headers.get('access-control-allow-origin') === '*');
 
   // ---------- API cho Làng Số (SKHGDT-3532) ----------
   ok('lang-so: preflight CORS', await ls('/stats?thon=thon-a', null, { method: 'OPTIONS' }).then((r) => r.status === 204 && r.headers.get('access-control-allow-headers') === 'Authorization'));
@@ -597,6 +598,40 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   const sso = await cj('sso', '/auth/sso', { method: 'POST', body: { token: 'tok-ok', thon: 'thon-a' } });
   ok('lang-so: SSO logs in matching fund account', sso.ok && sso.data.user.username === 'qa-approver'
     && (await cj('sso', '/auth/me')).data.user.username === 'qa-approver');
+
+  // ---------- Quỹ v2 (SKHGDT-3621): mã tự sinh, loại quỹ, cách đóng, ngày thu, nhập Excel/CSV ----------
+  const v2 = await cj('cadm', '/funds', { method: 'POST', body: { name: 'Quỹ khuyến học 2026', fund_type: 'Khuyến học', category: 'Xóm 1', contribution: 'person', target_amount: 50000 } });
+  ok('fund code auto-generated from name', v2.ok && v2.data.code === 'quy-khuyen-hoc-2026' && v2.data.fund_type === 'Khuyến học' && v2.data.contribution === 'person', JSON.stringify(v2.data));
+  const v2b = await cj('cadm', '/funds', { method: 'POST', body: { name: 'Quỹ khuyến học 2026' } });
+  ok('duplicate name gets suffixed code', v2b.ok && v2b.data.code === 'quy-khuyen-hoc-2026-2');
+  ok('voluntary contribution drops amount', (await cj('cadm', '/funds/' + v2b.data.id, { method: 'PATCH', body: { contribution: 'voluntary', target_amount: 1000 } })).data.target_amount === null);
+  ok('bad contribution rejected', !(await cj('cadm', '/funds/' + v2b.data.id, { method: 'PATCH', body: { contribution: 'xyz' } })).ok);
+  ok('new general fund is not public by default', v2.data.is_public === 0);
+  const v2id = v2.data.id;
+  const back = await cj('c-treasurer', '/funds/' + v2id + '/entries', { method: 'POST', body: { type: 'in', amount: 70000, source: 'manual', bank_ref: 'FT-V2-1', date: '2026-01-15' } });
+  ok('back-dated bank income recorded on that day', back.ok && back.data.approved_at.startsWith('2026-01-15') && /^PT20260115-/.test(back.data.code), JSON.stringify(back.data));
+  ok('future date rejected', !(await cj('c-treasurer', '/funds/' + v2id + '/entries', { method: 'POST', body: { type: 'in', amount: 1000, date: '2999-01-01' } })).ok);
+  ok('impossible date rejected', !(await cj('c-treasurer', '/funds/' + v2id + '/entries', { method: 'POST', body: { type: 'in', amount: 1000, date: '2026-02-30' } })).ok);
+  const csv = 'Ngày (YYYY-MM-DD);Người nộp;Số tiền;Hình thức;Mã giao dịch;Ghi chú;Ẩn danh (x)\n'
+    + '02/03/2026;Ông Tư;100.000;Tiền mặt;;Xóm 1;\n2026-03-03;"Bà Sáu; xóm 2";200000;Chuyển khoản;FT-V2-2;;x\n';
+  const b64 = (s) => 'data:text/csv;base64,' + Buffer.from(s).toString('base64');
+  const dry = await cj('c-treasurer', '/funds/' + v2id + '/import?dry=1', { method: 'POST', body: { file: b64(csv) } });
+  ok('import dry-run counts without writing', dry.ok && dry.data.count === 2 && dry.data.total === 300000 && dry.data.imported === 0 && !dry.data.errors.length, JSON.stringify(dry));
+  const badCsv = csv + '2026-03-04;X;abc;Tiền mặt;;;\n2026-03-04;Y;5000;Séc;;;\n2026-03-04;Z;5000;Chuyển khoản;FT-V2-1;;\n';
+  const badImp = await cj('c-treasurer', '/funds/' + v2id + '/import', { method: 'POST', body: { file: b64(badCsv) } });
+  ok('import reports each bad line, writes nothing', badImp.ok && badImp.data.imported === 0 && badImp.data.errors.map((e) => e.line).join() === '4,5,6', JSON.stringify(badImp.data.errors));
+  ok('nothing written after failed import', (await cj('cadm', '/funds/' + v2id)).data.balance === 70000);
+  const imp = await cj('c-treasurer', '/funds/' + v2id + '/import', { method: 'POST', body: { file: b64(csv) } });
+  ok('import writes all rows', imp.ok && imp.data.imported === 2 && (await cj('cadm', '/funds/' + v2id)).data.balance === 370000);
+  const impRows = (await cj('cadm', '/funds/' + v2id + '/entries')).data.entries;
+  ok('imported rows keep date, source, anonymity', impRows.some((e) => e.payer_name === 'Ông Tư' && e.source === 'cash' && e.approved_at.startsWith('2026-03-02'))
+    && impRows.some((e) => e.payer_name === 'Bà Sáu; xóm 2' && e.source === 'manual' && e.bank_ref === 'FT-V2-2' && e.anonymous === 1));
+  ok('re-import same bank ref rejected', (await cj('c-treasurer', '/funds/' + v2id + '/import', { method: 'POST', body: { file: b64(csv) } })).data.errors.length === 1);
+  const tpl = await req('c-treasurer', '/funds/' + v2id + '/import-template');
+  const tplBuf = Buffer.from(await tpl.arrayBuffer());
+  const xImp = await cj('c-treasurer', '/funds/' + v2id + '/import?dry=1', { method: 'POST', body: { file: tplBuf.toString('base64') } });
+  ok('xlsx template downloads and re-imports', tpl.status === 200 && xImp.ok && xImp.data.count === 2 && !xImp.data.errors.length, JSON.stringify(xImp));
+  ok('approver cannot import (BR-05)', (await req('c-approver', '/funds/' + v2id + '/import', { method: 'POST', body: { rows: [{ amount: 1 }] } })).status === 403);
 
   // ---------- Đăng nhập bằng mật khẩu SKHG (SKHGDT-3573) ----------
   const sk = (body) => cj('skhg', '/auth/skhg', { method: 'POST', body });

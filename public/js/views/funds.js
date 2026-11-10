@@ -14,6 +14,19 @@ const signed = (e) => (e.type === 'out' ? -e.amount : e.amount);
 const signedMoney = (n) => `<span class="${n < 0 ? 'fd-neg' : 'fd-pos'}">${n < 0 ? '−' : '+'}${money(Math.abs(n))}</span>`;
 const who = (e) => (e.anonymous ? 'Người hảo tâm' : (e.payer_name || ''));
 const shortMoney = (n) => (n >= 1e6 ? `${n / 1e6}tr` : `${n / 1e3}k`);
+const lines = (s) => String(s || '').split('\n').map((x) => x.trim()).filter(Boolean);
+// Cách đóng; amount = nhãn ô số tiền (không có = không cần mức)
+const CONTRIB = {
+  household: { label: 'Theo hộ', amount: 'Mức đóng mỗi hộ' },
+  person: { label: 'Theo nhân khẩu', amount: 'Mức đóng mỗi người' },
+  voluntary: { label: 'Tùy tâm (không quy định mức)' },
+  goal: { label: 'Huy động theo mục tiêu', amount: 'Tổng số tiền cần huy động' },
+};
+const contribText = (f) => {
+  const c = CONTRIB[f.contribution] || CONTRIB.household;
+  if (!c.amount) return 'Đóng tùy tâm';
+  return f.target_amount ? `${c.amount}: ${money(f.target_amount)}` : c.label;
+};
 
 let funds = [];
 let activeId = null;
@@ -80,13 +93,13 @@ function bodyTemplate(f) {
   const entry = can('fund.entry') && f.status === 'active';
   return `
 <div class="fd-meta muted">
-  ${f.kind === 'donation' ? '<span class="badge sale">Công đức</span>' : '<span class="badge">Quỹ chung</span>'}
+  <span class="badge ${f.kind === 'donation' ? 'sale' : ''}">${esc(f.fund_type || (f.kind === 'donation' ? 'Công đức' : 'Quỹ chung'))}</span>
   ${f.category ? `<span class="badge">${esc(f.category)}</span>` : ''}
   ${f.status === 'active' ? '' : '<span class="badge cancelled">Đã đóng</span>'}
   ${f.is_public ? '<span class="badge paid">Công khai</span>' : ''}
   <span>Phụ trách: ${esc(f.manager_name || 'chưa giao')}</span>
   <span>${f.bank_account ? `TK ${esc(f.bank_account)}${f.bank_name ? ' · ' + esc(f.bank_name) : ''}` : 'Chưa khai tài khoản nhận'}</span>
-  ${f.target_amount ? `<span>Mức đóng dự kiến: ${money(f.target_amount)}</span>` : ''}
+  <span>${esc(contribText(f))}</span>
   ${f.end_date ? `<span>Hạn: ${esc(f.end_date)}</span>` : ''}
 </div>
 <div class="stats fd-stats">
@@ -101,6 +114,7 @@ function bodyTemplate(f) {
   <button class="btn" id="fd-qr">${icon('card')} QR nhận tiền</button>
   <button class="btn" id="fd-share">Chia sẻ / nhắc đóng quỹ</button>
   ${entry || can('fund.manage') ? `<details class="fd-menu"><summary class="btn" aria-label="Thao tác khác">Thêm ▾</summary><div>
+    ${entry ? '<button class="mi" id="fd-import">Nhập khoản thu từ Excel</button>' : ''}
     ${entry ? '<button class="mi" id="fd-adjust">Lập bút toán điều chỉnh</button>' : ''}
     ${can('fund.manage') ? '<button class="mi" id="fd-edit-fund">Sửa thông tin quỹ</button>' : ''}
   </div></details>` : ''}
@@ -170,6 +184,7 @@ async function render() {
   on('fd-share', () => openShare(f));
   on('fd-edit-fund', () => { $('.fd-menu').open = false; openFundForm(f); });
   on('fd-adjust', () => { $('.fd-menu').open = false; openEntryForm(f, 'adjust'); });
+  on('fd-import', () => { $('.fd-menu').open = false; openImport(f); });
   for (const id of ['fd-in', 'fd-in-m']) on(id, () => openEntryForm(f, 'in'));
   for (const id of ['fd-out', 'fd-out-m']) on(id, () => openEntryForm(f, 'out'));
   $('#fd-subtabs').onclick = (e) => { const b = e.target.closest('[data-tab]'); if (b) showTab(b.dataset.tab, f); };
@@ -438,7 +453,7 @@ async function openShare(f) {
   }
   const url = location.origin + link.url + '#fund-' + f.id;
   const bits = [`Thông báo thu quỹ "${f.name}"${f.category ? ` (${f.category})` : ''}.`];
-  if (f.target_amount) bits.push(`Mức đóng dự kiến: ${money(f.target_amount)}.`);
+  bits.push(contribText(f) + '.');
   if (f.end_date) bits.push(`Hạn đóng: ${f.end_date}.`);
   if (f.bank_account) bits.push(`Chuyển khoản: ${f.bank_account}${f.bank_name ? ' - ' + f.bank_name : ''}${f.account_holder ? ' - ' + f.account_holder : ''}.`);
   bits.push(`Xem và quét mã tại: ${url}`);
@@ -460,6 +475,41 @@ async function openShare(f) {
     } catch {
       $('#fd-sh-msg').select(); toast('Trình duyệt không cho sao chép, hãy bấm Ctrl+C', true);
     }
+  };
+}
+
+/* ---------------- Nhập khoản thu từ Excel / CSV ---------------- */
+// Kiểm file trước (dry), báo lỗi từng dòng; chỉ ghi sổ khi cả file hợp lệ.
+function openImport(f) {
+  modal(`<h2>Nhập khoản thu từ Excel</h2>
+    <p class="muted fd-form-hint">Dùng cho khoản thu ghi tay trong sổ giấy hoặc tiền chuyển khoản lấy từ sao kê.
+      Tải file mẫu, điền mỗi khoản một dòng (Ngày, Người nộp, Số tiền, Hình thức: Tiền mặt / Chuyển khoản, Mã giao dịch, Ghi chú) rồi chọn file.</p>
+    <a class="btn" href="/api/funds/${f.id}/import-template" download>Tải file mẫu</a>
+    <label class="fld" style="margin-top:12px">File Excel (.xlsx) hoặc CSV<input class="field" type="file" id="fd-im-file" accept=".xlsx,.csv"></label>
+    <div id="fd-im-result"></div>
+    <div class="modal-actions"><button class="btn" id="fd-im-close">Hủy</button><button class="btn primary" id="fd-im-save" disabled>Ghi sổ</button></div>`);
+  let file = null;
+  const send = (dry) => api(`/api/funds/${f.id}/import${dry ? '?dry=1' : ''}`, { method: 'POST', body: { file } });
+  $('#fd-im-close').onclick = closeModal;
+  $('#fd-im-file').onchange = async (e) => {
+    const fl = e.target.files[0]; if (!fl) return;
+    $('#fd-im-save').disabled = true;
+    try {
+      file = await fileToDataUrl(fl);
+      const r = await send(true);
+      $('#fd-im-result').innerHTML = r.errors.length
+        ? `<p class="low">Có ${r.errors.length} dòng lỗi, chưa ghi gì. Sửa file rồi chọn lại:</p><ul>${r.errors.slice(0, 30).map((x) => `<li>Dòng ${x.line}: ${esc(x.error)}</li>`).join('')}</ul>`
+        : `<p>${r.count} khoản thu, tổng <b>${money(r.total)}</b>. Bấm Ghi sổ để nhập.</p>`;
+      $('#fd-im-save').disabled = !!r.errors.length;
+    } catch (er) { $('#fd-im-result').innerHTML = `<p class="low">${esc(er.message)}</p>`; }
+  };
+  $('#fd-im-save').onclick = async () => {
+    $('#fd-im-save').disabled = true;
+    try {
+      const r = await send(false);
+      toast(`Đã ghi sổ ${r.imported} khoản thu, tổng ${money(r.total)}`);
+      closeModal(); await loadFunds();
+    } catch (er) { toast(er.message, true); $('#fd-im-save').disabled = false; }
   };
 }
 
@@ -490,21 +540,27 @@ async function openQr(f) {
 /* ---------------- Form quỹ ---------------- */
 async function openFundForm(f) {
   const isNew = !f;
-  const d = f || { kind: 'general', status: 'active' };
+  const d = f || { status: 'active', contribution: 'household' };
   let treasurers = [];
   try { treasurers = await api('/api/fund-treasurers'); } catch { /* không có quyền thì bỏ ô chọn */ }
+  const settings = await api('/api/settings');
+  const types = lines(settings.fund_types);
+  const groups = lines(settings.fund_groups);
+  // Quỹ cũ có loại / phạm vi không còn trong danh sách vẫn giữ được giá trị đang lưu
+  const options = (list, cur) => [...new Set([...list, ...(cur ? [cur] : [])])]
+    .map((x) => `<option ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('');
   const tOpts = '<option value="">Chưa giao (mọi thủ quỹ)</option>' + treasurers.map((t) =>
     `<option value="${t.id}" ${t.id === d.manager_user_id ? 'selected' : ''}>${esc(t.full_name || t.username)}</option>`).join('');
   modal(`<h2>${isNew ? 'Quỹ mới' : 'Sửa quỹ'}</h2>
     <div class="form-grid">
       <label class="fld full">Tên quỹ *<input class="field" id="fd-f-name" value="${esc(d.name || '')}" placeholder="Ví dụ: Công đức tu sửa đình làng"></label>
-      ${isNew ? '<label class="fld">Mã quỹ *<input class="field" id="fd-f-code" placeholder="vd: cong-duc-2026" autocapitalize="none"></label>' : ''}
-      <label class="fld">Loại<select class="field" id="fd-f-kind">
-        <option value="general" ${d.kind === 'general' ? 'selected' : ''}>Quỹ chung</option>
-        <option value="donation" ${d.kind === 'donation' ? 'selected' : ''}>Công đức (được công khai)</option></select></label>
-      <label class="fld">Loại đợt thu<input class="field" id="fd-f-category" list="fd-cat-list" placeholder="Thôn, Xóm, Đoàn thể…" value="${esc(d.category || '')}">
-        <datalist id="fd-cat-list"><option>Thôn</option><option>Xóm</option><option>Đoàn thể</option><option>Thiện nguyện</option><option>Khác</option></datalist></label>
-      <label class="fld">Mức đóng dự kiến (mỗi hộ)<input class="field fd-amount" id="fd-f-target" inputmode="numeric" autocomplete="off" placeholder="0"
+      <label class="fld">Loại quỹ<select class="field" id="fd-f-type">${options(types, d.fund_type)}</select>
+        <span class="muted fd-field-hint">Thêm loại quỹ khác trong Cài đặt.</span></label>
+      <label class="fld">Phạm vi thu<select class="field" id="fd-f-category">${options(['Cả thôn', ...groups], d.category || 'Cả thôn')}</select>
+        <span class="muted fd-field-hint">${groups.length ? '' : 'Khai báo xóm, đoàn thể trong Cài đặt để chọn ở đây.'}</span></label>
+      <label class="fld">Cách đóng<select class="field" id="fd-f-contrib">${Object.entries(CONTRIB).map(([k, v]) =>
+        `<option value="${k}" ${k === (d.contribution || 'household') ? 'selected' : ''}>${v.label}</option>`).join('')}</select></label>
+      <label class="fld" id="fd-f-target-wrap"><span id="fd-f-target-label"></span><input class="field fd-amount" id="fd-f-target" inputmode="numeric" autocomplete="off" placeholder="0"
         value="${d.target_amount ? nf.format(d.target_amount) : ''}"></label>
       <label class="fld">Bắt đầu<input class="field" id="fd-f-start" type="date" value="${esc(d.start_date || '')}"></label>
       <label class="fld">Kết thúc<input class="field" id="fd-f-end" type="date" value="${esc(d.end_date || '')}"></label>
@@ -527,20 +583,27 @@ async function openFundForm(f) {
       ? `Quỹ chưa giao: cả ${treasurers.length} thủ quỹ đều xem và nhập được.` : '';
   };
   $('#fd-f-manager').onchange = hint; hint();
+  const contrib = () => {
+    const c = CONTRIB[$('#fd-f-contrib').value];
+    $('#fd-f-target-wrap').hidden = !c.amount;
+    $('#fd-f-target-label').textContent = c.amount || '';
+  };
+  $('#fd-f-contrib').onchange = contrib; contrib();
   bindMoney($('#fd-f-target'));
   $('#fd-f-close').onclick = closeModal;
   $('#fd-f-save').onclick = async () => {
     const bank = bankOf($('#fd-f-bin').value);
     if (bank === undefined) { toast('Chọn ngân hàng trong danh sách gợi ý', true); $('#fd-f-bin').focus(); return; }
     const body = {
-      name: $('#fd-f-name').value, kind: $('#fd-f-kind').value, bank_account: $('#fd-f-account').value,
-      category: $('#fd-f-category').value, target_amount: parseMoney($('#fd-f-target').value) || null,
+      name: $('#fd-f-name').value, fund_type: $('#fd-f-type').value, bank_account: $('#fd-f-account').value,
+      category: $('#fd-f-category').value, contribution: $('#fd-f-contrib').value,
+      target_amount: CONTRIB[$('#fd-f-contrib').value].amount ? parseMoney($('#fd-f-target').value) || null : null,
       is_public: $('#fd-f-public').checked ? 1 : 0,
       start_date: $('#fd-f-start').value || null, end_date: $('#fd-f-end').value || null,
       bank_bin: bank ? bank[0] : '', bank_name: bank ? bank[1] : '', account_holder: $('#fd-f-holder').value,
       manager_user_id: $('#fd-f-manager').value || null,
     };
-    if (isNew) body.code = $('#fd-f-code').value; else body.status = $('#fd-f-status').value;
+    if (!isNew) body.status = $('#fd-f-status').value;
     try {
       const saved = await api(isNew ? '/api/funds' : `/api/funds/${f.id}`, { method: isNew ? 'POST' : 'PATCH', body });
       toast('Đã lưu quỹ'); closeModal();
@@ -570,7 +633,7 @@ async function openEntryForm(f, type, draft) {
     refOptions = entries.map((e) => `<option value="${e.id}">${esc(e.code)} · ${esc(who(e) || e.note || '')} · ${money(signed(e))}</option>`).join('');
   }
   const hint = {
-    in: 'Khoản thu ghi sổ ngay. Tiền chuyển khoản qua QR tự vào sổ, không cần nhập.',
+    in: 'Khoản thu ghi sổ ngay. Tiền chuyển qua mã QR của quỹ tự vào sổ, không cần nhập. Nhập ở đây tiền mặt và tiền chuyển khoản chưa có trong sổ.',
     out: 'Phiếu chi cần ảnh chứng từ và phải được người duyệt đồng ý mới trừ vào tồn quỹ.',
     adjust: 'Dùng để sửa sai bút toán đã ghi sổ. Nhập số âm để giảm, số dương để tăng. Cần người duyệt.',
   }[type];
@@ -579,7 +642,12 @@ async function openEntryForm(f, type, draft) {
     <label class="fld">Số tiền *<input class="field fd-amount" id="fd-e-amount" inputmode="numeric" autocomplete="off" placeholder="0"
       value="${draft ? (draft.amount < 0 ? '-' : '') + nf.format(Math.abs(draft.amount)) : ''}"></label>
     ${type !== 'adjust' ? `<div class="fd-quick">${QUICK.map((v) => `<button type="button" class="btn sm" data-q="${v}">${shortMoney(v)}</button>`).join('')}</div>` : ''}
-    ${type === 'in' ? `<label class="fld">Người nộp<input class="field" id="fd-e-payer" placeholder="Để trống nếu không rõ"></label>
+    ${type === 'in' ? `<div class="form-grid">
+        <label class="fld">Hình thức<select class="field" id="fd-e-source"><option value="cash">Tiền mặt (ghi tay)</option><option value="manual">Chuyển khoản vào tài khoản quỹ</option></select></label>
+        <label class="fld">Ngày thu<input class="field" id="fd-e-date" type="date" value="${today()}" max="${today()}"></label>
+      </div>
+      <label class="fld" id="fd-e-ref-wrap" hidden>Mã giao dịch ngân hàng<input class="field" id="fd-e-bankref" placeholder="Trên sao kê / tin nhắn ngân hàng, để không ghi trùng"></label>
+      <label class="fld">Người nộp<input class="field" id="fd-e-payer" placeholder="Để trống nếu không rõ"></label>
       <label class="chk fd-chk"><input type="checkbox" id="fd-e-anon"> Người nộp xin ẩn danh (trang công khai hiện "Người hảo tâm")</label>` : ''}
     ${type === 'adjust' && !draft ? `<label class="fld">Bút toán cần sửa *<select class="field" id="fd-e-ref">${refOptions}</select></label>` : ''}
     <label class="fld">${type === 'in' ? 'Ghi chú' : type === 'out' ? 'Chi cho việc gì *' : 'Lý do điều chỉnh *'}<input class="field" id="fd-e-note" value="${esc(draft?.note || '')}"></label>
@@ -596,6 +664,8 @@ async function openEntryForm(f, type, draft) {
   const amt = $('#fd-e-amount');
   bindMoney(amt, type === 'adjust');
   document.querySelectorAll('.fd-quick [data-q]').forEach((b) => { b.onclick = () => { amt.value = nf.format(Number(b.dataset.q)); amt.focus(); }; });
+  const src = $('#fd-e-source');
+  if (src) src.onchange = () => { $('#fd-e-ref-wrap').hidden = src.value !== 'manual'; };
   const file = $('#fd-e-file');
   if (file) file.onchange = () => {
     const fl = file.files[0]; if (!fl) return;
@@ -608,7 +678,10 @@ async function openEntryForm(f, type, draft) {
     const body = { amount: parseMoney(amt.value), note: $('#fd-e-note').value };
     if (!body.amount) { toast('Nhập số tiền', true); amt.focus(); return; }
     if (!draft) body.type = type;
-    if (type === 'in') { body.payer_name = $('#fd-e-payer').value; body.anonymous = $('#fd-e-anon').checked; body.source = 'cash'; }
+    if (type === 'in') {
+      Object.assign(body, { payer_name: $('#fd-e-payer').value, anonymous: $('#fd-e-anon').checked, source: src.value, date: $('#fd-e-date').value });
+      if (src.value === 'manual') body.bank_ref = $('#fd-e-bankref').value;
+    }
     if (type === 'adjust' && !draft) body.ref_entry_id = $('#fd-e-ref').value;
     if (file?.files[0]) body.attachment = await fileToDataUrl(file.files[0]);
     if (send && type === 'out' && !body.attachment && !draft?.attachment) { toast('Cần ảnh chứng từ trước khi gửi duyệt', true); return; }

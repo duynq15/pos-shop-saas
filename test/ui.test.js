@@ -365,7 +365,10 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('Funds menu present', navs.includes('funds'));
     await quy.pg.evaluate(() => window.showView('funds')); await quy.pg.waitForTimeout(500);
     await quy.pg.locator('#fd-new-fund').click(); await quy.pg.waitForTimeout(300);
-    await quy.pg.locator('#fd-f-code').fill('ui-quy-chung');
+    ok('Fund form has no code field, has fund type + contribution', (await quy.pg.locator('#fd-f-code').count()) === 0
+      && (await quy.pg.locator('#fd-f-type option').count()) >= 2 && (await quy.pg.locator('#fd-f-contrib option').count()) === 4);
+    await quy.pg.locator('#fd-f-contrib').selectOption('voluntary');
+    ok('Voluntary hides amount field', await quy.pg.locator('#fd-f-target-wrap').isHidden());
     await quy.pg.locator('#fd-f-name').fill('Quỹ UI');
     await quy.pg.locator('#fd-f-account').fill('UIQUYACC');
     await quy.pg.locator('#fd-f-bin').fill('quân đội');
@@ -373,7 +376,8 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.locator('#fd-f-bin').press('ArrowDown'); await quy.pg.locator('#fd-f-bin').press('Enter');
     await quy.pg.locator('#fd-f-save').click(); await quy.pg.waitForTimeout(500);
     ok('Fund created and listed', (await quy.pg.locator('#fd-tabs').innerText()).includes('Quỹ UI'));
-    const uiFund = (await quy.pg.evaluate(async () => (await (await fetch('/api/funds')).json()).data)).find((f) => f.code === 'ui-quy-chung');
+    const uiFund = (await quy.pg.evaluate(async () => (await (await fetch('/api/funds')).json()).data)).find((f) => f.name === 'Quỹ UI');
+    ok('Fund code generated from name', uiFund && uiFund.code === 'quy-ui' && uiFund.contribution === 'voluntary', JSON.stringify(uiFund && [uiFund.code, uiFund.contribution]));
     ok('Bank search saves BIN + name', uiFund && uiFund.bank_bin === '970422' && uiFund.bank_name === 'MB Bank', JSON.stringify(uiFund && [uiFund.bank_bin, uiFund.bank_name]));
     await quy.pg.locator('#fd-in').click(); await quy.pg.waitForTimeout(300);
     await quy.pg.locator('#fd-e-amount').pressSequentially('50000');
@@ -407,6 +411,22 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('Funds: mobile action bar visible', await quy.pg.locator('.fd-bar').isVisible());
     const fundCats = await quy.pg.evaluate(async () => (await (await fetch('/api/community/categories')).json()).data);
     ok('Platform categories available to community sellers', fundCats.length === 2, JSON.stringify(fundCats));
+    await quy.pg.setViewportSize({ width: 1280, height: 820 });
+    await quy.pg.evaluate(() => window.showView('settings')); await quy.pg.waitForTimeout(500);
+    ok('Fund settings: fund types + groups, no sales items', (await quy.pg.locator('[data-s="fund_types"]').count()) === 1
+      && (await quy.pg.locator('[data-s="fund_groups"]').count()) === 1
+      && (await quy.pg.locator('[data-s="invoice_prefix"], [data-s="vat_mode"], [data-s="label_width"], #btn-lan-settings').count()) === 0);
+    await quy.pg.locator('[data-s="fund_groups"]').fill('Xóm 1\nHội Phụ nữ');
+    await quy.pg.locator('#btn-save-settings').click(); await quy.pg.waitForTimeout(400);
+    await quy.pg.evaluate(() => window.showView('users')); await quy.pg.waitForTimeout(500);
+    await quy.pg.locator('#u-new').click(); await quy.pg.waitForTimeout(300);
+    ok('Fund users form: no PIN, role has description', (await quy.pg.locator('#uf-pin').count()) === 0
+      && (await quy.pg.locator('#uf-role-desc').innerText()).length > 5);
+    await quy.pg.locator('#uf-close').click();
+    await quy.pg.evaluate(() => window.showView('funds')); await quy.pg.waitForTimeout(500);
+    await quy.pg.locator('#fd-new-fund').click(); await quy.pg.waitForTimeout(400);
+    ok('Fund scope lists groups from settings', (await quy.pg.locator('#fd-f-category option').allInnerTexts()).join('|') === 'Cả thôn|Xóm 1|Hội Phụ nữ');
+    await quy.pg.locator('#fd-f-close').click();
     await quy.c.close();
 
     // ================= GĐ4: Nhận tiền nhanh (người bán, điện thoại) =================

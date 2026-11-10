@@ -9,13 +9,13 @@ const { requirePerm } = require('../middleware');
 
 const router = express.Router();
 
-const publicUser = (u, labels) => ({ id: u.id, username: u.username, full_name: u.full_name, phone: u.phone, email: u.email, role: u.role, role_name: rbac.roleName(u.role, labels), active: u.active, last_login: u.last_login });
+const publicUser = (u, labels) => ({ id: u.id, username: u.username, full_name: u.full_name, phone: u.phone, email: u.email, role: u.role, role_name: rbac.roleName(u.role, labels), active: u.active, last_login: u.last_login, skhg: !!u.skhg_id });
 
 // Chỉ vai trò hợp với loại tenant hiện tại (FR-02)
 const tenantKind = (req) => (req.tenant && req.tenant.kind) || 'shop';
 const labelsOf = (req) => communityRoleLabels(req.tenant && req.tenant.community_id);
 router.get('/roles', requirePerm('user.manage'), (req, res) =>
-  ok(res, rbac.rolesFor(tenantKind(req)).map((code) => ({ code, name: rbac.roleName(code, labelsOf(req)) }))));
+  ok(res, rbac.rolesFor(tenantKind(req)).map((code) => ({ code, name: rbac.roleName(code, labelsOf(req)), desc: code === 'owner' && tenantKind(req) === 'community' ? 'Toàn quyền sổ quỹ: người dùng, cài đặt, quỹ.' : rbac.ROLES[code].desc || '' }))));
 
 router.get('/users', requirePerm('user.manage'), wrap((req, res) => {
   const rows = control.prepare('SELECT * FROM users WHERE tenant_id=? ORDER BY id').all(req.user.tenant_id);

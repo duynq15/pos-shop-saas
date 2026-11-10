@@ -418,6 +418,13 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   // Đợt thu: loại quỹ/đợt, mức đóng dự kiến và cờ công khai trên trang người nộp
   ensureColumn('funds', 'category', 'TEXT');
   ensureColumn('funds', 'target_amount', 'INTEGER');
+  // Loại quỹ do thôn tự đặt (danh sách trong Cài đặt) và cách đóng: target_amount là mức mỗi hộ / mỗi người / tổng cần huy động
+  // Công khai chỉ theo cờ is_public: quỹ công đức cũ (trước đây tự công khai) được bật cờ một lần khi thêm cột.
+  if (!columns('funds').includes('fund_type')) {
+    conn.exec("ALTER TABLE funds ADD COLUMN fund_type TEXT");
+    conn.exec("UPDATE funds SET fund_type = CASE kind WHEN 'donation' THEN 'Công đức' ELSE 'Quỹ chung' END, is_public = CASE kind WHEN 'donation' THEN 1 ELSE is_public END");
+  }
+  ensureColumn('funds', 'contribution', "TEXT DEFAULT 'household'");
   ensureColumnWithDefault('funds', 'is_public', 'INTEGER NOT NULL DEFAULT 0', '0');
   // GĐ3.1 (FR-08, BR-01): mỗi giao dịch thuộc đúng một loại. Suy ra lúc ghi; không chắc thì 'unclassified' (ERR-03).
   // ADD COLUMN ... DEFAULT gán 'unclassified' cho mọi dòng cũ, nên phải suy loại ngay lúc thêm cột (chỉ chạy một lần):
@@ -476,6 +483,8 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     vqr_enabled: '0', vqr_env: 'mock', vqr_bank_code: '', vqr_username: '', vqr_password: '',
     vqr_terminal_code: '', vqr_exposed_username: '', vqr_exposed_password: '', vqr_secret_key: '',
     vqr_mock_autopay: '0',
+    // Sổ quỹ thôn: danh sách loại quỹ và xóm / đoàn thể (mỗi dòng một mục), thôn tự sửa trong Cài đặt
+    fund_types: 'Quỹ chung\nCông đức\nKhuyến học\nThiện nguyện', fund_groups: '',
   };
   const insSetting = conn.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
   for (const [k, v] of Object.entries(defaults)) insSetting.run(k, v);

@@ -7,6 +7,7 @@ const money = (n) => nf.format(Math.round(Number(n) || 0)) + ' ₫';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const parseMoney = (v) => Number(String(v).replace(/[^\d]/g, '')) || 0;
 const TYPE = { in: 'Thu', out: 'Chi', adjust: 'Điều chỉnh' };
+const CONTRIB = { household: 'Mức đóng mỗi hộ', person: 'Mức đóng mỗi người', goal: 'Mục tiêu huy động' };
 
 function entryRows(p) {
   return p.entries.map((e) => {
@@ -38,7 +39,8 @@ function programCard(p) {
   const facts = [
     p.category ? `<span class="dn-chip">${esc(p.category)}</span>` : '',
     p.start_date || p.end_date ? `<span class="rp-hint">${esc(p.start_date || '…')} → ${esc(p.end_date || '…')}</span>` : '',
-    p.target_amount ? `<span class="rp-hint">Mức đóng dự kiến: <b>${money(p.target_amount)}</b></span>` : '',
+    p.contribution === 'voluntary' ? '<span class="rp-hint">Đóng góp tùy tâm</span>'
+      : p.target_amount ? `<span class="rp-hint">${CONTRIB[p.contribution] || CONTRIB.household}: <b>${money(p.target_amount)}</b></span>` : '',
   ].filter(Boolean).join(' ');
   return `<div class="rp-card" id="fund-${p.id}">
     <div class="rp-card-head"><div><h2>${esc(p.name)}</h2><div class="dn-facts">${facts}</div></div>

@@ -475,8 +475,11 @@ function seedFunds(code, c) {
   const acc = (i) => '96' + pad(hash(c.code + i) % 1e8, 8);
   const dir = path.join(DATA_DIR, 'tenants', code, 'attachments');
   fs.mkdirSync(dir, { recursive: true });
-  const insFund = conn.prepare(`INSERT INTO funds(code,name,kind,bank_account,bank_bin,bank_name,account_holder,manager_user_id,description,created_by)
-    VALUES (?,?,?,?,'970422','MB Bank',?,?,?,?)`);
+  conn.prepare("UPDATE settings SET value=? WHERE key='fund_groups' AND value=''").run(c.type === 'pagoda' ? 'Ban hộ tự\nĐạo tràng'
+    : 'Xóm 1\nXóm 2\nXóm 3\nHội Phụ nữ\nHội Cựu chiến binh\nChi đoàn thanh niên');
+  // Công đức công khai trên trang người nộp; quỹ chung không
+  const insFund = conn.prepare(`INSERT INTO funds(code,name,kind,fund_type,is_public,contribution,bank_account,bank_bin,bank_name,account_holder,manager_user_id,description,created_by)
+    VALUES (?,?,?,CASE ?3 WHEN 'donation' THEN 'Công đức' ELSE 'Quỹ chung' END,?3='donation',CASE ?3 WHEN 'donation' THEN 'voluntary' ELSE 'household' END,?,'970422','MB Bank',?,?,?,?)`);
   const insEntry = conn.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,payer_name,anonymous,note,attachment,status,
     created_by,created_by_name,created_at,approved_by,approved_by_name,approved_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   // Cùng khuôn makeCode: số thứ tự đếm riêng theo tiền tố + ngày

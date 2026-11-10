@@ -21,6 +21,12 @@ const { renderPdf, available } = require('../lib/pdf');
 const { fundQr } = require('./funds');
 
 const router = express.Router(); // mount tại /public/api
+// API công khai, chỉ đọc: App / Web người dân gọi thẳng từ trình duyệt (docs/API-SO-QUY.md)
+router.use((req, res, next) => {
+  res.set({ 'Access-Control-Allow-Origin': '*', 'Access-Control-Max-Age': '600' });
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 const CACHE_TTL_MS = 60 * 1000;
 
 const publicConfig = () => {
@@ -305,9 +311,9 @@ function publicCommunity(token) {
   return c && communitySettings(c.settings).public_donations ? c : null;
 }
 const communityTenant = (communityId) => control.prepare("SELECT code FROM tenants WHERE community_id=? AND kind='community'").get(communityId);
-const PUBLIC_FUND_SELECT = `SELECT id,code,name,kind,category,description,start_date,end_date,target_amount,is_public,
+const PUBLIC_FUND_SELECT = `SELECT id,code,name,kind,category,fund_type,contribution,description,start_date,end_date,target_amount,is_public,
   bank_account,bank_bin,bank_name,account_holder FROM funds
-  WHERE status='active' AND (kind='donation' OR is_public=1)`;
+  WHERE status='active' AND is_public=1`;
 const publicFundSql = `${PUBLIC_FUND_SELECT} ORDER BY id`;
 
 async function donationsData(token) {
@@ -327,7 +333,7 @@ async function donationsData(token) {
       const totalOut = entries.filter((e) => e.type === 'out').reduce((s, e) => s + e.amount, 0);
       const totalAdjust = entries.filter((e) => e.type === 'adjust').reduce((s, e) => s + e.amount, 0);
       out.push({
-        id: f.id, name: f.name, kind: f.kind, category: f.category, description: f.description,
+        id: f.id, name: f.name, kind: f.kind, fund_type: f.fund_type, contribution: f.contribution, category: f.category, description: f.description,
         start_date: f.start_date, end_date: f.end_date, target_amount: f.target_amount,
         bank_account: f.bank_account, bank_name: f.bank_name, account_holder: f.account_holder,
         qrDataUrl: qr ? qr.qrDataUrl : null,

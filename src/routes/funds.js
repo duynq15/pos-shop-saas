@@ -14,7 +14,7 @@ const { normAccount, bankAccountOf, fundByAccount } = require('../lib/community'
 const { requirePerm, can } = require('../middleware');
 const QRCode = require('qrcode');
 const { buildVietQR, removeVietnamese } = require('../lib/vietqr');
-const { sendXlsx } = require('../lib/xlsx');
+const { sendXlsx, readXlsx } = require('../lib/xlsx');
 const { bankTime } = require('../lib/vqr-time');
 
 const router = express.Router();
@@ -23,6 +23,25 @@ const PREFIX = { in: 'PT', out: 'PC', adjust: 'DC' };
 // Trần mỗi bút toán: 100 tỷ đồng. Giữ tổng trong vùng số nguyên an toàn của JS và SQLite, chặn số gõ nhầm.
 const MAX_AMOUNT = 100_000_000_000;
 const amountOk = (n, signedOk) => Number.isSafeInteger(n) && Math.abs(n) <= MAX_AMOUNT && (signedOk ? n !== 0 : n > 0);
+// Cách đóng: mức mỗi hộ / mỗi nhân khẩu / tùy tâm (không mức) / tổng cần huy động
+const CONTRIBUTION = ['household', 'person', 'voluntary', 'goal'];
+
+// Mã quỹ tự sinh từ tên (người dùng không phải nghĩ mã): "Quỹ khuyến học 2026" -> quy-khuyen-hoc-2026, trùng thì thêm -2, -3…
+function fundCode(name) {
+  const base = removeVietnamese(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 26).replace(/-+$/, '') || 'quy';
+  let code = base.length >= 2 ? base : 'quy-' + base;
+  for (let i = 2; db.prepare('SELECT 1 FROM funds WHERE code=?').get(code); i++) code = `${base}-${i}`;
+  return code;
+}
+
+// Ngày thu nhập tay (vào sổ cũ): YYYY-MM-DD, không ở tương lai. Trả chuỗi giờ địa phương để ghi created_at/approved_at.
+function entryDate(d) {
+  if (d == null || d === '' || d === today()) return null;
+  const t = new Date(d + 'T00:00:00Z');
+  if (!DAY.test(d) || Number.isNaN(t.getTime()) || t.toISOString().slice(0, 10) !== d) bad('Ngày thu không hợp lệ'); // chặn cả 30/02
+  if (d > today()) bad('Ngày thu không được ở tương lai');
+  return d + ' 12:00:00';
+}
 
 // Mọi route sổ quỹ chỉ cho tenant cộng đồng (trước đây /fund-entries lọt khỏi chốt này).
 router.use(['/funds', '/fund-entries', '/fund-treasurers'], (req, res, next) => {
@@ -82,12 +101,16 @@ function fundAccountTaken(account, selfFundId) {
 function fundInput(b, current = {}) {
   const v = {
     name: b.name !== undefined ? str(b.name, 160) : current.name,
-    kind: b.kind !== undefined ? b.kind : current.kind || 'general',
+    // kind chỉ còn dùng để phân loại giao dịch VietQR (fund/donation); suy từ loại quỹ khi client không gửi
+    kind: b.kind !== undefined ? b.kind : b.fund_type !== undefined ? (/công đức|cong duc/i.test(String(b.fund_type)) ? 'donation' : 'general') : current.kind || 'general',
     category: b.category !== undefined ? str(b.category, 80) || null : current.category ?? null,
+    fund_type: b.fund_type !== undefined ? str(b.fund_type, 80) || null : current.fund_type ?? null,
+    contribution: b.contribution !== undefined ? b.contribution : current.contribution || 'household',
     target_amount: b.target_amount !== undefined
       ? (b.target_amount === '' || b.target_amount === null ? null : int(b.target_amount))
       : current.target_amount ?? null,
-    is_public: b.is_public !== undefined ? (b.is_public ? 1 : 0) : (current.is_public ?? 0),
+    // Quỹ công đức tạo mới qua API mà không nói gì về công khai thì công khai như trước
+    is_public: b.is_public !== undefined ? (b.is_public ? 1 : 0) : (current.is_public ?? (b.kind === 'donation' ? 1 : 0)),
     bank_account: b.bank_account !== undefined ? normAccount(str(b.bank_account, 40)) || null : current.bank_account ?? null,
     bank_bin: b.bank_bin !== undefined ? str(b.bank_bin, 20) || null : current.bank_bin ?? null,
     bank_name: b.bank_name !== undefined ? str(b.bank_name, 80) || null : current.bank_name ?? null,
@@ -101,6 +124,8 @@ function fundInput(b, current = {}) {
   if (!v.name) bad('Tên quỹ không được để trống');
   if (!['general', 'donation'].includes(v.kind)) bad('Loại quỹ không hợp lệ');
   if (!['active', 'closed'].includes(v.status)) bad('Trạng thái quỹ không hợp lệ');
+  if (!CONTRIBUTION.includes(v.contribution)) bad('Cách đóng không hợp lệ');
+  if (v.contribution === 'voluntary') v.target_amount = null; // tùy tâm: không có mức
   if (v.target_amount != null && (!Number.isSafeInteger(v.target_amount) || v.target_amount < 0 || v.target_amount > MAX_AMOUNT)) {
     bad('Mức đóng dự kiến không hợp lệ (tối đa 100 tỷ đồng)');
   }
@@ -155,14 +180,17 @@ router.get('/funds/:id', requirePerm('fund.view'), wrap((req, res) => {
 
 router.post('/funds', requirePerm('fund.manage'), wrap((req, res) => {
   const b = req.body || {};
-  const code = str(b.code, 30).toLowerCase();
-  if (!/^[a-z0-9][a-z0-9-]{1,29}$/.test(code)) bad('Mã quỹ gồm 2–30 ký tự a-z, 0-9, dấu gạch ngang');
-  if (db.prepare('SELECT 1 FROM funds WHERE code=?').get(code)) bad('Mã quỹ đã tồn tại');
   const v = fundInput(b);
+  // Mã quỹ không bắt buộc: bỏ trống thì tự sinh từ tên. Ai gửi mã (API) thì kiểm như cũ.
+  let code = str(b.code, 30).toLowerCase();
+  if (code) {
+    if (!/^[a-z0-9][a-z0-9-]{1,29}$/.test(code)) bad('Mã quỹ gồm 2–30 ký tự a-z, 0-9, dấu gạch ngang');
+    if (db.prepare('SELECT 1 FROM funds WHERE code=?').get(code)) bad('Mã quỹ đã tồn tại');
+  } else code = fundCode(v.name);
   checkManager(req, v.manager_user_id);
   if (fundAccountTaken(v.bank_account)) bad('Tài khoản nhận của quỹ phải là tài khoản riêng, không trùng cửa hàng hay quỹ khác (BR-02)');
-  const r = db.prepare(`INSERT INTO funds(code,name,kind,category,target_amount,is_public,bank_account,bank_bin,bank_name,account_holder,manager_user_id,description,start_date,end_date,status,created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code, v.name, v.kind, v.category, v.target_amount, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, req.user.id);
+  const r = db.prepare(`INSERT INTO funds(code,name,kind,category,fund_type,contribution,target_amount,is_public,bank_account,bank_bin,bank_name,account_holder,manager_user_id,description,start_date,end_date,status,created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(code, v.name, v.kind, v.category, v.fund_type, v.contribution, v.target_amount, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, req.user.id);
   const f = getFund(r.lastInsertRowid);
   log(req, 'fund.create', 'fund', f.id, { code, name: v.name });
   ok(res, f);
@@ -179,8 +207,8 @@ router.patch('/funds/:id', requirePerm('fund.manage'), wrap((req, res) => {
     const open = db.prepare("SELECT COUNT(*) n FROM fund_entries WHERE fund_id=? AND status IN ('draft','submitted')").get(cur.id).n;
     if (open) bad(`Còn ${open} khoản nháp hoặc chờ duyệt. Duyệt, từ chối hoặc để người lập xử lý trước khi đóng quỹ`);
   }
-  db.prepare(`UPDATE funds SET name=?,kind=?,category=?,target_amount=?,is_public=?,bank_account=?,bank_bin=?,bank_name=?,account_holder=?,manager_user_id=?,description=?,start_date=?,end_date=?,status=? WHERE id=?`)
-    .run(v.name, v.kind, v.category, v.target_amount, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, cur.id);
+  db.prepare(`UPDATE funds SET name=?,kind=?,category=?,fund_type=?,contribution=?,target_amount=?,is_public=?,bank_account=?,bank_bin=?,bank_name=?,account_holder=?,manager_user_id=?,description=?,start_date=?,end_date=?,status=? WHERE id=?`)
+    .run(v.name, v.kind, v.category, v.fund_type, v.contribution, v.target_amount, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.manager_user_id, v.description, v.start_date, v.end_date, v.status, cur.id);
   const action = v.status === cur.status ? 'fund.update' : v.status === 'closed' ? 'fund.close' : 'fund.reopen';
   log(req, action, 'fund', cur.id, req.body);
   ok(res, getFund(cur.id));
@@ -246,22 +274,115 @@ router.post('/funds/:id/entries', requirePerm('fund.entry'), wrap((req, res) => 
     if (!ref || ref.fund_id !== f.id || ref.status !== 'approved') bad('Điều chỉnh phải trỏ tới một bút toán đã ghi sổ của quỹ này');
     if (!note) bad('Điều chỉnh phải ghi lý do');
   }
-  const status = type === 'in' ? 'approved' : 'draft';
-  const bankRef = type === 'in' && source === 'manual' ? str(b.bank_ref, 80) || null : null;
-  if (bankRef && db.prepare('SELECT 1 FROM fund_entries WHERE bank_ref=?').get(bankRef)) bad('Giao dịch ngân hàng này đã được ghi sổ');
+  if (type === 'in') {
+    const e = insertIncome(req, f, { ...b, amount, source, note });
+    log(req, 'fund_entry.create', 'fund_entry', e.id, { code: e.code, type, amount, date: b.date || undefined });
+    return ok(res, e);
+  }
   const code = makeCode(db, PREFIX[type], 'fund_entries');
   const attachment = b.attachment ? saveAttachment(b.attachment, code) : null;
-  const now = status === 'approved' ? "datetime('now','localtime')" : 'NULL';
-  const r = db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,payer_name,anonymous,note,ref_entry_id,attachment,status,created_by,created_by_name,approved_by,approved_by_name,approved_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,${now})`).run(
-    code, f.id, type, amount, source, bankRef,
-    type === 'in' ? str(b.payer_name, 120) || null : null, type === 'in' && b.anonymous ? 1 : 0, note, ref ? ref.id : null, attachment, status,
-    req.user.id, req.user.full_name || req.user.username,
-    status === 'approved' ? req.user.id : null, status === 'approved' ? req.user.full_name || req.user.username : null);
+  const r = db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,note,ref_entry_id,attachment,status,created_by,created_by_name)
+    VALUES (?,?,?,?,'cash',?,?,?,'draft',?,?)`).run(code, f.id, type, amount, note, ref ? ref.id : null, attachment, req.user.id, req.user.full_name || req.user.username);
   const e = getEntry(r.lastInsertRowid);
   log(req, 'fund_entry.create', 'fund_entry', e.id, { code: e.code, type, amount });
   ok(res, e);
 }));
+
+// Khoản thu ghi sổ ngay. b.date (YYYY-MM-DD) để vào sổ khoản thu ngày cũ (sổ giấy, sao kê); mã chứng từ theo ngày đó.
+// Chuyển khoản (manual) có mã giao dịch thì không ghi trùng một giao dịch hai lần.
+function insertIncome(req, f, b) {
+  const when = entryDate(b.date);
+  const bankRef = b.source === 'manual' ? str(b.bank_ref, 80) || null : null;
+  if (bankRef && db.prepare('SELECT 1 FROM fund_entries WHERE bank_ref=?').get(bankRef)) bad(`Giao dịch ngân hàng ${bankRef} đã được ghi sổ`);
+  const code = makeCode(db, PREFIX.in, 'fund_entries', 'code', when ? new Date(b.date + 'T12:00:00') : new Date());
+  const attachment = b.attachment ? saveAttachment(b.attachment, code) : null;
+  const by = req.user.full_name || req.user.username;
+  const at = when ? '?' : "datetime('now','localtime')";
+  const r = db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,payer_name,anonymous,note,attachment,status,created_by,created_by_name,approved_by,approved_by_name,created_at,approved_at)
+    VALUES (?,?,'in',?,?,?,?,?,?,?,'approved',?,?,?,?,${at},${at})`).run(
+    code, f.id, b.amount, b.source, bankRef, str(b.payer_name, 120) || null, b.anonymous ? 1 : 0, b.note || null, attachment,
+    req.user.id, by, req.user.id, by, ...(when ? [when, when] : []));
+  return getEntry(r.lastInsertRowid);
+}
+
+// Nhập khoản thu hàng loạt (sổ giấy, sao kê, file Excel đã đọc ở trình duyệt). Tất cả hoặc không:
+// còn dòng lỗi thì không ghi gì và trả về lỗi từng dòng để sửa file. ?dry=1 chỉ kiểm, không ghi.
+// ponytail: chỉ nhập khoản thu; phiếu chi vẫn từng phiếu một vì cần ảnh chứng từ và người duyệt.
+const IMPORT_MAX = 2000;
+// file: data URL / base64 của .xlsx hoặc .csv theo file mẫu. Dòng 1 là tiêu đề; cột nhận theo tiêu đề (bỏ dấu), không theo vị trí.
+const IMPORT_COLS = { ngay: 'date', 'nguoi nop': 'payer_name', 'so tien': 'amount', 'hinh thuc': 'source', 'ma giao dich': 'bank_ref', 'ghi chu': 'note', 'an danh': 'anonymous' };
+function fileRows(file) {
+  const buf = Buffer.from(String(file).replace(/^data:[^,]*,/, ''), 'base64');
+  if (buf.length > ATTACH_MAX) bad('File quá 5MB');
+  let table;
+  if (buf.readUInt32LE(0) === 0x04034b50) {
+    try { table = readXlsx(buf); } catch (e) { bad(e.message); }
+  } else {
+    // CSV: dấu phẩy hoặc chấm phẩy (Excel tiếng Việt), ô có thể bọc ngoặc kép
+    const text = buf.toString('utf8').replace(/^﻿/, '');
+    const sep = (text.split('\n')[0].match(/;/g) || []).length > (text.split('\n')[0].match(/,/g) || []).length ? ';' : ',';
+    table = text.split(/\r?\n/).filter((l) => l.trim()).map((l) => [...l.matchAll(new RegExp(`("([^"]|"")*"|[^${sep}]*)(${sep}|$)`, 'g'))]
+      .slice(0, -1).map((m) => m[1].replace(/^"|"$/g, '').replace(/""/g, '"').trim()));
+  }
+  const keys = (table[0] || []).map((h) => IMPORT_COLS[removeVietnamese(String(h).replace(/\(.*$/, '')).toLowerCase().trim()]);
+  if (!keys.includes('amount')) bad('Không thấy cột "Số tiền". Dùng file mẫu để nhập');
+  return table.slice(1).map((r, i) => {
+    const o = { line: i + 2 };
+    keys.forEach((k, ci) => { if (k) o[k] = r[ci] ?? ''; });
+    return o;
+  }).filter((o) => Object.keys(o).some((k) => k !== 'line' && String(o[k]).trim()));
+}
+// Ngày trong file: YYYY-MM-DD, DD/MM/YYYY (Excel tiếng Việt) hoặc số serial ngày của Excel. Trống = hôm nay.
+function importDate(v) {
+  const s = str(v, 20);
+  let m;
+  if ((m = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(s))) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  if (/^\d{5}(\.\d+)?$/.test(s)) return new Date(Date.UTC(1899, 11, 30) + Math.floor(Number(s)) * 86400000).toISOString().slice(0, 10);
+  return s.slice(0, 10);
+}
+const SOURCE_ALIAS = { 'tien mat': 'cash', cash: 'cash', '': 'cash', 'chuyen khoan': 'manual', ck: 'manual', manual: 'manual', bank: 'manual' };
+router.post('/funds/:id/import', requirePerm('fund.entry'), wrap((req, res) => {
+  const f = fundFor(req, req.params.id);
+  if (!f) return fail(res, 'Không tìm thấy quỹ', 404);
+  if (f.status !== 'active') bad('Quỹ đã đóng, không ghi thêm bút toán');
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : req.body?.file ? fileRows(req.body.file) : null;
+  if (!rows || !rows.length) bad('File không có dòng nào');
+  if (rows.length > IMPORT_MAX) bad(`Mỗi lần nhập tối đa ${IMPORT_MAX} dòng`);
+  const errors = [];
+  const seenRefs = new Set();
+  const clean = rows.map((x, i) => {
+    const line = Number(x?.line) || i + 2; // dòng 1 của file là tiêu đề
+    const err = (m) => { errors.push({ line, error: m }); return null; };
+    const amount = Math.round(Number(String(x?.amount ?? '').replace(/[^\d-]/g, '')));
+    if (!amountOk(amount)) return err('Số tiền không hợp lệ');
+    const source = SOURCE_ALIAS[removeVietnamese(String(x?.source ?? '')).toLowerCase()];
+    if (!source) return err('Hình thức phải là "Tiền mặt" hoặc "Chuyển khoản"');
+    const date = importDate(x?.date);
+    try { entryDate(date); } catch (e) { return err(e.message); }
+    const bankRef = source === 'manual' ? str(x?.bank_ref, 80) : '';
+    if (bankRef && (seenRefs.has(bankRef) || db.prepare('SELECT 1 FROM fund_entries WHERE bank_ref=?').get(bankRef))) return err(`Mã giao dịch ${bankRef} bị trùng`);
+    if (bankRef) seenRefs.add(bankRef);
+    return { amount, source, date, bank_ref: bankRef, payer_name: x?.payer_name, anonymous: /^(x|1|có|co|true)$/i.test(str(x?.anonymous, 10)), note: str(x?.note, 500) };
+  });
+  const total = clean.reduce((s, x) => s + (x ? x.amount : 0), 0);
+  if (errors.length || req.query.dry === '1') return ok(res, { count: rows.length, total, errors, imported: 0 });
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const x of clean) insertIncome(req, f, x);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  log(req, 'fund_entry.import', 'fund', f.id, { count: clean.length, total });
+  ok(res, { count: clean.length, total, errors: [], imported: clean.length });
+}));
+
+// File mẫu để thủ quỹ điền rồi nhập lại
+router.get('/funds/:id/import-template', requirePerm('fund.entry'), wrap((req, res) => {
+  sendXlsx(res, 'mau-nhap-khoan-thu', [
+    { date: today(), payer_name: 'Nguyễn Văn A', amount: 200000, source: 'Tiền mặt', bank_ref: '', note: 'Đóng quỹ xóm 1', anonymous: '' },
+    { date: today(), payer_name: 'Trần Thị B', amount: 500000, source: 'Chuyển khoản', bank_ref: 'FT2611100001', note: '', anonymous: 'x' },
+  ], { sheet: 'Khoan thu', header: IMPORT_HEADER });
+}));
+const IMPORT_HEADER = { date: 'Ngày (YYYY-MM-DD)', payer_name: 'Người nộp', amount: 'Số tiền', source: 'Hình thức', bank_ref: 'Mã giao dịch', note: 'Ghi chú', anonymous: 'Ẩn danh (x)' };
 
 router.get('/fund-entries/:id/attachment', requirePerm('fund.view'), wrap((req, res) => {
   const e = entryFor(req, req.params.id);
