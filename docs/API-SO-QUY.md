@@ -22,75 +22,106 @@ Có hai nhóm API:
 1. Quản trị nền tảng bật **Công khai đợt thu & công đức** cho thôn (màn Cộng đồng).
 2. Trong sổ quỹ, bấm **Chia sẻ / nhắc đóng quỹ**. Link có dạng `https://<máy chủ>/congduc/<TOKEN>`. Phần `<TOKEN>` là mã dùng cho API.
 
-Chỉ những quỹ được đánh dấu **Công khai trên trang người nộp** mới xuất hiện trong API công khai: đợt đang thu, và đợt đã kết thúc nếu ban quản lý chọn công khai tổng kết (`status: "closed"`, không có QR và tài khoản nhận).
+Chỉ những quỹ được đánh dấu **Công khai trên trang người nộp** mới xuất hiện, ở cả ba trạng thái (xem bên dưới).
 Nếu thôn tắt công khai, mọi API dưới đây trả về `404`.
 
 API công khai cho phép gọi từ trình duyệt ở tên miền khác (CORS `Access-Control-Allow-Origin: *`) và chỉ cho đọc.
 
-### 1.1. Danh sách đợt thu của thôn
+### Ba trạng thái của quỹ
+
+| `state` | `state_label` | `status_text` (hiển thị sẵn) | Thu | Chi | QR |
+|---|---|---|---|---|---|
+| `collecting` | Đang thu | `Hạn thu 31/12/2026` | Có | Có | Có |
+| `stopped` | Ngừng thu | `Ngừng thu từ 31/10/2026 · vẫn chi` | Không | Có | Không (`qr_note`: "Quỹ đang ngừng thu") |
+| `locked` | Khoá sổ | `Không thu, không chi` | Không | Không | Không (`qr_note`: "Quỹ đã khoá sổ", App hiển thị QR mờ kèm nhãn) |
+
+- Hết hạn thu (`end_date`), hệ thống tự chuyển quỹ sang **Ngừng thu** và báo Admin.
+- **Mở thu lại** (từ Ngừng thu) tạo đợt mới: `round` tăng, `transfer_content` đổi (ví dụ `QPAN26-D2`), QR mới. Tiền chuyển theo QR đợt cũ không tự vào sổ.
+- **Khoá sổ** là chốt cuối. Có `lock_balance` (số dư khi khoá) và `minutes_url` (biên bản khoá sổ).
+- **Mở khoá sổ** chỉ khi có sai sót, cần 2 người duyệt. Quỹ về Ngừng thu và `unlock_text` = "Đã mở khoá sổ ngày … – lý do …" (App nên hiển thị dòng này).
+
+### 1.1. Danh sách quỹ của thôn
 
 ```
 GET /public/api/donations/<TOKEN>
 ```
 
-Ví dụ trả về:
+Ví dụ trả về (rút gọn):
 
 ```json
 {
   "ok": true,
   "data": {
     "community_name": "Thôn An Phú",
+    "notices": [
+      { "fund_id": 5, "kind": "auto_stop", "message": "Quỹ quốc phòng – an ninh 2026: ngừng thu từ 31/10/2026 (hết hạn thu)", "created_at": "2026-10-31 17:00:00" }
+    ],
     "programs": [
       {
-        "id": 2,
-        "name": "Công đức tu sửa đình làng",
-        "kind": "donation",
-        "fund_type": "Công đức",
+        "id": 5,
+        "code": "qp-an",
+        "name": "Quỹ quốc phòng – an ninh 2026",
+        "fund_type": "Quỹ quốc phòng – an ninh",
+        "nature": "mandatory",
+        "nature_label": "Bắt buộc",
         "category": "Cả thôn",
-        "contribution": "voluntary",
-        "target_amount": null,
-        "description": "Chương trình công đức năm nay",
-        "start_date": "2026-10-01",
-        "end_date": "2026-12-31",
-        "bank_account": "9612345678",
-        "bank_name": "MB Bank",
-        "account_holder": "BAN QUAN LY THON AN PHU",
-        "qrDataUrl": "data:image/png;base64,iVBORw0...",
-        "total": 12500000,
-        "spent": 3000000,
-        "balance": 9500000,
+        "contribution": "household",
+        "target_amount": 50000,
+        "description": "Thu theo Nghị quyết HĐND xã, mỗi hộ 50.000 đ/năm",
+        "content": "Căn cứ Nghị quyết HĐND xã …\nĐối tượng: …",
+        "documents": [ { "id": 3, "name": "Nghị quyết HĐND xã.pdf", "mime": "application/pdf", "size": 182044, "url": "/public/api/donations/<TOKEN>/documents/3" } ],
+        "start_date": "2026-09-01",
+        "end_date": "2026-10-31",
+        "state": "stopped",
+        "state_label": "Ngừng thu",
+        "status_text": "Ngừng thu từ 31/10/2026 · vẫn chi",
+        "round": 1,
+        "stopped_at": "2026-10-31 17:00:00",
+        "locked_at": null, "lock_balance": null, "minutes_url": null,
+        "unlocked_at": null, "unlock_reason": null, "unlock_text": null,
+        "bank_account": null, "bank_name": null, "account_holder": null,
+        "transfer_content": null, "qrDataUrl": null, "qr_note": "Quỹ đang ngừng thu",
+        "total": 1500000, "spent": 600000, "balance": 900000, "donors": 30, "progress": null,
         "entries": [
-          { "type": "in", "name": "Nguyễn Văn An", "anonymous": false, "amount": 500000, "note": "", "date": "2026-11-09" },
-          { "type": "in", "name": null, "anonymous": true, "amount": 200000, "note": "", "date": "2026-11-08" },
-          { "type": "out", "name": null, "anonymous": false, "amount": 3000000, "note": "Mua ngói", "date": "2026-11-05" }
-        ]
+          { "type": "out", "name": null, "anonymous": false, "amount": 600000, "note": "Hỗ trợ dân quân trực Tết", "date": "2026-11-08", "after_stop": true },
+          { "type": "in", "name": "Nguyễn Văn An", "anonymous": false, "amount": 50000, "note": "Đóng quỹ", "date": "2026-10-30", "after_stop": false }
+        ],
+        "notices": [ { "kind": "auto_stop", "message": "…", "created_at": "2026-10-31 17:00:00" } ]
       }
     ]
   }
 }
 ```
 
-Ý nghĩa các trường của một đợt thu:
+Ý nghĩa các trường của một quỹ:
 
 | Trường | Ý nghĩa |
 |---|---|
-| `id` | Mã số quỹ, dùng cho API tạo QR |
-| `name` | Tên quỹ / đợt thu |
-| `fund_type` | Loại quỹ do thôn đặt (Quỹ chung, Công đức, Khuyến học, Ủng hộ lũ lụt…) |
-| `category` | Phạm vi thu: `Cả thôn` hoặc tên xóm / đoàn thể (Xóm 1, Hội Phụ nữ…). `null` ở quỹ cũ chưa chọn = cả thôn |
+| `id`, `code` | Mã số quỹ (dùng cho API chi tiết / QR) và mã chữ |
+| `name` | Tên quỹ |
+| `fund_type` | Loại quỹ do thôn đặt (Quỹ chung, Quỹ quốc phòng – an ninh, Công đức, Khuyến học…) |
+| `nature`, `nature_label` | Tính chất: `mandatory` Bắt buộc, `campaign` Vận động, `voluntary` Tự nguyện (`null` nếu chưa chọn) |
+| `category` | Phạm vi thu: `Cả thôn` hoặc tên xóm / đoàn thể. `null` ở quỹ cũ = cả thôn |
 | `contribution` | Cách đóng: `household` theo hộ, `person` theo nhân khẩu, `voluntary` tùy tâm, `goal` huy động theo mục tiêu |
-| `target_amount` | Mức đóng mỗi hộ (`household`), mỗi người (`person`) hoặc tổng mục tiêu (`goal`). `null` khi tùy tâm |
-| `start_date`, `end_date` | Thời gian thu (có thể `null`) |
-| `status` | `active` đang kêu gọi, `closed` đã kết thúc. Danh sách xếp đợt đang thu trước |
-| `closed_at`, `close_note` | Thời điểm kết thúc và kết quả / quyết toán (chỉ có khi `closed`) |
+| `target_amount` | Mức mỗi hộ / mỗi người / tổng mục tiêu theo `contribution`. `null` khi tùy tâm |
+| `description` | Mô tả ngắn |
+| `content` | Nội dung chi tiết (văn bản nhiều dòng, giữ nguyên xuống dòng; hiển thị dạng text, không phải HTML) |
+| `documents` | Tài liệu đính kèm (nghị quyết, tờ trình, ảnh…): `name`, `mime`, `size` (byte), `url` |
+| `start_date`, `end_date` | Bắt đầu thu, hạn thu |
+| `state`, `state_label`, `status_text` | Trạng thái (xem bảng trên) |
+| `round` | Đợt thu thứ mấy (tăng khi mở thu lại) |
+| `stopped_at` | Thời điểm ngừng thu |
+| `locked_at`, `lock_balance`, `minutes_url` | Thời điểm khoá sổ, số dư khi khoá sổ, link biên bản khoá sổ |
+| `unlocked_at`, `unlock_reason`, `unlock_text` | Lần mở khoá sổ gần nhất (nếu có) |
+| `bank_account`, `bank_name`, `account_holder` | Tài khoản nhận tiền (chỉ khi Đang thu) |
+| `transfer_content` | Nội dung chuyển khoản của đợt hiện tại (chỉ khi Đang thu), ví dụ `QPAN26-D2` |
+| `qrDataUrl` | Ảnh QR (PNG data URL) khi Đang thu; `null` khi Ngừng thu / Khoá sổ / chưa khai tài khoản |
+| `qr_note` | Nhãn thay QR: "Quỹ đang ngừng thu" / "Quỹ đã khoá sổ" |
+| `total`, `spent`, `balance` | Tổng đã thu, đã chi, số dư (trên toàn bộ sổ) |
 | `donors` | Số lượt đóng góp |
-| `progress` | % đạt mục tiêu, chỉ với `contribution = goal` (còn lại `null`) |
-| `bank_account`, `bank_name`, `account_holder` | Tài khoản nhận tiền riêng của quỹ (`null` khi đợt đã kết thúc) |
-| `qrDataUrl` | Ảnh mã QR chuyển khoản (người nộp tự nhập số tiền), dạng data URL PNG, dùng thẳng trong `<img src>`. `null` nếu quỹ chưa khai tài khoản hoặc đợt đã kết thúc |
-| `total` | Tổng đã thu |
-| `spent` | Tổng đã chi |
-| `balance` | Còn lại (đã tính bút toán điều chỉnh) |
-| `entries` | Tối đa 300 khoản gần nhất đã ghi sổ, mới nhất trước |
+| `progress` | % đạt mục tiêu (chỉ `contribution = goal`) |
+| `entries` | Tối đa 300 khoản gần nhất đã ghi sổ |
+| `notices` | 20 thông báo gần nhất của quỹ (mở thu lại, tự ngừng thu, khoá / mở khoá sổ) |
 
 Một khoản trong `entries`:
 
@@ -102,6 +133,16 @@ Một khoản trong `entries`:
 | `amount` | Số tiền |
 | `note` | Nội dung (với khoản chi: chi cho việc gì) |
 | `date` | Ngày ghi sổ |
+| `after_stop` | `true` nếu là khoản chi / điều chỉnh phát sinh sau ngày ngừng thu (để thấy quỹ vẫn chi) |
+
+`notices` ở cấp thôn: 30 thông báo mới nhất của mọi quỹ công khai, `kind` thuộc `resume` (mở thu lại), `auto_stop` (tự ngừng thu), `stop`, `lock`, `unlock`.
+
+### 1.1b. Chi tiết một quỹ, tài liệu
+
+```
+GET /public/api/donations/<TOKEN>/funds/<id>              # một quỹ, cùng cấu trúc như trên
+GET /public/api/donations/<TOKEN>/documents/<docId>       # tải tài liệu / biên bản (PDF, ảnh mở trực tiếp; Word, Excel tải về)
+```
 
 ### 1.2. Tạo mã QR đúng số tiền
 
@@ -110,7 +151,8 @@ GET /public/api/donations/<TOKEN>/funds/<id>/qr?amount=200000
 ```
 
 - `amount` không bắt buộc. Bỏ trống thì trả QR để người nộp tự nhập số tiền.
-- Nội dung chuyển khoản trong QR là tên quỹ (không dấu). Tiền chuyển vào tài khoản quỹ được tự ghi vào sổ.
+- Chỉ quỹ **Đang thu** mới tạo được QR (quỹ khác trả `404`).
+- Nội dung chuyển khoản trong QR là `transfer_content` của đợt hiện tại. Tiền chuyển vào tài khoản quỹ với nội dung này được tự ghi vào sổ.
 
 ```json
 {
@@ -119,6 +161,8 @@ GET /public/api/donations/<TOKEN>/funds/<id>/qr?amount=200000
     "qrCode": "00020101021238570010A000000727...",
     "qrDataUrl": "data:image/png;base64,iVBORw0...",
     "fund_id": 2,
+    "round": 1,
+    "transfer_content": "CDTSDL",
     "bank_name": "MB Bank",
     "bank_account": "9612345678",
     "account_holder": "BAN QUAN LY THON AN PHU",
@@ -161,7 +205,8 @@ Quyền theo vai trò:
 |---|---|
 | Thủ quỹ | Xem quỹ, ghi thu, nhập Excel, lập phiếu chi |
 | Người duyệt chi | Xem, tạo / sửa quỹ, duyệt chi. Không ghi thu |
-| Ban lãnh đạo | Xem, tạo / sửa quỹ |
+| Ban lãnh đạo | Xem, tạo / sửa quỹ, ngừng thu / mở thu lại |
+| Trưởng ban kiểm tra | Xem; khoá sổ; duyệt mở khoá sổ |
 | Quản trị sổ quỹ | Toàn quyền |
 
 ### 2.1. Danh sách quỹ
@@ -170,7 +215,7 @@ Quyền theo vai trò:
 GET /api/funds
 ```
 
-Trả mảng quỹ, mỗi quỹ gồm các trường ở mục 1.1 cùng `code`, `status` (`active` / `closed`), `is_public`, `manager_name` (thủ quỹ phụ trách) và `balance` (tồn quỹ).
+Trả mảng quỹ, mỗi quỹ gồm các trường ở mục 1.1 cùng `state`, `state_label`, `transfer_content`, `is_public`, `manager_name` (thủ quỹ phụ trách) và `balance` (tồn quỹ).
 
 ### 2.2. Tạo / sửa quỹ
 
@@ -180,6 +225,9 @@ PATCH /api/funds/<id>
 {
   "name": "Quỹ khuyến học 2026",
   "fund_type": "Khuyến học",
+  "nature": "campaign",
+  "content": "Mục đích, căn cứ, đối tượng…",
+  "transfer_code": "KH26",
   "category": "Xóm 1",
   "contribution": "person",
   "target_amount": 50000,
@@ -196,6 +244,17 @@ PATCH /api/funds/<id>
 - `code` không bắt buộc. Bỏ trống thì hệ thống tự sinh từ tên (ví dụ `quy-khuyen-hoc-2026`).
 - `contribution` thuộc `household`, `person`, `voluntary`, `goal`. Với `voluntary` thì `target_amount` luôn là `null`.
 - Tài khoản nhận tiền của mỗi quỹ phải riêng, không trùng quỹ hay cửa hàng khác.
+- `nature`: `mandatory` / `campaign` / `voluntary`. `transfer_code`: mã ngắn cho nội dung chuyển khoản (bỏ trống thì tự tạo).
+- Không đổi trạng thái bằng PATCH (dùng mục 2.5). Quỹ đã khoá sổ không sửa được.
+
+Tài liệu của quỹ:
+
+```
+GET    /api/funds/<id>/documents
+POST   /api/funds/<id>/documents     { "name": "Nghị quyết.pdf", "data": "data:application/pdf;base64,..." }   # PDF, ảnh, Word, Excel ≤ 10MB
+GET    /api/fund-documents/<docId>
+DELETE /api/fund-documents/<docId>   # không gỡ được biên bản
+```
 
 ### 2.3. Ghi một khoản thu
 
@@ -237,20 +296,26 @@ POST /api/funds/<id>/import                   # ghi sổ
   "errors": [ { "line": 4, "error": "Số tiền không hợp lệ" } ] } }
 ```
 
-### 2.5. Kết thúc đợt kêu gọi
+### 2.5. Trạng thái quỹ: Ngừng thu, Mở thu lại, Khoá sổ, Mở khoá
 
 ```
-GET  /api/funds/<id>/summary      # tổng kết: donors, total_in, total_out, balance, pending, progress
-POST /api/funds/<id>/close        # quyền quản lý quỹ (Người duyệt chi, Ban lãnh đạo, Quản trị)
-{ "close_note": "Đã tu sửa xong mái đình. Số dư chuyển quỹ chung.", "result_public": true }
-POST /api/funds/<id>/reopen
-{ "reason": "Thu thêm đợt 2" }
+GET  /api/funds/<id>/summary          # donors, total_in, total_out, balance, pending, out_no_receipt, progress
+POST /api/funds/<id>/stop             { "note": "..." }                                    # quản lý quỹ
+POST /api/funds/<id>/resume           { "end_date": "2026-12-31", "reason": "Gia hạn" }    # quản lý quỹ, bắt buộc hạn mới + lý do
+POST /api/funds/<id>/lock             { "minutes": { "name": "bien-ban.pdf", "data": "..." }, "balance_note": "...", "note": "..." }   # Trưởng ban kiểm tra
+POST /api/funds/<id>/unlock-requests  { "reason": "Ghi nhầm số tiền ...", "minutes": { ... } }
+GET  /api/funds/<id>/unlock-requests
+POST /api/fund-requests/<reqId>/approve      # Trưởng thôn (Người duyệt chi) và Trưởng ban kiểm tra, mỗi người một lần
+POST /api/fund-requests/<reqId>/reject       { "reason": "..." }
+POST /api/funds/<id>/clone            { "name": "Quỹ PCTT 2026" }                          # tạo quỹ mới từ quỹ cũ
+GET  /api/fund-notices                       # thông báo 14 ngày gần nhất (tự ngừng thu…)
 ```
 
-- Còn phiếu nháp / chờ duyệt (`pending > 0`) thì không kết thúc được.
-- Sau khi kết thúc: không ghi thu chi, không tạo QR. Tiền chuyển vào tài khoản quỹ sau đó vào mục giao dịch chưa phân loại.
-- `result_public`: `true` (mặc định) thì đợt đã kết thúc vẫn hiện trên trang / API người dân kèm tổng kết; `false` thì ẩn.
-- Mở lại xóa thông tin kết thúc; lý do ghi vào nhật ký.
+- **Ngừng thu**: không ghi thu, không tạo QR; phiếu chi vẫn lập và duyệt. Tiền chuyển vào sau đó nằm ở mục chưa phân loại.
+- **Mở thu lại**: `round` + 1, nội dung chuyển khoản `<mã>-D<round>`. Tiền chuyển theo nội dung cũ vào mục chưa phân loại. Có thông báo cho người dân, ghi nhật ký.
+- **Khoá sổ** cần: đang Ngừng thu, không còn phiếu nháp / chờ duyệt, mọi khoản chi có chứng từ, biên bản đính kèm, và nếu số dư khác 0 thì `balance_note` ghi rõ cách xử lý. Sau khi khoá: không thu, không chi, không sửa (chặn cả ở tầng cơ sở dữ liệu).
+- **Mở khoá sổ**: đề nghị có lý do + biên bản; đủ chữ ký Trưởng thôn và Trưởng ban kiểm tra (hai người khác nhau) thì quỹ về Ngừng thu. Sửa sai bằng bút toán điều chỉnh.
+- Thu cho năm / đợt sau: tạo quỹ mới (`clone` chép cấu hình, không chép tài khoản nhận và giao dịch).
 
 ### 2.6. Sổ thu chi và báo cáo
 

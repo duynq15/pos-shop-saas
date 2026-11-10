@@ -19,6 +19,7 @@ const PERMISSIONS = [
   'fund.anonymize',       // ẩn / hiện tên người công đức (FR-20)
   'community.report',     // báo cáo tổng hợp cộng đồng (FR-18, BR-09)
   'community.categories', // danh mục hạng mục dùng chung (FR-10, BR-11)
+  'fund.inspect',         // Ban kiểm tra: xác nhận khoá sổ, duyệt mở khoá sổ (SKHGDT-3647)
 ];
 
 // Loại tenant được dùng vai trò (FR-02). Thiếu `kinds` = mọi loại.
@@ -85,6 +86,14 @@ const ROLES = {
     // Ban lãnh đạo được xem toàn bộ sổ quỹ và cấu hình quỹ/tài khoản nhận tiền,
     // nhưng vẫn tách khỏi thủ quỹ (nhập liệu) và người duyệt chi.
     perms: ['community.report', 'fund.view', 'fund.manage'],
+    maxDiscount: 0,
+  },
+  // Ban kiểm tra độc lập với người thu / chi / duyệt: chỉ xem và xác nhận khoá sổ, mở khoá sổ.
+  inspector: {
+    name: 'Trưởng ban kiểm tra',
+    desc: 'Xem toàn bộ sổ quỹ; xác nhận khoá sổ và duyệt mở khoá sổ. Không thu, chi, duyệt chi.',
+    kinds: COMMUNITY_KINDS,
+    perms: ['fund.view', 'fund.inspect', 'community.report', 'report.export'],
     maxDiscount: 0,
   },
 };

@@ -53,6 +53,22 @@ db.runWith('quiet', (c) => c.prepare("INSERT INTO vietqr_transactions(transactio
 runChecks(at('2026-09-20 10:00:00'));
 ok('silent: quiet tenant not alerted', control.prepare("SELECT COUNT(*) n FROM alerts WHERE tenant_code='quiet' AND resolved_at IS NULL").get().n === 0);
 
+// 4) Quỹ hết hạn thu tự chuyển Ngừng thu, có thông báo; khoá sổ chặn ghi bút toán ở tầng DB (SKHGDT-3647)
+const { autoStopExpired } = require('../src/routes/funds');
+control.prepare("INSERT INTO tenants(code,name,plan,status,kind) VALUES ('quy-x','Quỹ X','standard','active','community')").run();
+const fx = (sql, ...a) => db.runWith('quy-x', (c) => c.prepare(sql).run(...a));
+fx("INSERT INTO funds(code,name,end_date) VALUES ('het-han','Quỹ hết hạn','2000-01-01')");
+fx("INSERT INTO funds(code,name,end_date) VALUES ('con-han','Quỹ còn hạn','2999-01-01')");
+ok('auto-stop: one expired fund stopped', autoStopExpired() === 1);
+const fq = (code) => db.runWith('quy-x', (c) => c.prepare('SELECT * FROM funds WHERE code=?').get(code));
+ok('auto-stop: expired -> closed with stop time, other untouched', fq('het-han').status === 'closed' && !!fq('het-han').stopped_at && fq('con-han').status === 'active');
+ok('auto-stop: notice recorded', db.runWith('quy-x', (c) => c.prepare("SELECT COUNT(*) n FROM fund_notices WHERE kind='auto_stop'").get().n) === 1);
+ok('auto-stop: rerun is a no-op', autoStopExpired() === 0);
+fx("UPDATE funds SET locked_at='2026-01-01' WHERE code='het-han'");
+let blocked = false;
+try { fx("INSERT INTO fund_entries(code,fund_id,type,amount,status) VALUES ('PT-X',?, 'in', 1000, 'approved')", fq('het-han').id); } catch (e) { blocked = /khoá sổ/.test(e.message); }
+ok('locked fund: DB trigger refuses new entries', blocked);
+
 console.log(R.join('\n'));
 const failed = R.filter((r) => r.startsWith('FAIL')).length;
 console.log(`\n${R.length - failed}/${R.length} passed`);

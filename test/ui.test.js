@@ -427,11 +427,20 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.locator('#fd-new-fund').click(); await quy.pg.waitForTimeout(400);
     ok('Fund scope lists groups from settings', (await quy.pg.locator('#fd-f-category option').allInnerTexts()).join('|') === 'Cả thôn|Xóm 1|Hội Phụ nữ');
     await quy.pg.locator('#fd-f-close').click();
-    // Kết thúc đợt: còn phiếu nháp "Mua nước" nên nút bị khóa
-    await quy.pg.locator('.fd-menu summary').click(); await quy.pg.locator('#fd-close').click(); await quy.pg.waitForTimeout(500);
-    ok('End-call modal shows summary, blocked by open draft', (await quy.pg.locator('.fd-sum').innerText()).includes('50.000')
-      && await quy.pg.locator('#fd-cl-save').isDisabled());
-    await quy.pg.locator('#fd-cl-cancel').click();
+    // Vòng đời: Đang thu -> Ngừng thu (vẫn lập phiếu chi, không thu) -> Mở thu lại
+    ok('State banner shows collecting', (await quy.pg.locator('.fd-state').innerText()).includes('Đang thu'));
+    await quy.pg.locator('#fd-stop').click(); await quy.pg.waitForTimeout(500);
+    ok('Stop modal shows summary', (await quy.pg.locator('.fd-sum').innerText()).includes('50.000'));
+    await quy.pg.locator('#fd-st-save').click(); await quy.pg.waitForTimeout(700);
+    ok('Stopped: "vẫn chi" banner, no income button, expense still allowed', (await quy.pg.locator('.fd-state').innerText()).includes('vẫn chi')
+      && (await quy.pg.locator('#fd-in').count()) === 0 && (await quy.pg.locator('#fd-out').count()) === 1 && (await quy.pg.locator('#fd-qr').count()) === 0);
+    await quy.pg.locator('#fd-resume').click(); await quy.pg.waitForTimeout(300);
+    await quy.pg.locator('#fd-rs-date').fill('2999-12-31'); await quy.pg.locator('#fd-rs-reason').fill('Gia hạn');
+    await quy.pg.locator('#fd-rs-save').click(); await quy.pg.waitForTimeout(700);
+    ok('Resumed: round 2 with new transfer content', (await quy.pg.locator('.fd-state').innerText()).includes('Đợt 2'));
+    await quy.pg.locator('#fd-docs').click(); await quy.pg.waitForTimeout(400);
+    ok('Documents modal opens with upload', (await quy.pg.locator('#fd-dc-file').count()) === 1);
+    await quy.pg.locator('#fd-dc-close').click();
     await quy.c.close();
 
     // ================= GĐ4: Nhận tiền nhanh (người bán, điện thoại) =================

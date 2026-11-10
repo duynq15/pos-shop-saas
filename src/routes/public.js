@@ -311,55 +311,115 @@ function publicCommunity(token) {
   return c && communitySettings(c.settings).public_donations ? c : null;
 }
 const communityTenant = (communityId) => control.prepare("SELECT code FROM tenants WHERE community_id=? AND kind='community'").get(communityId);
-const PUBLIC_COLS = `id,code,name,kind,category,fund_type,contribution,description,start_date,end_date,target_amount,is_public,status,
-  closed_at,close_note,bank_account,bank_bin,bank_name,account_holder`;
-// QR chỉ cho đợt đang thu; đợt đã kết thúc vẫn hiện (không QR) nếu chọn công khai kết quả
-const PUBLIC_FUND_SELECT = `SELECT ${PUBLIC_COLS} FROM funds WHERE status='active' AND is_public=1`;
-const publicFundSql = `SELECT ${PUBLIC_COLS} FROM funds WHERE is_public=1 AND (status='active' OR result_public=1)
-  ORDER BY status='closed', CASE WHEN status='closed' THEN closed_at END DESC, id`;
+// Quỹ công khai hiện ở mọi trạng thái: Đang thu (có QR), Ngừng thu (vẫn chi, không QR), Khoá sổ (không QR, có biên bản).
+const PUBLIC_FUND_SELECT = "SELECT * FROM funds WHERE status='active' AND locked_at IS NULL AND is_public=1";
+const publicFundSql = `SELECT * FROM funds WHERE is_public=1
+  ORDER BY CASE WHEN locked_at IS NOT NULL THEN 2 WHEN status='active' THEN 0 ELSE 1 END, COALESCE(locked_at, stopped_at) DESC, id`;
+const NATURE_LABEL = { mandatory: 'Bắt buộc', campaign: 'Vận động', voluntary: 'Tự nguyện' };
+const viDate = (d) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}` : '');
 
-async function donationsData(token) {
+// Dòng trạng thái hiển thị sẵn cho web / App (đúng câu chữ của thiết kế Làng Số)
+function statusText(f, state) {
+  if (state === 'collecting') return f.end_date ? `Hạn thu ${viDate(f.end_date)}` : 'Đang thu';
+  if (state === 'stopped') return f.stopped_at ? `Ngừng thu từ ${viDate(f.stopped_at.slice(0, 10))} · vẫn chi` : 'Ngừng thu · vẫn chi';
+  return 'Không thu, không chi';
+}
+
+async function publicFund(f, token, { withEntries = true } = {}) {
+  const { stateOf, STATE_LABEL, transferRef, docsOf } = pf();
+  const state = stateOf(f);
+  let qr = null;
+  if (state === 'collecting') try { qr = await fundQr(f); } catch { qr = null; }
+  const sum = fundSummary(f); // tổng trên toàn bộ bút toán, không chỉ 300 dòng hiển thị
+  const docUrl = (id) => `/public/api/donations/${token}/documents/${id}`;
+  const docs = docsOf(f.id);
+  const minutes = f.lock_doc_id ? docs.find((d) => d.id === f.lock_doc_id) : null;
+  const out = {
+    id: f.id, code: f.code, name: f.name, kind: f.kind, fund_type: f.fund_type,
+    nature: f.nature || null, nature_label: NATURE_LABEL[f.nature] || null,
+    contribution: f.contribution, category: f.category, description: f.description, content: f.content || null,
+    start_date: f.start_date, end_date: f.end_date, target_amount: f.target_amount,
+    state, state_label: STATE_LABEL[state], status_text: statusText(f, state), round: f.round,
+    // tương thích bản trước: status active | closed
+    status: f.status,
+    stopped_at: f.stopped_at || null,
+    locked_at: f.locked_at || null, lock_balance: f.locked_at ? f.lock_balance : null,
+    minutes_url: minutes ? docUrl(minutes.id) : null,
+    unlocked_at: f.unlocked_at || null, unlock_reason: f.unlocked_at ? f.unlock_reason : null,
+    unlock_text: f.unlocked_at ? `Đã mở khoá sổ ngày ${viDate(f.unlocked_at.slice(0, 10))} – lý do: ${f.unlock_reason}` : null,
+    bank_account: state === 'collecting' ? f.bank_account : null, bank_name: state === 'collecting' ? f.bank_name : null,
+    account_holder: state === 'collecting' ? f.account_holder : null,
+    transfer_content: state === 'collecting' ? transferRef(f) : null,
+    qrDataUrl: qr ? qr.qrDataUrl : null,
+    qr_note: state === 'locked' ? 'Quỹ đã khoá sổ' : state === 'stopped' ? 'Quỹ đang ngừng thu' : null,
+    total: sum.total_in, spent: sum.total_out, balance: sum.balance, donors: sum.donors, progress: sum.progress,
+    documents: docs.filter((d) => d.kind === 'doc').map((d) => ({ id: d.id, name: d.name, mime: d.mime, size: d.size, url: docUrl(d.id) })),
+  };
+  if (withEntries) {
+    out.entries = db.prepare(`SELECT type, payer_name, anonymous, amount, note, created_at, approved_at FROM fund_entries
+      WHERE fund_id=? AND status='approved' ORDER BY created_at DESC, id DESC LIMIT 300`).all(f.id).map((e) => ({
+      type: e.type,
+      name: e.anonymous ? null : (e.payer_name || null),
+      anonymous: !!e.anonymous,
+      amount: e.amount,
+      note: e.note || '',
+      date: (e.created_at || '').slice(0, 10),
+      // khoản chi phát sinh sau ngày ngừng thu (thấy quỹ vẫn chi)
+      after_stop: !!(f.stopped_at && e.type !== 'in' && (e.approved_at || e.created_at) > f.stopped_at),
+    }));
+    out.notices = db.prepare('SELECT kind, message, created_at FROM fund_notices WHERE fund_id=? ORDER BY id DESC LIMIT 20').all(f.id);
+  }
+  return out;
+}
+// Nạp muộn: funds.js nạp public.js gián tiếp qua server; tránh vòng require lúc khởi động
+const pf = () => require('./funds').publicFund;
+
+function publicTenant(token) {
   const c = publicCommunity(token);
   if (!c) return null;
-  const tenant = communityTenant(c.id);
-  if (!tenant) return { community_name: c.name, programs: [] };
-  const programs = await db.runWith(tenant.code, async () => {
-    const funds = db.prepare(publicFundSql).all();
-    const out = [];
-    for (const f of funds) {
-      const entries = db.prepare(`SELECT type, payer_name, anonymous, amount, note, created_at FROM fund_entries
-        WHERE fund_id=? AND status='approved' ORDER BY created_at DESC, id DESC LIMIT 300`).all(f.id);
-      const active = f.status === 'active';
-      let qr = null;
-      if (active) try { qr = await fundQr(f); } catch { qr = null; }
-      // Tổng tính trên toàn bộ bút toán, không chỉ 300 dòng hiển thị
-      const sum = fundSummary(f);
-      out.push({
-        id: f.id, name: f.name, kind: f.kind, fund_type: f.fund_type, contribution: f.contribution, category: f.category, description: f.description,
-        start_date: f.start_date, end_date: f.end_date, target_amount: f.target_amount,
-        status: f.status, closed_at: f.closed_at || null, close_note: active ? null : f.close_note || null,
-        bank_account: active ? f.bank_account : null, bank_name: active ? f.bank_name : null, account_holder: active ? f.account_holder : null,
-        qrDataUrl: qr ? qr.qrDataUrl : null,
-        total: sum.total_in, spent: sum.total_out, balance: sum.balance, donors: sum.donors, progress: sum.progress,
-        entries: entries.map((e) => ({
-          type: e.type,
-          name: e.anonymous ? null : (e.payer_name || null),
-          anonymous: !!e.anonymous,
-          amount: e.amount,
-          note: e.note || '',
-          date: (e.created_at || '').slice(0, 10),
-        })),
-      });
-    }
-    return out;
+  return { c, tenant: communityTenant(c.id) };
+}
+
+async function donationsData(token) {
+  const pt = publicTenant(token);
+  if (!pt) return null;
+  if (!pt.tenant) return { community_name: pt.c.name, programs: [], notices: [] };
+  return db.runWith(pt.tenant.code, async () => {
+    const programs = [];
+    for (const f of db.prepare(publicFundSql).all()) programs.push(await publicFund(f, token));
+    const notices = db.prepare(`SELECT n.fund_id, n.kind, n.message, n.created_at FROM fund_notices n JOIN funds f ON f.id=n.fund_id
+      WHERE f.is_public=1 ORDER BY n.id DESC LIMIT 30`).all();
+    return { community_name: pt.c.name, programs, notices };
   });
-  return { community_name: c.name, programs };
 }
 
 router.get('/donations/:token', wrap(async (req, res) => {
   const data = await donationsData(req.params.token);
   if (!data) return res.status(404).json({ error: 'Không tìm thấy' });
   ok(res, data);
+}));
+
+// Chi tiết một quỹ (App Làng Số mở trang chi tiết)
+router.get('/donations/:token/funds/:id', wrap(async (req, res) => {
+  const pt = publicTenant(req.params.token);
+  if (!pt || !pt.tenant) return res.status(404).json({ error: 'Không tìm thấy' });
+  const data = await db.runWith(pt.tenant.code, async () => {
+    const f = db.prepare('SELECT * FROM funds WHERE is_public=1 AND id=?').get(Number(req.params.id));
+    return f ? publicFund(f, req.params.token) : null;
+  });
+  if (!data) return res.status(404).json({ error: 'Không tìm thấy quỹ' });
+  ok(res, data);
+}));
+
+// Tài liệu / biên bản của quỹ công khai
+router.get('/donations/:token/documents/:docId', wrap((req, res) => {
+  const pt = publicTenant(req.params.token);
+  if (!pt || !pt.tenant) return res.status(404).json({ error: 'Không tìm thấy' });
+  db.runWith(pt.tenant.code, () => {
+    const d = db.prepare('SELECT d.* FROM fund_documents d JOIN funds f ON f.id=d.fund_id WHERE d.id=? AND f.is_public=1').get(Number(req.params.docId));
+    if (!d) return res.status(404).json({ error: 'Không tìm thấy tài liệu' });
+    pf().sendDocument(res, d);
+  });
 }));
 
 // QR đúng số tiền cho người nộp; chỉ với đợt thu công khai / công đức đang hoạt động.

@@ -534,7 +534,7 @@ function seedFunds(code, c) {
     if (closed) {
       // Quỹ đã quyết toán: chi hết các khoản, không còn khoản dở, đóng quỹ + một biên bản đối soát khớp
       for (const [k, n] of NOTES.entries()) { const a = k === NOTES.length - 1 ? balance - spent : Math.round(balance / NOTES.length / 10000) * 10000; spend(95 - k * 2, a, n, 'approved'); spent += a; }
-      conn.prepare("UPDATE funds SET status='closed' WHERE id=?").run(fid);
+      conn.prepare("UPDATE funds SET status='closed', stopped_at=?, stopped_by_name=? WHERE id=?").run(fmtDate(new Date(Date.now() - 90 * 86400000)), dy.full_name, fid);
     } else {
       for (let k = 0; k < NOTES.length - 1; k++) {
         const a = Math.min(Math.round((balance - spent) * 0.18 / 10000) * 10000, balance - spent);
@@ -563,6 +563,54 @@ function seedFunds(code, c) {
     }
   }
   conn.exec('COMMIT');
+  if (c.type !== 'pagoda') seedLifecycle(conn, c, tq, dy, acc, dir, entryCode, insEntry);
+}
+
+// Mẫu theo thiết kế Làng Số (SKHGDT-3647): một quỹ Ngừng thu vẫn chi, một quỹ Khoá sổ có biên bản
+function seedLifecycle(conn, c, tq, dy, acc, dir, entryCode, insEntry) {
+  if (conn.prepare("SELECT 1 FROM funds WHERE code='qp-an'").get()) return;
+  const day = (n) => new Date(Date.now() - n * 86400000);
+  const ins = conn.prepare(`INSERT INTO funds(code,name,kind,fund_type,nature,is_public,contribution,target_amount,category,transfer_code,bank_account,bank_bin,bank_name,
+    account_holder,manager_user_id,description,content,start_date,end_date,status,stopped_at,stopped_by_name,created_by) VALUES (?,?,'general',?,?,1,?,?,'Cả thôn',?,?,'970422','MB Bank',?,?,?,?,?,?,?,?,?,?)`);
+  const holder = 'BAN QUAN LY ' + removeVietnamese(c.name).toUpperCase();
+  const gather = (fid, n, amount, fromDays, toDays) => {
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      const d = day(fromDays - (fromDays - toDays) * i / n);
+      insEntry.run(entryCode('PT', d), fid, 'in', amount, i % 3 ? 'cash' : 'vietqr', i % 3 ? null : `FTQP${c.code}${fid}${i}`, DONORS[i % DONORS.length], 0,
+        'Đóng quỹ', null, 'approved', tq.id, tq.full_name, fmtDate(d), tq.id, tq.full_name, fmtDate(d));
+      sum += amount;
+    }
+    return sum;
+  };
+  const spend = (fid, d, amount, note) => {
+    const ecode = entryCode('PC', d);
+    fs.writeFileSync(path.join(dir, `${ecode}-seed.png`), RECEIPT_PNG);
+    insEntry.run(ecode, fid, 'out', amount, 'cash', null, null, 0, note, `${ecode}-seed.png`, 'approved', tq.id, tq.full_name, fmtDate(d), dy.id, dy.full_name, fmtDate(d));
+  };
+  // 1) Quỹ quốc phòng – an ninh: ngừng thu từ 31/10, vẫn chi sau ngày ngừng
+  const year = new Date().getFullYear();
+  const stopAt = `${year}-10-31 17:00:00`;
+  const qp = Number(ins.run('qp-an', `Quỹ quốc phòng – an ninh ${year}`, 'Quỹ quốc phòng – an ninh', 'mandatory', 'household', 50000, 'QPAN' + String(year).slice(2),
+    acc('qp-an'), holder, tq.id, 'Thu theo Nghị quyết HĐND xã, mỗi hộ 50.000 đ/năm',
+    'Căn cứ Nghị quyết HĐND xã về mức đóng góp Quỹ quốc phòng – an ninh.\nĐối tượng: các hộ thường trú trên địa bàn thôn.\nMức đóng: 50.000 đ/hộ/năm.\nThời gian thu: từ 01/09 đến 31/10.',
+    `${year}-09-01`, `${year}-10-31`, 'closed', stopAt, 'Hệ thống (hết hạn thu)', dy.id).lastInsertRowid);
+  gather(qp, 30, 50000, 70, 12);
+  spend(qp, day(Math.max(1, Math.round((Date.now() - new Date(stopAt.replace(' ', 'T'))) / 86400000) - 3)), 600000, 'Hỗ trợ dân quân trực Tết, mua áo mưa');
+  conn.prepare("INSERT INTO fund_notices(fund_id,kind,message,created_at) VALUES (?,'auto_stop',?,?)").run(qp, `Quỹ quốc phòng – an ninh ${year}: ngừng thu từ 31/10/${year} (hết hạn thu)`, stopAt);
+  // 2) Quỹ phòng chống thiên tai 2025: đã khoá sổ, có biên bản
+  const pt = Number(ins.run('pctt-2025', 'Quỹ phòng chống thiên tai 2025', 'Quỹ phòng chống thiên tai', 'mandatory', 'person', 20000, 'PCTT25',
+    acc('pctt-2025'), holder, tq.id, 'Thu theo Luật Phòng, chống thiên tai',
+    'Mức đóng 20.000 đ/người lao động/năm. Nộp về Quỹ phòng chống thiên tai tỉnh sau khi tổng hợp.', '2025-03-01', '2025-06-30',
+    'closed', '2025-06-30 17:00:00', 'Hệ thống (hết hạn thu)', dy.id).lastInsertRowid);
+  const total = gather(pt, 24, 20000, 300, 200);
+  spend(pt, day(190), total, 'Nộp Quỹ phòng chống thiên tai tỉnh (theo giấy nộp tiền)');
+  const minutes = `DOC-${pt}-seed.pdf`;
+  fs.writeFileSync(path.join(dir, minutes), Buffer.from('%PDF-1.4\n% Bien ban khoa so Quy PCTT 2025 (du lieu mau)\n'));
+  const doc = conn.prepare("INSERT INTO fund_documents(fund_id,kind,name,filename,mime,size,created_by_name) VALUES (?,'minutes','Biên bản khoá sổ Quỹ PCTT 2025.pdf',?,'application/pdf',60,'Trưởng ban kiểm tra')")
+    .run(pt, minutes).lastInsertRowid;
+  conn.prepare("UPDATE funds SET locked_at=?, locked_by_name='Trưởng ban kiểm tra', lock_note='Đã nộp đủ về Quỹ tỉnh, số dư 0', lock_balance=0, lock_doc_id=? WHERE id=?")
+    .run(fmtDate(day(185)), doc, pt);
 }
 
 /* ===================== Hạng mục dùng chung + giao dịch nhận tiền nhanh (GĐ4) ===================== */
@@ -666,6 +714,7 @@ function seedCommunities() {
     addUser(t.id, `${c.code}-thuquy`, 'Thủ quỹ ' + c.name, 'treasurer');
     addUser(t.id, `${c.code}-duyet`, `${lb.approver_label || 'Người duyệt'} ${c.name}`, 'approver');
     addUser(t.id, `${c.code}-truong`, `${lb.leader_label || 'Trưởng'} ${c.name}`, 'community_leader');
+    addUser(t.id, `${c.code}-kiemtra`, `Trưởng ban kiểm tra ${c.name}`, 'inspector');
     seedFunds(fundCode, c);
     seedSmallSellers();
     seedCategories(row.id, c);
@@ -704,5 +753,5 @@ for (const c of control.prepare('SELECT code, donations_token FROM communities W
   console.log(`  Công đức công khai ${c.code}: /congduc/${c.donations_token}`);
 }
 console.log('  Tài khoản (mật khẩu demo1234): <mã-cửa-hàng>-owner|quanly|thungan|kho|ketoan,');
-console.log('    thon-a-thuquy|duyet|truong (tương tự thon-b, cho-c, chua-pl), vanhanh, hotro, kythuat, ql-thon-a.');
+console.log('    thon-a-thuquy|duyet|truong|kiemtra (tương tự thon-b, cho-c, chua-pl), vanhanh, hotro, kythuat, ql-thon-a.');
 console.log('  Người bán nhỏ: ' + SMALL_SELLERS.map((x) => x[0] + '-owner').join(', ') + ' (và <mã>-phu).\n');

@@ -160,7 +160,8 @@ const FUND_SETTINGS = `
   </div>
   <div class="card">
     <h3>Loại quỹ</h3>
-    <p class="muted">Mỗi dòng một loại. Hiện ở ô "Loại quỹ" khi tạo quỹ, ví dụ: Quỹ chung, Công đức, Khuyến học, Ủng hộ lũ lụt…</p>
+    <p class="muted">Mỗi dòng một loại, có thể ghi kèm tính chất sau dấu <b>|</b>: <code>Bắt buộc</code>, <code>Vận động</code> hoặc <code>Tự nguyện</code>.
+      Ví dụ: <code>Quỹ quốc phòng – an ninh | Bắt buộc</code>, <code>Ủng hộ lũ lụt | Vận động</code>, <code>Công đức | Tự nguyện</code>.</p>
     <textarea class="field fd-textarea" rows="6" data-s="fund_types"></textarea>
   </div>
   <div class="card">

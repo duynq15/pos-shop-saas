@@ -15,8 +15,21 @@ function entryRows(p) {
     const negative = e.type === 'out' || e.amount < 0;
     const sign = negative ? '-' : '+';
     const cls = negative ? 'dn-out' : 'dn-in';
-    return `<tr><td>${esc(e.date)}</td><td>${esc(name)}</td><td class="r ${cls}">${sign}${money(Math.abs(e.amount))}</td></tr>`;
+    const tag = e.after_stop ? ' <span class="dn-tag">chi sau ngày ngừng thu</span>' : '';
+    return `<tr><td>${esc(e.date)}</td><td>${esc(name)}${tag}</td><td class="r ${cls}">${sign}${money(Math.abs(e.amount))}</td></tr>`;
   }).join('') || '<tr><td colspan="3" class="rp-hint">Chưa có khoản nào</td></tr>';
+}
+
+// Khoá sổ: QR làm mờ + nhãn; ngừng thu: không QR, ghi rõ vẫn chi
+function stateBlock(p) {
+  if (p.state === 'locked') {
+    return `<div class="dn-pay dn-locked"><div class="dn-qr dn-qr-off" aria-hidden="true"><span>Quỹ đã khoá sổ</span></div>
+      <div class="dn-pay-side"><b>Không thu, không chi</b>
+        <span>Số dư khi khoá sổ: <b>${money(p.lock_balance)}</b></span>
+        ${p.minutes_url ? `<a class="rp-btn" href="${esc(p.minutes_url)}" target="_blank" rel="noopener">Xem biên bản khoá sổ</a>` : ''}</div></div>`;
+  }
+  if (p.state === 'stopped') return `<div class="rp-empty">${esc(p.status_text)}. Quỹ không nhận thêm tiền.</div>`;
+  return qrBlock(p);
 }
 
 function qrBlock(p) {
@@ -30,25 +43,31 @@ function qrBlock(p) {
         <input id="dn-amt-${p.id}" inputmode="numeric" autocomplete="off" placeholder="Ví dụ: 200000">
       </label>
       <button class="rp-btn rp-btn-primary" data-qr="${p.id}">Tạo QR đúng số tiền</button>
-      <p class="rp-hint">Mở app ngân hàng, quét mã để chuyển. Nội dung chuyển khoản ghi tên đợt thu.</p>
+      <p class="rp-hint">Mở app ngân hàng, quét mã để chuyển. Giữ nguyên nội dung chuyển khoản <b>${esc(p.transfer_content || '')}</b>.</p>
     </div>
   </div>`;
 }
 
+const STATE_CLS = { collecting: 'dn-st-on', stopped: 'dn-st-stop', locked: 'dn-st-lock' };
 function programCard(p) {
   const facts = [
+    `<span class="dn-chip ${STATE_CLS[p.state] || ''}">${esc(p.state_label || '')}</span>`,
+    p.nature_label ? `<span class="dn-chip">${esc(p.nature_label)}</span>` : '',
     p.category ? `<span class="dn-chip">${esc(p.category)}</span>` : '',
-    p.start_date || p.end_date ? `<span class="rp-hint">${esc(p.start_date || '…')} → ${esc(p.end_date || '…')}</span>` : '',
+    p.status_text ? `<span class="rp-hint">${esc(p.status_text)}</span>` : '',
     p.contribution === 'voluntary' ? '<span class="rp-hint">Đóng góp tùy tâm</span>'
       : p.target_amount ? `<span class="rp-hint">${CONTRIB[p.contribution] || CONTRIB.household}: <b>${money(p.target_amount)}</b></span>` : '',
     p.progress != null ? `<span class="rp-hint">Đạt <b>${p.progress}%</b> mục tiêu</span>` : '',
   ].filter(Boolean).join(' ');
-  const closed = p.status === 'closed';
+  const docs = (p.documents || []).map((d) => `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.name)}</a>`).join(' · ');
   return `<div class="rp-card" id="fund-${p.id}">
-    <div class="rp-card-head"><div><h2>${esc(p.name)}</h2><div class="dn-facts">${closed ? `<span class="dn-chip">Đã kết thúc ${esc((p.closed_at || '').slice(0, 10))}</span> ` : ''}${facts}</div></div>
+    <div class="rp-card-head"><div><h2>${esc(p.name)}</h2><div class="dn-facts">${facts}</div></div>
       <div class="rp-hint">Đã thu: <b>${money(p.total)}</b></div></div>
+    ${p.unlock_text ? `<p class="dn-desc dn-warn">${esc(p.unlock_text)}</p>` : ''}
     ${p.description ? `<p class="dn-desc">${esc(p.description)}</p>` : ''}
-    ${closed ? (p.close_note ? `<p class="dn-desc"><b>Kết quả:</b> ${esc(p.close_note)}</p>` : '') : qrBlock(p)}
+    ${p.content ? `<details class="dn-content"><summary>Nội dung chi tiết</summary><div>${esc(p.content)}</div></details>` : ''}
+    ${docs ? `<p class="dn-desc">Tài liệu: ${docs}</p>` : ''}
+    ${stateBlock(p)}
     <div class="dn-sum">
       <span>${nf.format(p.donors || 0)} lượt đóng góp</span>
       <span>Đã thu <b class="dn-in">${money(p.total)}</b></span>
@@ -94,10 +113,13 @@ function bindQr(programs) {
     $('#dn-title').textContent = data.community_name;
     document.title = `Đợt thu & công đức — ${data.community_name}`;
     $('#dn-loading').remove();
-    const open = data.programs.filter((p) => p.status !== 'closed');
-    const done = data.programs.filter((p) => p.status === 'closed');
-    $('#dn-programs').innerHTML = (open.length ? open.map(programCard).join('') : '<div class="rp-empty">Hiện chưa có đợt thu nào đang kêu gọi</div>')
-      + (done.length ? `<h2 class="dn-done-title">Các đợt đã kết thúc</h2>${done.map(programCard).join('')}` : '');
+    const open = data.programs.filter((p) => p.state === 'collecting');
+    const done = data.programs.filter((p) => p.state !== 'collecting');
+    const notices = (data.notices || []).slice(0, 5);
+    $('#dn-programs').innerHTML = (notices.length ? `<div class="rp-card dn-notices"><h2>Thông báo</h2><ul>${notices.map((n) =>
+      `<li>${esc(n.message)} <span class="rp-hint">${esc(n.created_at.slice(0, 10))}</span></li>`).join('')}</ul></div>` : '')
+      + (open.length ? open.map(programCard).join('') : '<div class="rp-empty">Hiện chưa có quỹ nào đang thu</div>')
+      + (done.length ? `<h2 class="dn-done-title">Ngừng thu &amp; đã khoá sổ</h2>${done.map(programCard).join('')}` : '');
     bindQr(data.programs);
   } catch (e) {
     $('#dn-loading').textContent = e.message;

@@ -425,11 +425,56 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     conn.exec("UPDATE funds SET fund_type = CASE kind WHEN 'donation' THEN 'Công đức' ELSE 'Quỹ chung' END, is_public = CASE kind WHEN 'donation' THEN 1 ELSE is_public END");
   }
   ensureColumn('funds', 'contribution', "TEXT DEFAULT 'household'");
-  // Kết thúc đợt kêu gọi: ai đóng, khi nào, kết quả / quyết toán; result_public = vẫn hiện tổng kết trên trang người dân
-  ensureColumn('funds', 'closed_at', 'TEXT');
-  ensureColumn('funds', 'closed_by_name', 'TEXT');
-  ensureColumn('funds', 'close_note', 'TEXT');
-  ensureColumn('funds', 'result_public', 'INTEGER NOT NULL DEFAULT 1');
+  // Vòng đời quỹ (SKHGDT-3647): status 'active' = Đang thu; 'closed' = Ngừng thu (vẫn chi); 'closed' + locked_at = Khoá sổ.
+  // round: đợt thu thứ mấy (mở thu lại thì tăng), nội dung chuyển khoản = transfer_code + "-D<round>".
+  // Quỹ đã "đóng" ở bản trước (status='closed') được coi là Ngừng thu từ lúc nâng cấp.
+  if (!columns('funds').includes('stopped_at')) {
+    conn.exec('ALTER TABLE funds ADD COLUMN stopped_at TEXT');
+    conn.exec("UPDATE funds SET stopped_at = datetime('now','localtime') WHERE status='closed'");
+  }
+  for (const [name, def] of [['nature', 'TEXT'], ['content', 'TEXT'], ['transfer_code', 'TEXT'], ['round', 'INTEGER NOT NULL DEFAULT 1'],
+    ['stopped_by_name', 'TEXT'], ['stop_note', 'TEXT'],
+    ['locked_at', 'TEXT'], ['locked_by_name', 'TEXT'], ['lock_note', 'TEXT'], ['lock_balance', 'INTEGER'], ['lock_doc_id', 'INTEGER'],
+    ['unlocked_at', 'TEXT'], ['unlock_reason', 'TEXT']]) {
+    ensureColumn('funds', name, def);
+  }
+  ensureColumn('fund_entries', 'round', 'INTEGER');
+  conn.exec(`
+    -- Nội dung quỹ: văn bản, tờ trình, biên bản (PDF / ảnh / Word / Excel). kind='minutes' là biên bản khoá / mở khoá sổ.
+    CREATE TABLE IF NOT EXISTS fund_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fund_id INTEGER NOT NULL REFERENCES funds(id),
+      kind TEXT NOT NULL DEFAULT 'doc' CHECK (kind IN ('doc','minutes')),
+      name TEXT NOT NULL, filename TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
+      created_by_name TEXT, created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    -- Đề nghị khoá sổ (Ban kiểm tra xác nhận) và mở khoá sổ (Trưởng thôn + Trưởng ban kiểm tra, hai người khác nhau).
+    CREATE TABLE IF NOT EXISTS fund_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fund_id INTEGER NOT NULL REFERENCES funds(id),
+      action TEXT NOT NULL CHECK (action IN ('lock','unlock')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','done','rejected')),
+      reason TEXT NOT NULL, balance_note TEXT, doc_id INTEGER REFERENCES fund_documents(id),
+      requested_by INTEGER, requested_by_name TEXT, created_at TEXT DEFAULT (datetime('now','localtime')),
+      approver_id INTEGER, approver_name TEXT, approver_at TEXT,
+      inspector_id INTEGER, inspector_name TEXT, inspector_at TEXT,
+      reject_reason TEXT, rejected_by_name TEXT, done_at TEXT
+    );
+    -- Thông báo cho người dân / App Làng Số (mở thu lại, tự ngừng thu, mở khoá sổ…)
+    CREATE TABLE IF NOT EXISTS fund_notices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fund_id INTEGER NOT NULL REFERENCES funds(id),
+      kind TEXT NOT NULL, message TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now','localtime'))
+    );
+    -- Khoá sổ chặn ở tầng DB: không thêm bút toán, không đổi số tiền / trạng thái / chứng từ (vẫn ẩn / hiện tên được)
+    CREATE TRIGGER IF NOT EXISTS trg_fund_locked_insert BEFORE INSERT ON fund_entries
+      WHEN (SELECT locked_at FROM funds WHERE id=NEW.fund_id) IS NOT NULL
+      BEGIN SELECT RAISE(ABORT, 'Quỹ đã khoá sổ'); END;
+    CREATE TRIGGER IF NOT EXISTS trg_fund_locked_update BEFORE UPDATE ON fund_entries
+      WHEN (SELECT locked_at FROM funds WHERE id=NEW.fund_id) IS NOT NULL
+        AND (NEW.amount <> OLD.amount OR NEW.status <> OLD.status OR NEW.note IS NOT OLD.note OR NEW.attachment IS NOT OLD.attachment)
+      BEGIN SELECT RAISE(ABORT, 'Quỹ đã khoá sổ'); END;`);
   ensureColumnWithDefault('funds', 'is_public', 'INTEGER NOT NULL DEFAULT 0', '0');
   // GĐ3.1 (FR-08, BR-01): mỗi giao dịch thuộc đúng một loại. Suy ra lúc ghi; không chắc thì 'unclassified' (ERR-03).
   // ADD COLUMN ... DEFAULT gán 'unclassified' cho mọi dòng cũ, nên phải suy loại ngay lúc thêm cột (chỉ chạy một lần):
@@ -489,7 +534,7 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     vqr_terminal_code: '', vqr_exposed_username: '', vqr_exposed_password: '', vqr_secret_key: '',
     vqr_mock_autopay: '0',
     // Sổ quỹ thôn: danh sách loại quỹ và xóm / đoàn thể (mỗi dòng một mục), thôn tự sửa trong Cài đặt
-    fund_types: 'Quỹ chung\nCông đức\nKhuyến học\nThiện nguyện', fund_groups: '',
+    fund_types: 'Quỹ chung | Bắt buộc\nQuỹ quốc phòng – an ninh | Bắt buộc\nQuỹ phòng chống thiên tai | Bắt buộc\nCông đức | Tự nguyện\nKhuyến học | Vận động\nThiện nguyện | Tự nguyện', fund_groups: '',
   };
   const insSetting = conn.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
   for (const [k, v] of Object.entries(defaults)) insSetting.run(k, v);
