@@ -481,6 +481,8 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   const cLogin = await (await req('cadm', '/auth/login', { method: 'POST', body: { username: 'quyaadmin', password: '123456' } })).json();
   ok('login payload has tenant kind + community', cLogin.data.tenant.kind === 'community' && cLogin.data.tenant.community_id === com.data.id);
   ok('me has tenant kind', (await (await req('cadm', '/auth/me')).json()).data.tenant.kind === 'community');
+  const cOwner = (await (await req('cadm', '/users')).json()).data.find((u) => u.username === 'quyaadmin');
+  ok('community owner label is fund admin', cOwner && cOwner.role_name === 'Quản trị sổ quỹ', cOwner && cOwner.role_name);
   const cRoles = (await (await req('cadm', '/roles')).json()).data.map((r) => r.code);
   ok('FR-02: community roles list', ['owner', 'treasurer', 'approver', 'community_leader'].every((r) => cRoles.includes(r)) && !cRoles.includes('cashier'));
   const sRoles = (await api('/roles')).data.map((r) => r.code);
@@ -497,8 +499,9 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('SEC-04: treasurer cannot approve', perms.treasurer.includes('fund.entry') && !perms.treasurer.includes('fund.approve'));
   ok('BR-05: approver approves, does not enter', perms.approver.includes('fund.approve') && !perms.approver.includes('fund.entry'));
   ok('BR-11: approver manages categories', perms.approver.includes('community.categories'));
-  ok('BR-09: leader only aggregate + fund view', perms.community_leader.includes('community.report') && perms.community_leader.includes('fund.view')
-    && !['pos.sell', 'report.view', 'fund.entry'].some((p) => perms.community_leader.includes(p)));
+  ok('BR-09: leader sees aggregate + configures fund, not entry/approve', perms.community_leader.includes('community.report')
+    && perms.community_leader.includes('fund.view') && perms.community_leader.includes('fund.manage')
+    && !['pos.sell', 'report.view', 'fund.entry', 'fund.approve'].some((p) => perms.community_leader.includes(p)));
   ok('community role cannot sell', (await (await req('c-community_leader', '/invoices', { method: 'POST', body: { items: [{ name: 'x', price: 1000, qty: 1 }] } })).json()).ok === false);
   const leaderId = (await (await req('cadm', '/users')).json()).data.find((u) => u.username === 'qa-community_leader').id;
   ok('FR-02: cannot switch community user to POS role', !(await (await req('cadm', '/users/' + leaderId, { method: 'PUT', body: { role: 'manager' } })).json()).ok);
@@ -507,6 +510,13 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   const cj = async (who, u, o) => (await req(who, u, o)).json();
   const fund = await cj('c-approver', '/funds', { method: 'POST', body: { code: 'cong-duc', name: 'Quỹ công đức', kind: 'donation', bank_account: 'QUY-A 001' } });
   ok('fund create (account normalised)', fund.ok && fund.data.bank_account === 'QUYA001' && fund.data.balance === 0);
+  const fundMeta = await cj('cadm', '/funds/' + fund.data.id, { method: 'PATCH', body: { category: 'Thôn', target_amount: 200000, is_public: 1, bank_bin: '970422', bank_name: 'MB Bank', account_holder: 'Thôn A' } });
+  ok('fund campaign fields saved', fundMeta.ok && fundMeta.data.category === 'Thôn' && fundMeta.data.target_amount === 200000 && fundMeta.data.is_public === 1, JSON.stringify(fundMeta.data));
+  // Ban lãnh đạo được cấu hình quỹ và tài khoản nhận tiền, nhưng không nhập/duyệt chi
+  const leaderFund = await cj('c-community_leader', '/funds', { method: 'POST', body: { code: 'quy-lanh-dao', name: 'Quỹ Ban lãnh đạo', bank_account: 'QUY-LD 001' } });
+  ok('leader can create fund with bank account', leaderFund.ok && leaderFund.data.bank_account === 'QUYLD001');
+  const leaderEdit = await cj('c-community_leader', '/funds/' + leaderFund.data.id, { method: 'PATCH', body: { category: 'Thôn', target_amount: 100000 } });
+  ok('leader can configure fund campaign', leaderEdit.ok && leaderEdit.data.category === 'Thôn' && leaderEdit.data.target_amount === 100000);
   ok('fund dup account rejected', !(await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-2', name: 'Quỹ 2', bank_account: 'QUYA001' } })).ok);
   ok('fund cannot reuse shop account', !(await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-3', name: 'Quỹ 3', bank_account: 'SELLERA01' } })).ok);
   ok('treasurer cannot create fund', (await req('c-treasurer', '/funds', { method: 'POST', body: { code: 'quy-4', name: 'Quỹ 4' } })).status === 403);
@@ -552,6 +562,18 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('BR-04: no delete route', (await req('cadm', '/fund-entries/' + out.data.id, { method: 'DELETE' })).status === 404);
   const list = await cj('c-community_leader', '/funds/' + fid + '/entries?type=out&status=approved');
   ok('entries filter', list.ok && list.data.entries.length === 1 && list.data.entries[0].id === out.data.id);
+  // Trang người nộp: chỉ mở khi nền tảng bật công khai; hiện QR + số tiền tuỳ chọn
+  ok('public link hidden before platform enables', (await cj('cadm', '/community/public-link')).data.enabled === false);
+  const pubCom = await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: true } } });
+  ok('community public donations enabled', pubCom.ok && pubCom.data.settings.public_donations && /^\/congduc\/[a-f0-9]+$/.test(pubCom.data.donations_url || ''));
+  ok('public link exposed to fund account after enabling', (await cj('cadm', '/community/public-link')).data.url === pubCom.data.donations_url);
+  const donTok = (pubCom.data.donations_url || '').split('/').pop();
+  const pubFunds = await (await fetch(ROOT + '/public/api/donations/' + donTok)).json();
+  const pubProg = pubFunds.ok && pubFunds.data.programs.find((p) => p.id === fid);
+  ok('public payer page lists campaign with QR + totals', !!pubProg && !!pubProg.qrDataUrl && pubProg.total === 600000 && pubProg.balance === 350000, JSON.stringify(pubProg && { total: pubProg.total, balance: pubProg.balance }));
+  const pubQr = await (await fetch(ROOT + '/public/api/donations/' + donTok + '/funds/' + fid + '/qr?amount=150000')).json();
+  ok('public payer page creates QR with amount', pubQr.ok && pubQr.data.amount === 150000 && !!pubQr.data.qrDataUrl);
+  ok('public API allows cross-origin (App người dân)', (await fetch(ROOT + '/public/api/donations/' + donTok)).headers.get('access-control-allow-origin') === '*');
 
   // ---------- API cho Làng Số (SKHGDT-3532) ----------
   ok('lang-so: preflight CORS', await ls('/stats?thon=thon-a', null, { method: 'OPTIONS' }).then((r) => r.status === 204 && r.headers.get('access-control-allow-headers') === 'Authorization'));
@@ -576,6 +598,40 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   const sso = await cj('sso', '/auth/sso', { method: 'POST', body: { token: 'tok-ok', thon: 'thon-a' } });
   ok('lang-so: SSO logs in matching fund account', sso.ok && sso.data.user.username === 'qa-approver'
     && (await cj('sso', '/auth/me')).data.user.username === 'qa-approver');
+
+  // ---------- Quỹ v2 (SKHGDT-3621): mã tự sinh, loại quỹ, cách đóng, ngày thu, nhập Excel/CSV ----------
+  const v2 = await cj('cadm', '/funds', { method: 'POST', body: { name: 'Quỹ khuyến học 2026', fund_type: 'Khuyến học', category: 'Xóm 1', contribution: 'person', target_amount: 50000 } });
+  ok('fund code auto-generated from name', v2.ok && v2.data.code === 'quy-khuyen-hoc-2026' && v2.data.fund_type === 'Khuyến học' && v2.data.contribution === 'person', JSON.stringify(v2.data));
+  const v2b = await cj('cadm', '/funds', { method: 'POST', body: { name: 'Quỹ khuyến học 2026' } });
+  ok('duplicate name gets suffixed code', v2b.ok && v2b.data.code === 'quy-khuyen-hoc-2026-2');
+  ok('voluntary contribution drops amount', (await cj('cadm', '/funds/' + v2b.data.id, { method: 'PATCH', body: { contribution: 'voluntary', target_amount: 1000 } })).data.target_amount === null);
+  ok('bad contribution rejected', !(await cj('cadm', '/funds/' + v2b.data.id, { method: 'PATCH', body: { contribution: 'xyz' } })).ok);
+  ok('new general fund is not public by default', v2.data.is_public === 0);
+  const v2id = v2.data.id;
+  const back = await cj('c-treasurer', '/funds/' + v2id + '/entries', { method: 'POST', body: { type: 'in', amount: 70000, source: 'manual', bank_ref: 'FT-V2-1', date: '2026-01-15' } });
+  ok('back-dated bank income recorded on that day', back.ok && back.data.approved_at.startsWith('2026-01-15') && /^PT20260115-/.test(back.data.code), JSON.stringify(back.data));
+  ok('future date rejected', !(await cj('c-treasurer', '/funds/' + v2id + '/entries', { method: 'POST', body: { type: 'in', amount: 1000, date: '2999-01-01' } })).ok);
+  ok('impossible date rejected', !(await cj('c-treasurer', '/funds/' + v2id + '/entries', { method: 'POST', body: { type: 'in', amount: 1000, date: '2026-02-30' } })).ok);
+  const csv = 'Ngày (YYYY-MM-DD);Người nộp;Số tiền;Hình thức;Mã giao dịch;Ghi chú;Ẩn danh (x)\n'
+    + '02/03/2026;Ông Tư;100.000;Tiền mặt;;Xóm 1;\n2026-03-03;"Bà Sáu; xóm 2";200000;Chuyển khoản;FT-V2-2;;x\n';
+  const b64 = (s) => 'data:text/csv;base64,' + Buffer.from(s).toString('base64');
+  const dry = await cj('c-treasurer', '/funds/' + v2id + '/import?dry=1', { method: 'POST', body: { file: b64(csv) } });
+  ok('import dry-run counts without writing', dry.ok && dry.data.count === 2 && dry.data.total === 300000 && dry.data.imported === 0 && !dry.data.errors.length, JSON.stringify(dry));
+  const badCsv = csv + '2026-03-04;X;abc;Tiền mặt;;;\n2026-03-04;Y;5000;Séc;;;\n2026-03-04;Z;5000;Chuyển khoản;FT-V2-1;;\n';
+  const badImp = await cj('c-treasurer', '/funds/' + v2id + '/import', { method: 'POST', body: { file: b64(badCsv) } });
+  ok('import reports each bad line, writes nothing', badImp.ok && badImp.data.imported === 0 && badImp.data.errors.map((e) => e.line).join() === '4,5,6', JSON.stringify(badImp.data.errors));
+  ok('nothing written after failed import', (await cj('cadm', '/funds/' + v2id)).data.balance === 70000);
+  const imp = await cj('c-treasurer', '/funds/' + v2id + '/import', { method: 'POST', body: { file: b64(csv) } });
+  ok('import writes all rows', imp.ok && imp.data.imported === 2 && (await cj('cadm', '/funds/' + v2id)).data.balance === 370000);
+  const impRows = (await cj('cadm', '/funds/' + v2id + '/entries')).data.entries;
+  ok('imported rows keep date, source, anonymity', impRows.some((e) => e.payer_name === 'Ông Tư' && e.source === 'cash' && e.approved_at.startsWith('2026-03-02'))
+    && impRows.some((e) => e.payer_name === 'Bà Sáu; xóm 2' && e.source === 'manual' && e.bank_ref === 'FT-V2-2' && e.anonymous === 1));
+  ok('re-import same bank ref rejected', (await cj('c-treasurer', '/funds/' + v2id + '/import', { method: 'POST', body: { file: b64(csv) } })).data.errors.length === 1);
+  const tpl = await req('c-treasurer', '/funds/' + v2id + '/import-template');
+  const tplBuf = Buffer.from(await tpl.arrayBuffer());
+  const xImp = await cj('c-treasurer', '/funds/' + v2id + '/import?dry=1', { method: 'POST', body: { file: tplBuf.toString('base64') } });
+  ok('xlsx template downloads and re-imports', tpl.status === 200 && xImp.ok && xImp.data.count === 2 && !xImp.data.errors.length, JSON.stringify(xImp));
+  ok('approver cannot import (BR-05)', (await req('c-approver', '/funds/' + v2id + '/import', { method: 'POST', body: { rows: [{ amount: 1 }] } })).status === 403);
 
   // ---------- Đăng nhập bằng mật khẩu SKHG (SKHGDT-3573) ----------
   const sk = (body) => cj('skhg', '/auth/skhg', { method: 'POST', body });
@@ -676,16 +732,92 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
     }
   }
   const openDraft = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, note: 'dở', attachment: receipt } });
-  const closeBlocked = await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'closed' } });
-  ok('cannot close fund with open entries', !closeBlocked.ok && /Còn 1 khoản/.test(closeBlocked.error), closeBlocked.error);
+  ok('status not editable via PATCH', !(await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'closed' } })).ok);
+  ok('stop collecting', (await cj('c-approver', '/funds/' + fid + '/stop', { method: 'POST', body: { note: 'Đủ chỉ tiêu' } })).data?.state === 'stopped');
+  ok('stopped fund takes no income', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).ok);
   await cj('c-treasurer', '/fund-entries/' + openDraft.data.id + '/submit', { method: 'POST' });
-  await cj('c-approver', '/fund-entries/' + openDraft.data.id + '/reject', { method: 'POST', body: { reason: 'đóng quỹ' } });
-  ok('close fund once nothing is open', (await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'closed' } })).data?.status === 'closed');
-  ok('closed fund takes no entries', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).ok);
-  ok('closed fund: no transitions on its entries', !(await cj('c-treasurer', '/fund-entries/' + openDraft.data.id + '/submit', { method: 'POST' })).ok);
-  ok('closed fund: donor can still be anonymised (FR-20)', (await cj('c-treasurer', '/fund-entries/' + cashIn.data.id + '/anonymous', { method: 'POST', body: { anonymous: false } })).ok);
-  await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { status: 'active' } });
-  ok('reopen allowed', (await cj('c-treasurer', '/funds/' + fid)).data.status === 'active');
+  ok('stopped fund still processes expenses', (await cj('c-approver', '/fund-entries/' + openDraft.data.id + '/reject', { method: 'POST', body: { reason: 'thử' } })).ok);
+  ok('stopped fund: donor can still be anonymised (FR-20)', (await cj('c-treasurer', '/fund-entries/' + cashIn.data.id + '/anonymous', { method: 'POST', body: { anonymous: false } })).ok);
+  ok('resume needs a new deadline', !(await cj('c-approver', '/funds/' + fid + '/resume', { method: 'POST', body: { reason: 'x' } })).ok);
+  await cj('c-approver', '/funds/' + fid + '/resume', { method: 'POST', body: { end_date: '2999-12-31', reason: 'Gia hạn' } });
+  ok('resume allowed', (await cj('c-treasurer', '/funds/' + fid)).data.state === 'collecting');
+
+  // ---------- Vòng đời quỹ: Đang thu / Ngừng thu / Khoá sổ (SKHGDT-3647) ----------
+  const callSum = await cj('c-treasurer', '/funds/' + fid + '/summary');
+  ok('summary totals', callSum.ok && callSum.data.donors === 2 && callSum.data.pending === 0, JSON.stringify(callSum.data));
+  ok('treasurer cannot stop collecting', (await req('c-treasurer', '/funds/' + fid + '/stop', { method: 'POST', body: {} })).status === 403);
+  const round1 = (await cj('cadm', '/funds/' + fid)).data;
+  ok('fund has transfer content + state label', !!round1.transfer_content && round1.state_label === 'Đang thu', JSON.stringify(round1));
+  ok('stop', (await cj('c-approver', '/funds/' + fid + '/stop', { method: 'POST', body: {} })).data.state === 'stopped');
+  ok('stopped: no QR with amount', !(await cj('c-treasurer', '/funds/' + fid + '/qr', { method: 'POST', body: { amount: 1000 } })).ok);
+  ok('stopped: lock needs inspector', (await req('c-approver', '/funds/' + fid + '/lock', { method: 'POST', body: {} })).status === 403);
+  // Mở thu lại: đợt mới, nội dung chuyển khoản mới; QR đợt cũ (nội dung cũ) không tự vào sổ
+  const resumed = await cj('c-approver', '/funds/' + fid + '/resume', { method: 'POST', body: { end_date: '2999-01-31', reason: 'Thu bổ sung các hộ còn thiếu' } });
+  const code1 = resumed.data.transfer_code;
+  ok('resume opens new round with new transfer content', resumed.ok && resumed.data.round === round1.round + 1 && resumed.data.transfer_content === `${code1}-D${resumed.data.round}`
+    && resumed.data.end_date === '2999-01-31', JSON.stringify(resumed.data));
+  const qr2 = await cj('c-treasurer', '/funds/' + fid + '/qr', { method: 'POST', body: { amount: 10000 } });
+  ok('new QR carries round content', qr2.ok && qr2.data.transfer_content === resumed.data.transfer_content && qr2.data.qrCode.includes(resumed.data.transfer_content));
+  const hook = (id, content) => fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token },
+    body: JSON.stringify({ bankaccount: 'QUYA001', amount: 20000, content, transType: 'C', transactionid: id }) }).then((r) => r.json());
+  const balR2 = (await cj('cadm', '/funds/' + fid)).data.balance;
+  await hook('R2-OLD', code1 + ' ung ho');
+  ok('old-round QR payment not booked', (await cj('cadm', '/funds/' + fid)).data.balance === balR2);
+  await hook('R2-NEW', `${code1} D${resumed.data.round} ung ho`);
+  ok('new-round payment booked (dash optional)', (await cj('cadm', '/funds/' + fid)).data.balance === balR2 + 20000);
+  await cj('c-approver', '/funds/' + fid + '/stop', { method: 'POST', body: {} });
+  // Khoá sổ: Ban kiểm tra, đủ điều kiện
+  const inspector = await cj('cadm', '/users', { method: 'POST', body: { username: 'qa-inspector', password: '123456', role: 'inspector', full_name: 'Trưởng ban kiểm tra' } });
+  ok('create inspector', inspector.ok && inspector.data.role_name === 'Trưởng ban kiểm tra', JSON.stringify(inspector));
+  await req('c-inspector', '/auth/login', { method: 'POST', body: { username: 'qa-inspector', password: '123456' } });
+  const pdf = { name: 'bien-ban.pdf', data: 'data:application/pdf;base64,' + Buffer.from('%PDF-1.4 bien ban').toString('base64') };
+  const pendingOut = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, note: 'dở', attachment: receipt } });
+  ok('stopped fund: treasurer can still create expense', pendingOut.ok);
+  ok('lock blocked while entries open', /Còn 1 khoản/.test((await cj('c-inspector', '/funds/' + fid + '/lock', { method: 'POST', body: { minutes: pdf, balance_note: 'x' } })).error || ''));
+  await cj('c-treasurer', '/fund-entries/' + pendingOut.data.id + '/submit', { method: 'POST' });
+  await cj('c-approver', '/fund-entries/' + pendingOut.data.id + '/reject', { method: 'POST', body: { reason: 'khoá sổ' } });
+  ok('lock needs balance note when balance > 0', /Số dư/.test((await cj('c-inspector', '/funds/' + fid + '/lock', { method: 'POST', body: { minutes: pdf } })).error || ''));
+  ok('lock needs minutes', !(await cj('c-inspector', '/funds/' + fid + '/lock', { method: 'POST', body: { balance_note: 'Chuyển quỹ chung' } })).ok);
+  ok('minutes must be a real document', !(await cj('c-inspector', '/funds/' + fid + '/lock', { method: 'POST', body: { balance_note: 'x', minutes: { name: 'a.pdf', data: 'data:application/pdf;base64,' + Buffer.from('<html>').toString('base64') } } })).ok);
+  const locked = await cj('c-inspector', '/funds/' + fid + '/lock', { method: 'POST', body: { minutes: pdf, balance_note: 'Giữ lại cho đợt sau' } });
+  ok('lock stores balance + minutes', locked.ok && locked.data.state === 'locked' && locked.data.lock_balance === balR2 + 20000 && !!locked.data.lock_doc_id, JSON.stringify(locked));
+  ok('locked: no expense', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'out', amount: 1000, note: 'x', attachment: receipt } })).ok);
+  ok('locked: no edit', !(await cj('c-approver', '/funds/' + fid, { method: 'PATCH', body: { name: 'Đổi tên' } })).ok);
+  ok('locked: cannot resume', !(await cj('c-approver', '/funds/' + fid + '/resume', { method: 'POST', body: { end_date: '2999-01-01', reason: 'x' } })).ok);
+  ok('locked: name can still be hidden (FR-20)', (await cj('c-treasurer', '/fund-entries/' + cashIn.data.id + '/anonymous', { method: 'POST', body: { anonymous: false } })).ok);
+  ok('minutes downloadable', (await req('cadm', '/fund-documents/' + locked.data.lock_doc_id)).headers.get('content-type') === 'application/pdf');
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: true } } });
+  const pubLocked = (await (await fetch(ROOT + '/public/api/donations/' + donTok)).json()).data.programs.find((p) => p.id === fid);
+  ok('public locked fund: label, balance, minutes link, no QR', pubLocked && pubLocked.state === 'locked' && pubLocked.status_text === 'Không thu, không chi'
+    && pubLocked.qrDataUrl === null && pubLocked.qr_note === 'Quỹ đã khoá sổ' && pubLocked.lock_balance === balR2 + 20000 && /\/documents\/\d+$/.test(pubLocked.minutes_url || ''), JSON.stringify(pubLocked && { ...pubLocked, entries: undefined }));
+  ok('public minutes served', (await fetch(ROOT + pubLocked.minutes_url)).headers.get('content-type') === 'application/pdf');
+  ok('public QR refused for locked fund', (await fetch(ROOT + '/public/api/donations/' + donTok + '/funds/' + fid + '/qr')).status === 404);
+  // Mở khoá: lý do + biên bản + Trưởng thôn và Trưởng ban kiểm tra
+  ok('unlock needs reason', !(await cj('c-approver', '/funds/' + fid + '/unlock-requests', { method: 'POST', body: { minutes: pdf } })).ok);
+  const ureq = await cj('c-approver', '/funds/' + fid + '/unlock-requests', { method: 'POST', body: { reason: 'Ghi nhầm số tiền', minutes: pdf } });
+  ok('unlock request created', ureq.ok && ureq.data.status === 'pending');
+  ok('treasurer cannot sign unlock', (await req('c-treasurer', '/fund-requests/' + ureq.data.id + '/approve', { method: 'POST' })).status === 403);
+  const s1 = await cj('c-approver', '/fund-requests/' + ureq.data.id + '/approve', { method: 'POST' });
+  ok('one signature is not enough', s1.ok && s1.data.status === 'pending' && (await cj('cadm', '/funds/' + fid)).data.state === 'locked');
+  ok('same person cannot sign twice', !(await cj('c-approver', '/fund-requests/' + ureq.data.id + '/approve', { method: 'POST' })).ok);
+  const s2 = await cj('c-inspector', '/fund-requests/' + ureq.data.id + '/approve', { method: 'POST' });
+  const unlocked = (await cj('cadm', '/funds/' + fid)).data;
+  ok('two signatures unlock to Stopped (not Collecting)', s2.data?.status === 'done' && unlocked.state === 'stopped' && unlocked.unlock_reason === 'Ghi nhầm số tiền', JSON.stringify(s2));
+  const pubUn = (await (await fetch(ROOT + '/public/api/donations/' + donTok + '/funds/' + fid)).json()).data;
+  ok('public shows unlock line + notices', /^Đã mở khoá sổ ngày \d\d\/\d\d\/\d{4} – lý do: Ghi nhầm/.test(pubUn.unlock_text || '') && pubUn.notices.some((n) => n.kind === 'resume'), JSON.stringify(pubUn.notices));
+  ok('stopped status text', /^Ngừng thu từ \d\d\/\d\d\/\d{4} · vẫn chi$/.test(pubUn.status_text), pubUn.status_text);
+  // Tạo quỹ mới từ quỹ cũ, nội dung + tài liệu, tính chất
+  const cloned = await cj('c-approver', '/funds/' + fid + '/clone', { method: 'POST', body: { name: 'Quỹ công đức 2027' } });
+  ok('clone copies config, not account or entries', cloned.ok && cloned.data.state === 'collecting' && cloned.data.balance === 0 && cloned.data.bank_account === null && cloned.data.is_public === 1, JSON.stringify(cloned));
+  ok('fund nature validated', !(await cj('c-approver', '/funds/' + cloned.data.id, { method: 'PATCH', body: { nature: 'xyz' } })).ok
+    && (await cj('c-approver', '/funds/' + cloned.data.id, { method: 'PATCH', body: { nature: 'mandatory', content: 'Theo nghị quyết số 01' } })).data.nature === 'mandatory');
+  const docAdd = await cj('c-approver', '/funds/' + cloned.data.id + '/documents', { method: 'POST', body: { name: 'Nghị quyết.pdf', data: pdf.data } });
+  ok('fund document upload', docAdd.ok && docAdd.data.mime === 'application/pdf' && docAdd.data.kind === 'doc');
+  ok('exe rejected as document', !(await cj('c-approver', '/funds/' + cloned.data.id + '/documents', { method: 'POST', body: { name: 'x.exe', data: Buffer.from('MZ....').toString('base64') } })).ok);
+  const pubClone = (await (await fetch(ROOT + '/public/api/donations/' + donTok + '/funds/' + cloned.data.id)).json()).data;
+  ok('public: nature label, content, documents', pubClone.nature_label === 'Bắt buộc' && pubClone.content === 'Theo nghị quyết số 01' && pubClone.documents.length === 1);
+  await cj('cadm', '/users/' + inspector.data.id, { method: 'DELETE' }); // trả suất người dùng của gói cho các test sau
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: false } } });
 
   // ---------- Ca biên và tấn công thử (rà soát GĐ1–2) ----------
   ok('amount over 100 billion rejected', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1e20 } })).ok);
@@ -758,9 +890,9 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   const syncNeg = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: -5000, content: 'x', transType: 'C', transactionid: 'FUND-TXN-NEG' }) })).json();
   ok('webhook ignores non-positive amount', syncNeg.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
   // Tiền vào tài khoản quỹ đang đóng -> hàng chờ của thủ quỹ; thủ quỹ chọn quỹ khác để ghi sổ
-  await cj('c-approver', '/funds/' + fund2.data.id, { method: 'PATCH', body: { status: 'closed' } });
+  await cj('c-approver', '/funds/' + fund2.data.id + '/stop', { method: 'POST', body: {} });
   await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 60000, content: 'ung ho', transType: 'C', transactionid: 'FQ-1' }) });
-  await cj('c-approver', '/funds/' + fund2.data.id, { method: 'PATCH', body: { status: 'active' } });
+  await cj('c-approver', '/funds/' + fund2.data.id + '/resume', { method: 'POST', body: { end_date: '2999-12-31', reason: 'thử' } });
   const fq = await cj('c-treasurer', '/vietqr/unclassified');
   const fq1 = fq.data.items.find((x) => x.transactionid === 'FQ-1');
   ok('ERR-03: payment to a closed fund waits in the treasurer queue', !!fq1 && fq.data.funds.length >= 1);

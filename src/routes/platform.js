@@ -197,6 +197,51 @@ router.get('/communities/:id/tenants', need('communities.view'), wrap((req, res)
   ok(res, control.prepare('SELECT id, code, name, kind, status FROM tenants WHERE community_id=? ORDER BY kind, code').all(id));
 }));
 
+// Hạng mục hàng dùng chung của người bán trong cộng đồng. Trước đây trưởng thôn quản lý trong
+// tài khoản sổ quỹ; nay chuyển sang Quản trị nền tảng để sổ quỹ chỉ còn nghiệp vụ quỹ.
+const catNameKey = (v) => String(v).normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim();
+const categoriesOf = (id) => control.prepare('SELECT id, name, sort_order, status FROM community_categories WHERE community_id=? ORDER BY status, sort_order, name').all(id);
+
+router.get('/communities/:id/categories', need('communities.view'), wrap((req, res) => {
+  const id = Number(req.params.id);
+  if (!inPlatformScope(req, id)) return outOfScope(res);
+  if (!communityById(id)) return fail(res, 'Không tìm thấy cộng đồng', 404);
+  ok(res, categoriesOf(id));
+}));
+
+router.post('/communities/:id/categories', need('communities.manage'), wrap((req, res) => {
+  const id = Number(req.params.id);
+  if (!inPlatformScope(req, id)) return outOfScope(res);
+  if (!communityById(id)) return fail(res, 'Không tìm thấy cộng đồng', 404);
+  const name = str((req.body || {}).name, 60);
+  if (!name) return fail(res, 'Nhập tên hạng mục');
+  const key = catNameKey(name);
+  if (control.prepare('SELECT 1 FROM community_categories WHERE community_id=? AND name_key=?').get(id, key)) return fail(res, 'Hạng mục đã có');
+  const max = control.prepare('SELECT COALESCE(MAX(sort_order),0) m FROM community_categories WHERE community_id=?').get(id).m;
+  const r = control.prepare('INSERT INTO community_categories(community_id,name,name_key,sort_order) VALUES (?,?,?,?)').run(id, name, key, max + 1);
+  audit({ userId: req.user.id, username: req.user.username, action: 'category.create', entity: 'community_category', entityId: Number(r.lastInsertRowid), detail: JSON.stringify({ community_id: id, name }), ip: req.ip });
+  ok(res, categoriesOf(id));
+}));
+
+router.patch('/communities/:id/categories/:catId', need('communities.manage'), wrap((req, res) => {
+  const id = Number(req.params.id);
+  if (!inPlatformScope(req, id)) return outOfScope(res);
+  const cur = control.prepare('SELECT * FROM community_categories WHERE id=? AND community_id=?').get(Number(req.params.catId), id);
+  if (!cur) return fail(res, 'Không tìm thấy hạng mục', 404);
+  const b = req.body || {};
+  const name = b.name !== undefined ? str(b.name, 60) : cur.name;
+  if (!name) return fail(res, 'Nhập tên hạng mục');
+  const key = catNameKey(name);
+  if (control.prepare('SELECT 1 FROM community_categories WHERE community_id=? AND name_key=? AND id<>?').get(id, key, cur.id)) return fail(res, 'Hạng mục đã có');
+  const status = b.status !== undefined ? b.status : cur.status;
+  if (!['active', 'hidden'].includes(status)) return fail(res, 'Trạng thái không hợp lệ');
+  const sort = b.sort_order === undefined ? cur.sort_order : Number(b.sort_order);
+  if (!Number.isFinite(sort)) return fail(res, 'Thứ tự không hợp lệ');
+  control.prepare('UPDATE community_categories SET name=?, name_key=?, status=?, sort_order=? WHERE id=?').run(name, key, status, sort, cur.id);
+  audit({ userId: req.user.id, username: req.user.username, action: 'category.update', entity: 'community_category', entityId: cur.id, detail: JSON.stringify({ community_id: id, name, status }), ip: req.ip });
+  ok(res, categoriesOf(id));
+}));
+
 // Gỡ cửa hàng thường khỏi cộng đồng. Người bán / sổ quỹ bắt buộc thuộc cộng đồng: chuyển bằng sửa tenant
 router.post('/communities/:id/remove-tenant', need('communities.manage'), wrap((req, res) => {
   const id = Number(req.params.id);
@@ -238,8 +283,9 @@ router.post('/tenants', need('tenants.manage'), need('tenants.create_owner'), wr
   const r = control.prepare('INSERT INTO tenants(code,name,plan,area,note,expires_at,kind,community_id) VALUES (?,?,?,?,?,?,?,?)')
     .run(code, name, str(req.body.plan, 30) || 'standard', str(req.body.area, 120) || null, str(req.body.note, 300) || null, str(req.body.expires_at, 30) || null, tc.kind, tc.communityId);
   const tenantId = Number(r.lastInsertRowid);
+  const defaultOwnerName = tc.kind === 'community' ? 'Quản trị sổ quỹ' : 'Chủ cửa hàng';
   control.prepare('INSERT INTO users(tenant_id,username,password_hash,full_name,role) VALUES (?,?,?,?,?)')
-    .run(tenantId, ownerUser, hashPassword(ownerPass), str(req.body.owner_name, 120) || 'Chủ cửa hàng', 'owner');
+    .run(tenantId, ownerUser, hashPassword(ownerPass), str(req.body.owner_name, 120) || defaultOwnerName, 'owner');
   db.getTenantDb(code); // khởi tạo database nghiệp vụ cho cửa hàng
   // Đặt tên cửa hàng trong cấu hình tenant
   db.runWith(code, (conn) => conn.prepare("UPDATE settings SET value=? WHERE key='shop_name'").run(name));

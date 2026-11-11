@@ -110,4 +110,50 @@ function sendXlsx(res, filename, rows, opts) {
   res.send(buf);
 }
 
-module.exports = { buildXlsx, sendXlsx };
+// Đọc sheet đầu tiên của file .xlsx thành mảng dòng (mảng ô dạng chuỗi). Chỉ dùng zlib, không thư viện ngoài.
+// ponytail: chỉ đọc giá trị ô (chuỗi, số, công thức đã tính sẵn), bỏ qua định dạng; ngày kiểu Excel trả về số serial.
+function unzip(buf) {
+  const files = {};
+  let eocd = buf.length - 22;
+  while (eocd >= 0 && buf.readUInt32LE(eocd) !== 0x06054b50) eocd--;
+  if (eocd < 0) throw new Error('File không phải Excel (.xlsx)');
+  let p = buf.readUInt32LE(eocd + 16);
+  for (let n = buf.readUInt16LE(eocd + 10); n > 0; n--) {
+    if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error('File Excel bị lỗi');
+    const method = buf.readUInt16LE(p + 10); const size = buf.readUInt32LE(p + 20);
+    const nameLen = buf.readUInt16LE(p + 28); const extra = buf.readUInt16LE(p + 30); const comment = buf.readUInt16LE(p + 32);
+    const local = buf.readUInt32LE(p + 42);
+    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
+    const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+    const raw = buf.subarray(start, start + size);
+    files[name] = method === 8 ? zlib.inflateRawSync(raw) : raw;
+    p += 46 + nameLen + extra + comment;
+  }
+  return files;
+}
+const unxml = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+const textOf = (xml) => unxml([...xml.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((m) => m[1]).join(''));
+const colIndex = (ref) => [...ref.replace(/\d+/g, '')].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+
+function readXlsx(buf) {
+  const files = unzip(buf);
+  const shared = files['xl/sharedStrings.xml'] ? [...files['xl/sharedStrings.xml'].toString('utf8').matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => textOf(m[1])) : [];
+  const sheetName = Object.keys(files).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort()[0];
+  if (!sheetName) throw new Error('File Excel không có trang tính');
+  const rows = [];
+  for (const r of files[sheetName].toString('utf8').matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g)) {
+    const row = [];
+    for (const c of r[1].matchAll(/<c ([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+      const attrs = c[1]; const body = c[2] || '';
+      const ref = (/r="([A-Z]+\d+)"/.exec(attrs) || [])[1];
+      const t = (/t="(\w+)"/.exec(attrs) || [])[1];
+      const v = (/<v>([\s\S]*?)<\/v>/.exec(body) || [])[1];
+      const val = t === 's' ? shared[Number(v)] ?? '' : t === 'inlineStr' ? textOf(body) : unxml(v ?? '');
+      row[ref ? colIndex(ref) : row.length] = val;
+    }
+    rows.push(Array.from(row, (x) => x ?? ''));
+  }
+  return rows;
+}
+
+module.exports = { buildXlsx, sendXlsx, readXlsx };

@@ -9,13 +9,13 @@ const { requirePerm } = require('../middleware');
 
 const router = express.Router();
 
-const publicUser = (u, labels) => ({ id: u.id, username: u.username, full_name: u.full_name, phone: u.phone, email: u.email, role: u.role, role_name: rbac.roleName(u.role, labels), active: u.active, last_login: u.last_login });
+const publicUser = (u, labels) => ({ id: u.id, username: u.username, full_name: u.full_name, phone: u.phone, email: u.email, role: u.role, role_name: rbac.roleName(u.role, labels), active: u.active, last_login: u.last_login, skhg: !!u.skhg_id });
 
 // Chỉ vai trò hợp với loại tenant hiện tại (FR-02)
 const tenantKind = (req) => (req.tenant && req.tenant.kind) || 'shop';
 const labelsOf = (req) => communityRoleLabels(req.tenant && req.tenant.community_id);
 router.get('/roles', requirePerm('user.manage'), (req, res) =>
-  ok(res, rbac.rolesFor(tenantKind(req)).map((code) => ({ code, name: rbac.roleName(code, labelsOf(req)) }))));
+  ok(res, rbac.rolesFor(tenantKind(req)).map((code) => ({ code, name: rbac.roleName(code, labelsOf(req)), desc: code === 'owner' && tenantKind(req) === 'community' ? 'Toàn quyền sổ quỹ: người dùng, cài đặt, quỹ.' : rbac.ROLES[code].desc || '' }))));
 
 router.get('/users', requirePerm('user.manage'), wrap((req, res) => {
   const rows = control.prepare('SELECT * FROM users WHERE tenant_id=? ORDER BY id').all(req.user.tenant_id);
@@ -70,7 +70,7 @@ router.delete('/users/:id', requirePerm('user.manage'), wrap((req, res) => {
   const u = control.prepare('SELECT * FROM users WHERE id=? AND tenant_id=?').get(id, req.user.tenant_id);
   if (!u) return fail(res, 'Không tìm thấy người dùng', 404);
   if (u.role === 'owner' && control.prepare("SELECT COUNT(*) c FROM users WHERE tenant_id=? AND role='owner' AND active=1").get(req.user.tenant_id).c <= 1) {
-    return fail(res, 'Phải còn ít nhất một chủ cửa hàng');
+    return fail(res, tenantKind(req) === 'community' ? 'Phải còn ít nhất một quản trị sổ quỹ' : 'Phải còn ít nhất một chủ cửa hàng');
   }
   control.prepare('UPDATE users SET active=0 WHERE id=?').run(id);
   audit({ tenantId: req.user.tenant_id, userId: req.user.id, username: req.user.username, action: 'user.disable', entity: 'user', entityId: id, ip: req.ip });

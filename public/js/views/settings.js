@@ -1,7 +1,7 @@
 import { $, $$, esc, toast, modal, closeModal, setCurrency, fmtDT, bankField, bankOf } from '../util.js';
 import { api, state, loadSettings, loadPriceLists } from '../store.js';
 import { showLanInfo } from './lan.js';
-import { isProd } from '../auth.js';
+import { isProd, auth } from '../auth.js';
 import { icon } from '../icons.js';
 
 export default {
@@ -10,7 +10,7 @@ export default {
   icon: icon('settings'),
 
   mount(el) {
-    el.innerHTML = `
+    el.innerHTML = auth.tenant?.kind === 'community' ? FUND_SETTINGS : `
 <div class="view-head"><div><h1>Cài đặt</h1><div class="sub">Thông tin cửa hàng, thanh toán, in ấn và kết nối</div></div>
   <button class="btn primary" id="btn-save-settings">Lưu cài đặt</button></div>
 <div class="grid2">
@@ -109,12 +109,14 @@ export default {
 </div>`;
 
     $('#btn-save-settings').onclick = save;
-    $('#btn-test-qr').onclick = testQR;
-    $('#btn-lan-settings').onclick = showLanInfo;
     $('#btn-backup-now').onclick = async () => {
       try { const b = await api('/api/backup/now', { method: 'POST' }); toast('Đã sao lưu ' + b.name); renderBackups(); }
       catch (e) { toast(e.message, true); }
     };
+    $('#backup-list').addEventListener('click', onBackupClick);
+    if (auth.tenant?.kind === 'community') return;
+    $('#btn-test-qr').onclick = testQR;
+    $('#btn-lan-settings').onclick = showLanInfo;
     $('#btn-vqr-test').onclick = async () => {
       const el = $('#vqr-test-result');
       el.innerHTML = '<div class="hint">Đang kiểm tra…</div>';
@@ -123,7 +125,6 @@ export default {
         el.innerHTML = `<div class="hint">Môi trường: <b>${esc(r.env)}</b> · Token: <b>${r.token_ok ? 'OK' : 'lỗi'}</b> · QR: <b>${r.qr_ok ? 'OK' : 'lỗi'}</b><br>${esc(r.message || '')}</div>`;
       } catch (e) { el.innerHTML = `<div class="low">${esc(e.message)}</div>`; }
     };
-    $('#backup-list').addEventListener('click', onBackupClick);
     el.addEventListener('click', (e) => {
       const ex = e.target.closest('[data-export]');
       if (ex) window.location.href = `/api/reports/export?type=${ex.dataset.export}&from=2000-01-01&to=2999-12-31`;
@@ -131,9 +132,12 @@ export default {
   },
 
   async show() {
-    await Promise.all([loadSettings(), loadPriceLists()]);
-    $('#bank-slot').innerHTML = bankField('bank-select', state.settings.bank_bin, state.settings.bank_name);
-    $('#pl-select').innerHTML = state.priceLists.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
+    const fund = auth.tenant?.kind === 'community';
+    await Promise.all([loadSettings(), fund || loadPriceLists()]);
+    if (!fund) {
+      $('#bank-slot').innerHTML = bankField('bank-select', state.settings.bank_bin, state.settings.bank_name);
+      $('#pl-select').innerHTML = state.priceLists.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
+    }
     for (const el of $$('[data-s]')) {
       if (el.type === 'checkbox') el.checked = state.settings[el.dataset.s] === '1';
       else el.value = state.settings[el.dataset.s] ?? '';
@@ -142,6 +146,39 @@ export default {
     renderBackups();
   },
 };
+
+// Sổ quỹ thôn chỉ cần: thông tin thôn, danh sách loại quỹ, xóm / đoàn thể, sao lưu. Tài khoản nhận tiền khai ở từng quỹ.
+const FUND_SETTINGS = `
+<div class="view-head"><div><h1>Cài đặt</h1><div class="sub">Thông tin thôn và danh mục dùng khi tạo quỹ</div></div>
+  <button class="btn primary" id="btn-save-settings">Lưu cài đặt</button></div>
+<div class="grid2">
+  <div class="card">
+    <h3>Thông tin thôn / tổ chức</h3>
+    <label class="fld">Tên hiển thị<input class="field" data-s="shop_name" placeholder="Ví dụ: Ban quản lý quỹ thôn An Phú"></label>
+    <label class="fld">Địa chỉ<input class="field" data-s="shop_address"></label>
+    <label class="fld">Điện thoại liên hệ<input class="field" data-s="shop_phone" inputmode="tel"></label>
+  </div>
+  <div class="card">
+    <h3>Loại quỹ</h3>
+    <p class="muted">Mỗi dòng một loại, có thể ghi kèm tính chất sau dấu <b>|</b>: <code>Bắt buộc</code>, <code>Vận động</code> hoặc <code>Tự nguyện</code>.
+      Ví dụ: <code>Quỹ quốc phòng – an ninh | Bắt buộc</code>, <code>Ủng hộ lũ lụt | Vận động</code>, <code>Công đức | Tự nguyện</code>.</p>
+    <textarea class="field fd-textarea" rows="6" data-s="fund_types"></textarea>
+  </div>
+  <div class="card">
+    <h3>Xóm / đoàn thể</h3>
+    <p class="muted">Mỗi dòng một xóm hoặc đoàn thể, ví dụ: Xóm 1, Xóm 2, Hội Phụ nữ, Hội Cựu chiến binh, Chi đoàn thanh niên.
+      Dùng để chọn phạm vi thu của từng quỹ (mặc định là cả thôn).</p>
+    <textarea class="field fd-textarea" rows="6" data-s="fund_groups"></textarea>
+  </div>
+  <div class="card">
+    <h3>Dữ liệu &amp; sao lưu</h3>
+    <p class="muted">Phần mềm tự sao lưu sổ quỹ định kỳ.</p>
+    <label class="chk"><input type="checkbox" data-s="backup_enabled"> Tự động sao lưu</label>
+    <label class="fld" style="margin-top:10px">Số bản giữ lại<input class="field" type="number" min="1" data-s="backup_keep"></label>
+    <div class="toolbar"><button class="btn primary" id="btn-backup-now" type="button">Sao lưu ngay</button></div>
+    <div id="backup-list" class="scroll-x" style="margin-top:8px"></div>
+  </div>
+</div>`;
 
 async function renderBackups() {
   const el = document.getElementById('backup-list');
@@ -178,10 +215,12 @@ async function onBackupClick(e) {
 async function save() {
   const body = {};
   for (const el of $$('[data-s]')) body[el.dataset.s] = el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value;
-  const bank = bankOf($('#bank-select').value);
-  if (bank === undefined) { toast('Chọn ngân hàng trong danh sách gợi ý', true); $('#bank-select').focus(); return; }
-  body.bank_bin = bank ? bank[0] : '';
-  body.bank_name = bank ? bank[1] : '';
+  if ($('#bank-select')) {
+    const bank = bankOf($('#bank-select').value);
+    if (bank === undefined) { toast('Chọn ngân hàng trong danh sách gợi ý', true); $('#bank-select').focus(); return; }
+    body.bank_bin = bank ? bank[0] : '';
+    body.bank_name = bank ? bank[1] : '';
+  }
   try {
     state.settings = await api('/api/settings', { method: 'PUT', body });
     setCurrency(state.settings.currency || '₫');

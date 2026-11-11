@@ -314,6 +314,9 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('Root sees community card', await root.pg.locator('#pc-card').isVisible());
     const cm = await rapi('/api/platform/communities', { code: 'ui-thon', name: 'Thôn UI', type: 'village', area: 'Xã UI' });
     const qt = await rapi('/api/platform/tenants', { code: 'ui-quy', name: 'Quỹ thôn UI', kind: 'community', community_id: cm.data.id, owner_username: 'uiquy', owner_password: 'uiquy123' });
+    // Hạng mục hàng dùng chung của người bán do Quản trị nền tảng quản lý (không còn trong sổ quỹ)
+    await rapi('/api/platform/communities/' + cm.data.id + '/categories', { name: 'Rau củ' });
+    await rapi('/api/platform/communities/' + cm.data.id + '/categories', { name: 'Đồ uống' });
     // GĐ4: một người bán trong thôn UI, có tài khoản riêng để tạo QR
     await rapi('/api/platform/tenants', { code: 'ui-seller', name: 'Người bán UI', kind: 'seller', community_id: cm.data.id, owner_username: 'uiseller', owner_password: 'uiseller1' });
     await root.pg.reload(); await root.pg.waitForSelector('#pf-body tr[data-id]'); await root.pg.waitForTimeout(500);
@@ -354,14 +357,18 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     const quy = await loginAs('uiquy', 'uiquy123', '.nav-item[data-view]');
     const navs = await quy.pg.locator('.nav-item[data-view]').evaluateAll((els) => els.map((x) => x.dataset.view));
     ok('Community tenant has no POS menu', !['pos', 'products', 'inventory', 'promotions'].some((v) => navs.includes(v)), navs.join(','));
-    ok('Community tenant has community menu', navs.includes('community'));
-    await quy.pg.evaluate(() => window.showView('community')); await quy.pg.waitForTimeout(700);
-    ok('Community summary renders', (await quy.pg.locator('#cm-stats .stat').count()) === 4);
+    ok('Community tenant has no sales/report/community menu', !['invoices', 'reports', 'community'].some((v) => navs.includes(v)), navs.join(','));
+    ok('Community tenant starts on fund book', await quy.pg.evaluate(() => document.querySelector('.view.active')?.id) === 'view-funds');
+    const quyMe = await quy.pg.evaluate(async () => (await (await fetch('/api/auth/me')).json()).data);
+    ok('Community owner label is fund admin', quyMe.user.role_name === 'Quản trị sổ quỹ', quyMe.user.role_name);
     // ---------- Sổ quỹ (GĐ2.8) ----------
     ok('Funds menu present', navs.includes('funds'));
     await quy.pg.evaluate(() => window.showView('funds')); await quy.pg.waitForTimeout(500);
     await quy.pg.locator('#fd-new-fund').click(); await quy.pg.waitForTimeout(300);
-    await quy.pg.locator('#fd-f-code').fill('ui-quy-chung');
+    ok('Fund form has no code field, has fund type + contribution', (await quy.pg.locator('#fd-f-code').count()) === 0
+      && (await quy.pg.locator('#fd-f-type option').count()) >= 2 && (await quy.pg.locator('#fd-f-contrib option').count()) === 4);
+    await quy.pg.locator('#fd-f-contrib').selectOption('voluntary');
+    ok('Voluntary hides amount field', await quy.pg.locator('#fd-f-target-wrap').isHidden());
     await quy.pg.locator('#fd-f-name').fill('Quỹ UI');
     await quy.pg.locator('#fd-f-account').fill('UIQUYACC');
     await quy.pg.locator('#fd-f-bin').fill('quân đội');
@@ -369,7 +376,8 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.locator('#fd-f-bin').press('ArrowDown'); await quy.pg.locator('#fd-f-bin').press('Enter');
     await quy.pg.locator('#fd-f-save').click(); await quy.pg.waitForTimeout(500);
     ok('Fund created and listed', (await quy.pg.locator('#fd-tabs').innerText()).includes('Quỹ UI'));
-    const uiFund = (await quy.pg.evaluate(async () => (await (await fetch('/api/funds')).json()).data)).find((f) => f.code === 'ui-quy-chung');
+    const uiFund = (await quy.pg.evaluate(async () => (await (await fetch('/api/funds')).json()).data)).find((f) => f.name === 'Quỹ UI');
+    ok('Fund code generated from name', uiFund && uiFund.code === 'quy-ui' && uiFund.contribution === 'voluntary', JSON.stringify(uiFund && [uiFund.code, uiFund.contribution]));
     ok('Bank search saves BIN + name', uiFund && uiFund.bank_bin === '970422' && uiFund.bank_name === 'MB Bank', JSON.stringify(uiFund && [uiFund.bank_bin, uiFund.bank_name]));
     await quy.pg.locator('#fd-in').click(); await quy.pg.waitForTimeout(300);
     await quy.pg.locator('#fd-e-amount').pressSequentially('50000');
@@ -401,10 +409,38 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.setViewportSize({ width: 400, height: 820 }); await quy.pg.waitForTimeout(300);
     ok('Funds: no horizontal overflow 400px', !(await quy.pg.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
     ok('Funds: mobile action bar visible', await quy.pg.locator('.fd-bar').isVisible());
-    // Trưởng thôn (chủ tenant quỹ) thêm hạng mục cho người bán chọn
-    await quy.pg.evaluate(() => window.showView('community')); await quy.pg.waitForTimeout(600);
-    for (const n of ['Rau củ', 'Đồ uống']) { await quy.pg.fill('#cm-cat-name', n); await quy.pg.click('#cm-cat-form button[type=submit]'); await quy.pg.waitForTimeout(400); }
-    ok('Community categories card adds items', (await quy.pg.locator('#cm-cat-body tr').count()) === 2);
+    const fundCats = await quy.pg.evaluate(async () => (await (await fetch('/api/community/categories')).json()).data);
+    ok('Platform categories available to community sellers', fundCats.length === 2, JSON.stringify(fundCats));
+    await quy.pg.setViewportSize({ width: 1280, height: 820 });
+    await quy.pg.evaluate(() => window.showView('settings')); await quy.pg.waitForTimeout(500);
+    ok('Fund settings: fund types + groups, no sales items', (await quy.pg.locator('[data-s="fund_types"]').count()) === 1
+      && (await quy.pg.locator('[data-s="fund_groups"]').count()) === 1
+      && (await quy.pg.locator('[data-s="invoice_prefix"], [data-s="vat_mode"], [data-s="label_width"], #btn-lan-settings').count()) === 0);
+    await quy.pg.locator('[data-s="fund_groups"]').fill('Xóm 1\nHội Phụ nữ');
+    await quy.pg.locator('#btn-save-settings').click(); await quy.pg.waitForTimeout(400);
+    await quy.pg.evaluate(() => window.showView('users')); await quy.pg.waitForTimeout(500);
+    await quy.pg.locator('#u-new').click(); await quy.pg.waitForTimeout(300);
+    ok('Fund users form: no PIN, role has description', (await quy.pg.locator('#uf-pin').count()) === 0
+      && (await quy.pg.locator('#uf-role-desc').innerText()).length > 5);
+    await quy.pg.locator('#uf-close').click();
+    await quy.pg.evaluate(() => window.showView('funds')); await quy.pg.waitForTimeout(500);
+    await quy.pg.locator('#fd-new-fund').click(); await quy.pg.waitForTimeout(400);
+    ok('Fund scope lists groups from settings', (await quy.pg.locator('#fd-f-category option').allInnerTexts()).join('|') === 'Cả thôn|Xóm 1|Hội Phụ nữ');
+    await quy.pg.locator('#fd-f-close').click();
+    // Vòng đời: Đang thu -> Ngừng thu (vẫn lập phiếu chi, không thu) -> Mở thu lại
+    ok('State banner shows collecting', (await quy.pg.locator('.fd-state').innerText()).includes('Đang thu'));
+    await quy.pg.locator('#fd-stop').click(); await quy.pg.waitForTimeout(500);
+    ok('Stop modal shows summary', (await quy.pg.locator('.fd-sum').innerText()).includes('50.000'));
+    await quy.pg.locator('#fd-st-save').click(); await quy.pg.waitForTimeout(700);
+    ok('Stopped: "vẫn chi" banner, no income button, expense still allowed', (await quy.pg.locator('.fd-state').innerText()).includes('vẫn chi')
+      && (await quy.pg.locator('#fd-in').count()) === 0 && (await quy.pg.locator('#fd-out').count()) === 1 && (await quy.pg.locator('#fd-qr').count()) === 0);
+    await quy.pg.locator('#fd-resume').click(); await quy.pg.waitForTimeout(300);
+    await quy.pg.locator('#fd-rs-date').fill('2999-12-31'); await quy.pg.locator('#fd-rs-reason').fill('Gia hạn');
+    await quy.pg.locator('#fd-rs-save').click(); await quy.pg.waitForTimeout(700);
+    ok('Resumed: round 2 with new transfer content', (await quy.pg.locator('.fd-state').innerText()).includes('Đợt 2'));
+    await quy.pg.locator('#fd-docs').click(); await quy.pg.waitForTimeout(400);
+    ok('Documents modal opens with upload', (await quy.pg.locator('#fd-dc-file').count()) === 1);
+    await quy.pg.locator('#fd-dc-close').click();
     await quy.c.close();
 
     // ================= GĐ4: Nhận tiền nhanh (người bán, điện thoại) =================

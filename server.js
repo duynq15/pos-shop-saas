@@ -122,6 +122,10 @@ app.listen(PORT, HOST, () => {
   console.log(`\n  ${tenants} cửa hàng · đăng nhập bằng tài khoản được cấp\n`);
 
   if (process.env.NO_CHECKS !== '1') setTimeout(nightlyChecks, 6000).unref?.();
+  // Quỹ hết hạn thu tự chuyển Ngừng thu: lúc khởi động và mỗi giờ (SKHGDT-3647)
+  const autoStop = () => { try { funds.autoStopExpired(); } catch (e) { console.error('  Tự ngừng thu lỗi:', e.message); } };
+  setTimeout(autoStop, 3000).unref?.();
+  setInterval(autoStop, 60 * 60 * 1000).unref?.();
   if (process.env.NO_BACKUP !== '1') {
     setTimeout(autoBackup, 4000).unref?.();
     setInterval(autoBackup, 6 * 60 * 60 * 1000).unref?.();

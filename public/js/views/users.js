@@ -1,6 +1,7 @@
 import { $, esc, toast, modal, closeModal, statusBadge } from '../util.js';
 import { api } from '../store.js';
 import { icon } from '../icons.js';
+import { auth } from '../auth.js';
 
 let users = [];
 let roles = [];
@@ -36,7 +37,7 @@ async function load() {
   roles = await api('/api/roles');
   $('#u-count').textContent = `${users.length} người dùng`;
   $('#u-body').innerHTML = users.map((u) => `<tr data-id="${u.id}">
-    <td><b>${esc(u.username)}</b></td><td>${esc(u.full_name || '')}</td>
+    <td><b>${esc(u.username)}</b>${u.skhg ? ' <span class="badge" title="Đăng nhập bằng tài khoản Sáng Kiến Hưng Gia">SKHG</span>' : ''}</td><td>${esc(u.full_name || '')}</td>
     <td>${esc(u.role_name || u.role)}</td>
     <td>${u.active ? '<span class="badge paid">Hoạt động</span>' : '<span class="badge cancelled">Đã khóa</span>'}</td>
     <td class="muted">${esc(u.last_login || '—')}</td>
@@ -46,18 +47,26 @@ async function load() {
 
 function openForm(u) {
   const isNew = !u;
-  const d = u || { role: 'cashier', active: 1 };
+  // Sổ quỹ thôn: không có ca bán hàng nên không cần PIN; SĐT dùng để khớp tài khoản Sáng Kiến Hưng Gia
+  const fund = auth.tenant?.kind === 'community';
+  const d = u || { role: roles[0]?.code, active: 1 };
   modal(`<h2>${isNew ? 'Thêm' : 'Sửa'} người dùng</h2>
+    ${u?.skhg ? '<p class="muted fd-form-hint">Tài khoản tự tạo khi đăng nhập bằng Sáng Kiến Hưng Gia; vai trò đồng bộ theo cộng đồng SKHG.</p>' : ''}
     <div class="form-grid">
-      <label class="fld">Tài khoản *<input class="field" id="uf-user" value="${esc(d.username || '')}" ${isNew ? '' : 'disabled'} autocapitalize="none"></label>
+      <label class="fld">Tên đăng nhập *<input class="field" id="uf-user" value="${esc(d.username || '')}" ${isNew ? '' : 'disabled'} autocapitalize="none" placeholder="vd: thuquy.lan">
+        <span class="muted fd-field-hint">Viết liền, không dấu; dùng để đăng nhập.</span></label>
       <label class="fld">Họ tên<input class="field" id="uf-name" value="${esc(d.full_name || '')}"></label>
-      <label class="fld">Điện thoại<input class="field" id="uf-phone" value="${esc(d.phone || '')}"></label>
-      <label class="fld">Vai trò<select class="field" id="uf-role">${roles.map((r) => `<option value="${r.code}" ${r.code === d.role ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></label>
+      <label class="fld">Điện thoại<input class="field" id="uf-phone" value="${esc(d.phone || '')}" inputmode="tel">
+        ${fund ? '<span class="muted fd-field-hint">Trùng SĐT tài khoản Sáng Kiến Hưng Gia thì đăng nhập được bằng SKHG.</span>' : ''}</label>
+      <label class="fld">Vai trò<select class="field" id="uf-role">${roles.map((r) => `<option value="${r.code}" ${r.code === d.role ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select>
+        <span class="muted fd-field-hint" id="uf-role-desc"></span></label>
       <label class="fld">${isNew ? 'Mật khẩu *' : 'Mật khẩu mới (để trống nếu không đổi)'}<input class="field" id="uf-pass" type="password" autocomplete="new-password"></label>
-      <label class="fld">Mã PIN (đổi ca nhanh)<input class="field" id="uf-pin" inputmode="numeric"></label>
+      ${fund ? '' : '<label class="fld">Mã PIN đổi ca (4–6 số, không bắt buộc)<input class="field" id="uf-pin" inputmode="numeric"></label>'}
       ${isNew ? '' : `<label class="chk full"><input type="checkbox" id="uf-active" ${d.active ? 'checked' : ''}> Đang hoạt động</label>`}
     </div>
     <div class="modal-actions"><button class="btn primary" id="uf-save">Lưu</button><button class="btn" id="uf-close">Đóng</button></div>`);
+  const desc = () => { $('#uf-role-desc').textContent = roles.find((r) => r.code === $('#uf-role').value)?.desc || ''; };
+  $('#uf-role').onchange = desc; desc();
   $('#uf-close').onclick = closeModal;
   $('#uf-save').onclick = async () => {
     const body = {
@@ -66,7 +75,7 @@ function openForm(u) {
       phone: $('#uf-phone').value.trim(),
       role: $('#uf-role').value,
       password: $('#uf-pass').value || undefined,
-      pin: $('#uf-pin').value || undefined,
+      pin: $('#uf-pin')?.value || undefined,
     };
     if (!isNew) body.active = $('#uf-active').checked ? 1 : 0;
     try {

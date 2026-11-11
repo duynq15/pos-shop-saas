@@ -19,6 +19,7 @@ const PERMISSIONS = [
   'fund.anonymize',       // ẩn / hiện tên người công đức (FR-20)
   'community.report',     // báo cáo tổng hợp cộng đồng (FR-18, BR-09)
   'community.categories', // danh mục hạng mục dùng chung (FR-10, BR-11)
+  'fund.inspect',         // Ban kiểm tra: xác nhận khoá sổ, duyệt mở khoá sổ (SKHGDT-3647)
 ];
 
 // Loại tenant được dùng vai trò (FR-02). Thiếu `kinds` = mọi loại.
@@ -66,20 +67,33 @@ const ROLES = {
   // Vai trò của tenant cộng đồng (GĐ1.3, SEC-04: thủ quỹ không có quyền duyệt chi)
   treasurer: {
     name: 'Thủ quỹ',
+    desc: 'Thu tiền, lập phiếu chi, nhập khoản thu từ Excel. Không duyệt chi.',
     kinds: COMMUNITY_KINDS,
     perms: ['fund.view', 'fund.entry', 'fund.anonymize', 'report.export'],
     maxDiscount: 0,
   },
   approver: {
     name: 'Người duyệt chi',
+    desc: 'Duyệt hoặc từ chối phiếu chi, tạo và sửa quỹ. Không nhập tiền.',
     kinds: COMMUNITY_KINDS,
     perms: ['fund.view', 'fund.manage', 'fund.approve', 'community.categories', 'community.report'],
     maxDiscount: 0,
   },
   community_leader: {
     name: 'Ban lãnh đạo',
+    desc: 'Xem toàn bộ sổ quỹ, báo cáo; tạo và sửa thông tin quỹ.',
     kinds: COMMUNITY_KINDS,
-    perms: ['community.report', 'fund.view'],
+    // Ban lãnh đạo được xem toàn bộ sổ quỹ và cấu hình quỹ/tài khoản nhận tiền,
+    // nhưng vẫn tách khỏi thủ quỹ (nhập liệu) và người duyệt chi.
+    perms: ['community.report', 'fund.view', 'fund.manage'],
+    maxDiscount: 0,
+  },
+  // Ban kiểm tra độc lập với người thu / chi / duyệt: chỉ xem và xác nhận khoá sổ, mở khoá sổ.
+  inspector: {
+    name: 'Trưởng ban kiểm tra',
+    desc: 'Xem toàn bộ sổ quỹ; xác nhận khoá sổ và duyệt mở khoá sổ. Không thu, chi, duyệt chi.',
+    kinds: COMMUNITY_KINDS,
+    perms: ['fund.view', 'fund.inspect', 'community.report', 'report.export'],
     maxDiscount: 0,
   },
 };
@@ -109,6 +123,8 @@ const rolesFor = (kind) => Object.keys(ROLES).filter((code) => roleAllowed(code,
 const LABEL_FIELD = { approver: 'approver_label', community_leader: 'leader_label' };
 const roleName = (r, labels) => {
   if (r === 'platform') return 'Quản trị nền tảng';
+  // Chủ tài khoản của tenant cộng đồng là người quản trị sổ quỹ, không phải chủ cửa hàng.
+  if (r === 'owner' && labels) return 'Quản trị sổ quỹ';
   if (labels && LABEL_FIELD[r] && labels[LABEL_FIELD[r]]) return labels[LABEL_FIELD[r]];
   return ROLES[r] ? ROLES[r].name : r;
 };

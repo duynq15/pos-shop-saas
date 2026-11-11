@@ -4,7 +4,7 @@
 // Chỉ trả số tổng; không có trường nào theo từng người bán.
 const express = require('express');
 const db = require('../db');
-const { control, audit } = require('../control');
+const { control, audit, communitySettings } = require('../control');
 const { ok, fail, wrap, bad, str, int, today: todayLocal } = require('../lib/util');
 const { requirePerm, can } = require('../middleware');
 
@@ -48,6 +48,15 @@ router.get('/community/summary', requirePerm('community.report'), wrap((req, res
     if (s.converted) sum.converted_sellers += 1;
   }
   ok(res, { community_id: req.tenant.community_id, from, to, ...sum });
+}));
+
+// Link công khai để người dân xem đợt thu / công đức và quét QR. Chỉ trả khi nền tảng đã bật công khai.
+router.get('/community/public-link', requirePerm('fund.view'), wrap((req, res) => {
+  const cid = myCommunity(req);
+  if (!cid) return fail(res, 'Chỉ tài khoản thuộc cộng đồng mới có link công khai', 403);
+  const c = control.prepare('SELECT settings, donations_token FROM communities WHERE id=?').get(cid);
+  const enabled = !!(c && c.donations_token && communitySettings(c.settings).public_donations);
+  ok(res, { enabled, url: enabled ? '/congduc/' + c.donations_token : null });
 }));
 
 /* ===================== Hạng mục hàng dùng chung (GĐ4.3 — FR-10, BR-11, AC-02-2) ===================== */
