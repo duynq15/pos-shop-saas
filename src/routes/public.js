@@ -18,7 +18,7 @@ const db = require('../db');
 const { ok, wrap, str } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
 const { renderPdf, available } = require('../lib/pdf');
-const { fundQr, fundSummary } = require('./funds');
+const { fundQr, fundSummary, fundPeriod } = require('./funds');
 
 const router = express.Router(); // mount tại /public/api
 // API công khai, chỉ đọc: App / Web người dân gọi thẳng từ trình duyệt (docs/API-SO-QUY.md)
@@ -322,7 +322,35 @@ const viDate = (d) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}`
 function statusText(f, state) {
   if (state === 'collecting') return f.end_date ? `Hạn thu ${viDate(f.end_date)}` : 'Đang thu';
   if (state === 'stopped') return f.stopped_at ? `Ngừng thu từ ${viDate(f.stopped_at.slice(0, 10))} · vẫn chi` : 'Ngừng thu · vẫn chi';
-  return 'Không thu, không chi';
+  return f.locked_at ? `Đã khoá sổ ngày ${viDate(f.locked_at.slice(0, 10))}` : 'Đã khoá sổ';
+}
+const vnd = (n) => Number(n || 0).toLocaleString('vi-VN') + ' đ';
+const PERIOD_LABEL = { year: 'năm', month: 'tháng' };
+// Mức đóng hiển thị sẵn: "400.000 đ/hộ/năm", "Tuỳ tâm", "Mục tiêu 300.000.000 đ"
+function contributionText(f) {
+  if (f.contribution === 'voluntary') return 'Tuỳ tâm';
+  if (f.contribution === 'goal') return f.target_amount ? `Mục tiêu ${vnd(f.target_amount)}` : 'Tuỳ tâm';
+  if (!f.target_amount) return f.contribution === 'person' ? 'Theo nhân khẩu' : 'Theo hộ';
+  return `${vnd(f.target_amount)}/${f.contribution === 'person' ? 'người' : 'hộ'}${f.period ? '/' + PERIOD_LABEL[f.period] : ''}`;
+}
+const SOURCE_LABEL = { vietqr: 'QR qua ngân hàng', manual: 'Chuyển khoản', cash: 'Tiền mặt' };
+const MATCH_TEXT = { vietqr: 'Tự khớp sao kê ngân hàng', manual: 'Thủ quỹ ghi theo sao kê ngân hàng', cash: 'Thủ quỹ ghi sổ, có biên nhận' };
+const TYPE_LABEL = { in: 'Thu', out: 'Chi', adjust: 'Điều chỉnh' };
+const monthStart = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+// Một dòng thu chi công khai. Tên người nộp ẩn danh không bao giờ ra ngoài; ngày = ngày ghi sổ (như báo cáo quỹ).
+const ENTRY_COLS = 'id, code, type, source, bank_ref, payer_name, payer_group, anonymous, amount, note, attachment, created_at, approved_at';
+function publicEntry(f, e) {
+  const day = (e.approved_at || e.created_at || '').slice(0, 10);
+  const out = {
+    id: e.id, code: e.code, type: e.type, type_label: TYPE_LABEL[e.type],
+    name: e.anonymous ? null : (e.payer_name || null), anonymous: !!e.anonymous,
+    group: e.type === 'in' && !e.anonymous ? e.payer_group || null : null,
+    amount: e.amount, note: e.note || '', date: day,
+    after_stop: !!(f.stopped_at && e.type !== 'in' && (e.approved_at || e.created_at) > f.stopped_at),
+  };
+  if (e.type === 'in') Object.assign(out, { source: e.source, source_label: SOURCE_LABEL[e.source], bank_ref: e.bank_ref || null, match_text: MATCH_TEXT[e.source] });
+  else out.receipts = e.attachment ? 1 : 0;
+  return out;
 }
 
 async function publicFund(f, token, { withEntries = true } = {}) {
@@ -340,6 +368,7 @@ async function publicFund(f, token, { withEntries = true } = {}) {
     contribution: f.contribution, category: f.category, description: f.description, content: f.content || null,
     start_date: f.start_date, end_date: f.end_date, target_amount: f.target_amount,
     state, state_label: STATE_LABEL[state], status_text: statusText(f, state), round: f.round,
+    period: f.period || null, managed_by: f.managed_by || null, contribution_text: contributionText(f),
     // tương thích bản trước: status active | closed
     status: f.status,
     stopped_at: f.stopped_at || null,
@@ -355,18 +384,16 @@ async function publicFund(f, token, { withEntries = true } = {}) {
     total: sum.total_in, spent: sum.total_out, balance: sum.balance, donors: sum.donors, progress: sum.progress,
     documents: docs.filter((d) => d.kind === 'doc').map((d) => ({ id: d.id, name: d.name, mime: d.mime, size: d.size, url: docUrl(d.id) })),
   };
+  // Tháng hiện tại (thẻ "Thu / Chi tháng này") và lần ghi sổ gần nhất ("cập nhật 08/11")
+  const m = db.prepare(`SELECT COUNT(CASE WHEN type='in' THEN 1 END) in_count, COALESCE(SUM(CASE WHEN type='in' THEN amount END),0) income,
+      COUNT(CASE WHEN type='out' THEN 1 END) out_count, COALESCE(SUM(CASE WHEN type='out' THEN amount END),0) expense
+    FROM fund_entries WHERE fund_id=? AND status='approved' AND date(approved_at)>=date(?)`).get(f.id, monthStart());
+  out.month = { from: monthStart(), ...m };
+  out.updated_at = db.prepare("SELECT MAX(approved_at) t FROM fund_entries WHERE fund_id=? AND status='approved'").get(f.id).t || f.created_at;
   if (withEntries) {
-    out.entries = db.prepare(`SELECT type, payer_name, anonymous, amount, note, created_at, approved_at FROM fund_entries
-      WHERE fund_id=? AND status='approved' ORDER BY created_at DESC, id DESC LIMIT 300`).all(f.id).map((e) => ({
-      type: e.type,
-      name: e.anonymous ? null : (e.payer_name || null),
-      anonymous: !!e.anonymous,
-      amount: e.amount,
-      note: e.note || '',
-      date: (e.created_at || '').slice(0, 10),
-      // khoản chi phát sinh sau ngày ngừng thu (thấy quỹ vẫn chi)
-      after_stop: !!(f.stopped_at && e.type !== 'in' && (e.approved_at || e.created_at) > f.stopped_at),
-    }));
+    // ponytail: 300 dòng mới nhất cho bản cũ; App dùng /entries (lọc, phân trang) cho quỹ nhiều giao dịch
+    out.entries = db.prepare(`SELECT ${ENTRY_COLS} FROM fund_entries
+      WHERE fund_id=? AND status='approved' ORDER BY created_at DESC, id DESC LIMIT 300`).all(f.id).map((e) => ({ ...publicEntry(f, e), date: (e.created_at || '').slice(0, 10) }));
     out.notices = db.prepare('SELECT kind, message, created_at FROM fund_notices WHERE fund_id=? ORDER BY id DESC LIMIT 20').all(f.id);
   }
   return out;
@@ -380,16 +407,29 @@ function publicTenant(token) {
   return { c, tenant: communityTenant(c.id) };
 }
 
+// Dòng đầu trang Quỹ làng: "8 quỹ công khai · 6 đang thu · 1 ngừng thu · 1 khoá sổ · cập nhật 08/11", tổng số dư, thu chi tháng này
+function communitySummary(programs) {
+  const count = (s) => programs.filter((p) => p.state === s).length;
+  return {
+    funds: programs.length, collecting: count('collecting'), stopped: count('stopped'), locked: count('locked'),
+    balance: programs.reduce((s, p) => s + p.balance, 0),
+    month_from: monthStart(),
+    month_income: programs.reduce((s, p) => s + p.month.income, 0),
+    month_expense: programs.reduce((s, p) => s + p.month.expense, 0),
+    updated_at: programs.reduce((t, p) => (p.updated_at && p.updated_at > t ? p.updated_at : t), '') || null,
+  };
+}
+
 async function donationsData(token) {
   const pt = publicTenant(token);
   if (!pt) return null;
-  if (!pt.tenant) return { community_name: pt.c.name, programs: [], notices: [] };
+  if (!pt.tenant) return { community_name: pt.c.name, summary: communitySummary([]), programs: [], notices: [] };
   return db.runWith(pt.tenant.code, async () => {
     const programs = [];
     for (const f of db.prepare(publicFundSql).all()) programs.push(await publicFund(f, token));
     const notices = db.prepare(`SELECT n.fund_id, n.kind, n.message, n.created_at FROM fund_notices n JOIN funds f ON f.id=n.fund_id
       WHERE f.is_public=1 ORDER BY n.id DESC LIMIT 30`).all();
-    return { community_name: pt.c.name, programs, notices };
+    return { community_name: pt.c.name, summary: communitySummary(programs), programs, notices };
   });
 }
 
@@ -409,6 +449,89 @@ router.get('/donations/:token/funds/:id', wrap(async (req, res) => {
   });
   if (!data) return res.status(404).json({ error: 'Không tìm thấy quỹ' });
   ok(res, data);
+}));
+
+// Thu chi của một quỹ: lọc theo khoảng ngày, thu / chi, từ khoá; phân trang (20 / 50 / 100 dòng); nhóm theo tháng.
+// Từ khoá chỉ dò tên người nộp không ẩn danh, để không lộ ai đã đóng dưới tên "Người hảo tâm".
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+function entryFilter(f, q) {
+  const where = ["fund_id=?", "status='approved'"];
+  const args = [f.id];
+  for (const [k, op] of [['from', '>='], ['to', '<=']]) {
+    if (q[k] === undefined || q[k] === '') continue;
+    if (!DAY.test(String(q[k]))) return { error: 'Ngày phải theo dạng YYYY-MM-DD' };
+    where.push(`date(approved_at)${op}date(?)`); args.push(String(q[k]));
+  }
+  if (q.type) {
+    if (!['in', 'out'].includes(q.type)) return { error: 'type phải là in hoặc out' };
+    where.push('type=?'); args.push(q.type);
+  }
+  const term = str(q.q, 80);
+  if (term) {
+    where.push("(note LIKE ? OR code LIKE ? OR bank_ref LIKE ? OR (anonymous=0 AND (payer_name LIKE ? OR payer_group LIKE ?)))");
+    const like = `%${term.replace(/[%_]/g, '')}%`;
+    args.push(like, like, like, like, like);
+  }
+  return { sql: where.join(' AND '), args };
+}
+function withFund(req, res, fn) {
+  const pt = publicTenant(req.params.token);
+  if (!pt || !pt.tenant) return res.status(404).json({ error: 'Không tìm thấy' });
+  return db.runWith(pt.tenant.code, () => {
+    const f = db.prepare('SELECT * FROM funds WHERE is_public=1 AND id=?').get(Number(req.params.id));
+    if (!f) return res.status(404).json({ error: 'Không tìm thấy quỹ' });
+    const flt = entryFilter(f, req.query);
+    if (flt.error) return res.status(400).json({ error: flt.error });
+    return fn(f, flt);
+  });
+}
+
+router.get('/donations/:token/funds/:id/entries', wrap((req, res) => withFund(req, res, (f, { sql, args }) => {
+  const limit = [20, 50, 100].includes(Number(req.query.limit)) ? Number(req.query.limit) : 20;
+  const t = db.prepare(`SELECT COUNT(*) n, COALESCE(SUM(CASE WHEN type='in' THEN amount END),0) income,
+    COALESCE(SUM(CASE WHEN type='out' THEN amount END),0) expense FROM fund_entries WHERE ${sql}`).get(...args);
+  const pages = Math.max(1, Math.ceil(t.n / limit));
+  const page = Math.min(pages, Math.max(1, Math.floor(Number(req.query.page)) || 1));
+  const entries = db.prepare(`SELECT ${ENTRY_COLS} FROM fund_entries WHERE ${sql} ORDER BY approved_at DESC, id DESC LIMIT ? OFFSET ?`)
+    .all(...args, limit, (page - 1) * limit).map((e) => publicEntry(f, e));
+  // Tiêu đề nhóm tháng ("Tháng 11/2026 · 8 giao dịch · Thu +2.400.000 · Chi −8.250.000") cho các tháng có trên trang này
+  const months = [...new Set(entries.map((e) => e.date.slice(0, 7)))].map((mo) => ({
+    month: mo,
+    ...db.prepare(`SELECT COUNT(*) count, COALESCE(SUM(CASE WHEN type='in' THEN amount END),0) income,
+      COALESCE(SUM(CASE WHEN type='out' THEN amount END),0) expense FROM fund_entries WHERE ${sql} AND strftime('%Y-%m', approved_at)=?`).get(...args, mo),
+  }));
+  ok(res, { total_count: t.n, total_income: t.income, total_expense: t.expense, page, pages, limit, months, entries });
+})));
+
+// Tải Excel thu chi của quỹ (cùng bộ lọc với /entries)
+router.get('/donations/:token/funds/:id/entries.xlsx', wrap((req, res) => withFund(req, res, (f, { sql, args }) => {
+  const rows = db.prepare(`SELECT ${ENTRY_COLS} FROM fund_entries WHERE ${sql} ORDER BY approved_at, id LIMIT 20000`).all(...args)
+    .map((e) => publicEntry(f, e)).map((e) => ({
+      'Ngày': e.date, 'Mã chứng từ': e.code, 'Loại': e.type_label, 'Số tiền': e.type === 'out' ? -e.amount : e.amount,
+      'Người nộp': e.type === 'in' ? (e.anonymous ? 'Người hảo tâm' : e.name || '') : '', 'Xóm': e.group || '',
+      'Hình thức': e.source_label || '', 'Mã giao dịch': e.bank_ref || '', 'Nội dung': e.note,
+    }));
+  sendXlsx(res, `thu-chi-${f.code}`, rows, { sheet: 'Thu chi' });
+})));
+
+// Báo cáo tháng của các quỹ công khai: đầu kỳ, thu, chi, cuối kỳ. month=YYYY-MM, mặc định tháng trước.
+router.get('/donations/:token/report', wrap((req, res) => {
+  const pt = publicTenant(req.params.token);
+  if (!pt || !pt.tenant) return res.status(404).json({ error: 'Không tìm thấy' });
+  let month = String(req.query.month || '');
+  if (!month) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); month = monthStart(d).slice(0, 7); }
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: 'month phải theo dạng YYYY-MM' });
+  const from = month + '-01';
+  const [y, mo] = month.split('-').map(Number);
+  const to = `${month}-${String(new Date(y, mo, 0).getDate()).padStart(2, '0')}`;
+  const funds = db.runWith(pt.tenant.code, () => db.prepare(publicFundSql).all().map((f) => {
+    const p = fundPeriod(f.id, from, to);
+    return { id: f.id, name: f.name, opening_balance: p.opening_balance, income: p.income_bank + p.income_cash,
+      expense: p.expense, adjust: p.adjust, closing_balance: p.closing_balance, entries: p.entries.length };
+  }));
+  const sum = (k) => funds.reduce((s, f) => s + f[k], 0);
+  ok(res, { community_name: pt.c.name, month, from, to, funds,
+    totals: { opening_balance: sum('opening_balance'), income: sum('income'), expense: sum('expense'), adjust: sum('adjust'), closing_balance: sum('closing_balance') } });
 }));
 
 // Tài liệu / biên bản của quỹ công khai

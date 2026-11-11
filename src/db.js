@@ -435,10 +435,13 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   for (const [name, def] of [['nature', 'TEXT'], ['content', 'TEXT'], ['transfer_code', 'TEXT'], ['round', 'INTEGER NOT NULL DEFAULT 1'],
     ['stopped_by_name', 'TEXT'], ['stop_note', 'TEXT'],
     ['locked_at', 'TEXT'], ['locked_by_name', 'TEXT'], ['lock_note', 'TEXT'], ['lock_balance', 'INTEGER'], ['lock_doc_id', 'INTEGER'],
-    ['unlocked_at', 'TEXT'], ['unlock_reason', 'TEXT']]) {
+    ['unlocked_at', 'TEXT'], ['unlock_reason', 'TEXT'],
+    // App Làng Số: chu kỳ mức đóng ('year' | 'month' | NULL = mỗi đợt) và đơn vị quản lý quỹ (Hội Khuyến học, Ban quản lý thôn…)
+    ['period', 'TEXT'], ['managed_by', 'TEXT']]) {
     ensureColumn('funds', name, def);
   }
   ensureColumn('fund_entries', 'round', 'INTEGER');
+  ensureColumn('fund_entries', 'payer_group', 'TEXT'); // xóm / địa chỉ người nộp
   conn.exec(`
     -- Nội dung quỹ: văn bản, tờ trình, biên bản (PDF / ảnh / Word / Excel). kind='minutes' là biên bản khoá / mở khoá sổ.
     CREATE TABLE IF NOT EXISTS fund_documents (

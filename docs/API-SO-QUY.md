@@ -2,7 +2,7 @@
 
 Tài liệu cho App / Web người dân và hệ thống bên ngoài muốn lấy dữ liệu quỹ thôn.
 
-- Địa chỉ gốc: `https://<máy chủ>` (ví dụ `https://thanhtoanso.example.vn`)
+- Địa chỉ gốc: `https://thanhtoanso.sangkienhunggia.app`
 - Dữ liệu trả về: JSON `{ "ok": true, "data": ... }`. Khi lỗi: `{ "ok": false, "error": "..." }` hoặc `{ "error": "..." }` cùng mã HTTP 4xx.
 - Tiền: số nguyên, đơn vị đồng (VND). Ngày: chuỗi `YYYY-MM-DD` hoặc `YYYY-MM-DD HH:MM:SS` theo giờ Việt Nam.
 
@@ -33,7 +33,7 @@ API công khai cho phép gọi từ trình duyệt ở tên miền khác (CORS `
 |---|---|---|---|---|---|
 | `collecting` | Đang thu | `Hạn thu 31/12/2026` | Có | Có | Có |
 | `stopped` | Ngừng thu | `Ngừng thu từ 31/10/2026 · vẫn chi` | Không | Có | Không (`qr_note`: "Quỹ đang ngừng thu") |
-| `locked` | Khoá sổ | `Không thu, không chi` | Không | Không | Không (`qr_note`: "Quỹ đã khoá sổ", App hiển thị QR mờ kèm nhãn) |
+| `locked` | Khoá sổ | `Đã khoá sổ ngày 31/12/2025` | Không | Không | Không (`qr_note`: "Quỹ đã khoá sổ", App hiển thị QR mờ kèm nhãn) |
 
 - Hết hạn thu (`end_date`), hệ thống tự chuyển quỹ sang **Ngừng thu** và báo Admin.
 - **Mở thu lại** (từ Ngừng thu) tạo đợt mới: `round` tăng, `transfer_content` đổi (ví dụ `QPAN26-D2`), QR mới. Tiền chuyển theo QR đợt cũ không tự vào sổ.
@@ -53,6 +53,11 @@ Ví dụ trả về (rút gọn):
   "ok": true,
   "data": {
     "community_name": "Thôn An Phú",
+    "summary": {
+      "funds": 8, "collecting": 6, "stopped": 1, "locked": 1,
+      "balance": 208500000, "month_from": "2026-11-01", "month_income": 12300000, "month_expense": 8250000,
+      "updated_at": "2026-11-08 08:00:00"
+    },
     "notices": [
       { "fund_id": 5, "kind": "auto_stop", "message": "Quỹ quốc phòng – an ninh 2026: ngừng thu từ 31/10/2026 (hết hạn thu)", "created_at": "2026-10-31 17:00:00" }
     ],
@@ -67,6 +72,9 @@ Ví dụ trả về (rút gọn):
         "category": "Cả thôn",
         "contribution": "household",
         "target_amount": 50000,
+        "period": "year",
+        "contribution_text": "50.000 đ/hộ/năm",
+        "managed_by": "Ban chỉ huy quân sự thôn",
         "description": "Thu theo Nghị quyết HĐND xã, mỗi hộ 50.000 đ/năm",
         "content": "Căn cứ Nghị quyết HĐND xã …\nĐối tượng: …",
         "documents": [ { "id": 3, "name": "Nghị quyết HĐND xã.pdf", "mime": "application/pdf", "size": 182044, "url": "/public/api/donations/<TOKEN>/documents/3" } ],
@@ -82,9 +90,14 @@ Ví dụ trả về (rút gọn):
         "bank_account": null, "bank_name": null, "account_holder": null,
         "transfer_content": null, "qrDataUrl": null, "qr_note": "Quỹ đang ngừng thu",
         "total": 1500000, "spent": 600000, "balance": 900000, "donors": 30, "progress": null,
+        "month": { "from": "2026-11-01", "in_count": 0, "income": 0, "out_count": 1, "expense": 600000 },
+        "updated_at": "2026-11-08 09:12:00",
         "entries": [
-          { "type": "out", "name": null, "anonymous": false, "amount": 600000, "note": "Hỗ trợ dân quân trực Tết", "date": "2026-11-08", "after_stop": true },
-          { "type": "in", "name": "Nguyễn Văn An", "anonymous": false, "amount": 50000, "note": "Đóng quỹ", "date": "2026-10-30", "after_stop": false }
+          { "id": 41, "code": "PC-20261108-001", "type": "out", "type_label": "Chi", "name": null, "anonymous": false, "group": null,
+            "amount": 600000, "note": "Hỗ trợ dân quân trực Tết", "date": "2026-11-08", "after_stop": true, "receipts": 1 },
+          { "id": 37, "code": "PT-20261030-004", "type": "in", "type_label": "Thu", "name": "Nguyễn Văn An", "anonymous": false, "group": "Xóm Đình",
+            "amount": 50000, "note": "Đóng quỹ", "date": "2026-10-30", "after_stop": false,
+            "source": "vietqr", "source_label": "QR qua ngân hàng", "bank_ref": "FT26303845510", "match_text": "Tự khớp sao kê ngân hàng" }
         ],
         "notices": [ { "kind": "auto_stop", "message": "…", "created_at": "2026-10-31 17:00:00" } ]
       }
@@ -104,6 +117,9 @@ Ví dụ trả về (rút gọn):
 | `category` | Phạm vi thu: `Cả thôn` hoặc tên xóm / đoàn thể. `null` ở quỹ cũ = cả thôn |
 | `contribution` | Cách đóng: `household` theo hộ, `person` theo nhân khẩu, `voluntary` tùy tâm, `goal` huy động theo mục tiêu |
 | `target_amount` | Mức mỗi hộ / mỗi người / tổng mục tiêu theo `contribution`. `null` khi tùy tâm |
+| `period` | Chu kỳ của mức đóng: `year` mỗi năm, `month` mỗi tháng, `null` một lần cho đợt thu |
+| `contribution_text` | Mức đóng hiển thị sẵn: `400.000 đ/hộ/năm`, `50.000 đ/người`, `Tuỳ tâm`, `Mục tiêu 300.000.000 đ` |
+| `managed_by` | Đơn vị quản lý quỹ (Ban quản lý thôn, Hội Khuyến học…), `null` nếu chưa nhập |
 | `description` | Mô tả ngắn |
 | `content` | Nội dung chi tiết (văn bản nhiều dòng, giữ nguyên xuống dòng; hiển thị dạng text, không phải HTML) |
 | `documents` | Tài liệu đính kèm (nghị quyết, tờ trình, ảnh…): `name`, `mime`, `size` (byte), `url` |
@@ -120,20 +136,30 @@ Ví dụ trả về (rút gọn):
 | `total`, `spent`, `balance` | Tổng đã thu, đã chi, số dư (trên toàn bộ sổ) |
 | `donors` | Số lượt đóng góp |
 | `progress` | % đạt mục tiêu (chỉ `contribution = goal`) |
-| `entries` | Tối đa 300 khoản gần nhất đã ghi sổ |
+| `month` | Tháng hiện tại: `in_count`, `income` (thu), `out_count`, `expense` (chi) |
+| `updated_at` | Lần ghi sổ gần nhất (dòng "cập nhật 08/11") |
+| `entries` | Tối đa 300 khoản gần nhất. Quỹ nhiều giao dịch: dùng API thu chi ở mục 1.1c (lọc, phân trang) |
 | `notices` | 20 thông báo gần nhất của quỹ (mở thu lại, tự ngừng thu, khoá / mở khoá sổ) |
 
 Một khoản trong `entries`:
 
 | Trường | Ý nghĩa |
 |---|---|
-| `type` | `in` thu, `out` chi, `adjust` điều chỉnh (số tiền có thể âm) |
+| `id`, `code` | Mã số và số chứng từ (PT… phiếu thu, PC… phiếu chi, DC… điều chỉnh) |
+| `type`, `type_label` | `in` Thu, `out` Chi, `adjust` Điều chỉnh (số tiền có thể âm) |
 | `name` | Tên người nộp. `null` khi người nộp xin ẩn danh hoặc không rõ tên |
 | `anonymous` | `true` thì hiển thị "Người hảo tâm" |
+| `group` | Xóm / địa chỉ người nộp (khoản thu, không ẩn danh), `null` nếu không ghi |
+| `source`, `source_label` | Khoản thu: `vietqr` "QR qua ngân hàng", `manual` "Chuyển khoản", `cash` "Tiền mặt" |
+| `bank_ref` | Khoản thu qua ngân hàng: mã giao dịch trên sao kê |
+| `match_text` | Khoản thu: cách đối chiếu ("Tự khớp sao kê ngân hàng", "Thủ quỹ ghi theo sao kê ngân hàng", "Thủ quỹ ghi sổ, có biên nhận") |
+| `receipts` | Khoản chi: số ảnh chứng từ (0 hoặc 1) |
 | `amount` | Số tiền |
 | `note` | Nội dung (với khoản chi: chi cho việc gì) |
 | `date` | Ngày ghi sổ |
 | `after_stop` | `true` nếu là khoản chi / điều chỉnh phát sinh sau ngày ngừng thu (để thấy quỹ vẫn chi) |
+
+`summary` ở cấp thôn (đầu trang Quỹ làng): `funds` số quỹ công khai, `collecting` / `stopped` / `locked` số quỹ theo trạng thái, `balance` tổng số dư, `month_income` / `month_expense` thu chi từ `month_from` (đầu tháng này), `updated_at` lần ghi sổ gần nhất.
 
 `notices` ở cấp thôn: 30 thông báo mới nhất của mọi quỹ công khai, `kind` thuộc `resume` (mở thu lại), `auto_stop` (tự ngừng thu), `stop`, `lock`, `unlock`.
 
@@ -142,6 +168,47 @@ Một khoản trong `entries`:
 ```
 GET /public/api/donations/<TOKEN>/funds/<id>              # một quỹ, cùng cấu trúc như trên
 GET /public/api/donations/<TOKEN>/documents/<docId>       # tải tài liệu / biên bản (PDF, ảnh mở trực tiếp; Word, Excel tải về)
+```
+
+### 1.1c. Thu chi của một quỹ (lọc, phân trang, tải Excel)
+
+```
+GET /public/api/donations/<TOKEN>/funds/<id>/entries?from=2026-11-01&to=2026-11-30&type=in&q=Hoa&page=1&limit=20
+GET /public/api/donations/<TOKEN>/funds/<id>/entries.xlsx?from=...&to=...&type=...&q=...    # tải Excel, cùng bộ lọc
+```
+
+- Tham số đều không bắt buộc. `from`, `to`: `YYYY-MM-DD` (ngày ghi sổ). `type`: `in` / `out`. `q`: tìm theo tên người nộp, xóm, nội dung, số chứng từ, mã giao dịch (không tìm theo tên người ẩn danh). `limit`: `20` / `50` / `100` (mặc định 20). `page` từ 1.
+- "Tháng 11/2026" = `from=2026-11-01&to=2026-11-30`; "Năm 2026" = `from=2026-01-01&to=2026-12-31`.
+
+```json
+{
+  "ok": true,
+  "data": {
+    "total_count": 1248, "total_income": 386400000, "total_expense": 290200000,
+    "page": 1, "pages": 63, "limit": 20,
+    "months": [ { "month": "2026-11", "count": 8, "income": 2400000, "expense": 8250000 } ],
+    "entries": [ { "id": 52, "code": "PT-20261108-002", "type": "in", "name": "Lê Thị Hoa", "group": "Xóm Đông", "amount": 400000, "...": "như mục 1.1" } ]
+  }
+}
+```
+
+`months`: tiêu đề nhóm cho các tháng có trên trang này (số giao dịch, thu, chi của cả tháng theo bộ lọc).
+
+### 1.1d. Báo cáo tháng
+
+```
+GET /public/api/donations/<TOKEN>/report?month=2026-10      # bỏ month = tháng trước
+```
+
+```json
+{
+  "ok": true,
+  "data": {
+    "community_name": "Thôn An Phú", "month": "2026-10", "from": "2026-10-01", "to": "2026-10-31",
+    "funds": [ { "id": 1, "name": "Quỹ phúc lợi thôn", "opening_balance": 104450000, "income": 0, "expense": 3200000, "adjust": 0, "closing_balance": 101250000, "entries": 1 } ],
+    "totals": { "opening_balance": 104450000, "income": 0, "expense": 3200000, "adjust": 0, "closing_balance": 101250000 }
+  }
+}
 ```
 
 ### 1.2. Tạo mã QR đúng số tiền
@@ -178,7 +245,7 @@ Lỗi thường gặp: `404` (sai token, thôn tắt công khai, quỹ không c�
 ### Ví dụ gọi từ App (JavaScript)
 
 ```js
-const BASE = 'https://<máy chủ>';
+const BASE = 'https://thanhtoanso.sangkienhunggia.app';
 const TOKEN = '<TOKEN>';
 const res = await fetch(`${BASE}/public/api/donations/${TOKEN}`);
 const { data } = await res.json();
@@ -231,6 +298,8 @@ PATCH /api/funds/<id>
   "category": "Xóm 1",
   "contribution": "person",
   "target_amount": 50000,
+  "period": "year",
+  "managed_by": "Hội Khuyến học",
   "is_public": 1,
   "start_date": "2026-11-01",
   "end_date": "2026-12-31",
@@ -243,6 +312,7 @@ PATCH /api/funds/<id>
 
 - `code` không bắt buộc. Bỏ trống thì hệ thống tự sinh từ tên (ví dụ `quy-khuyen-hoc-2026`).
 - `contribution` thuộc `household`, `person`, `voluntary`, `goal`. Với `voluntary` thì `target_amount` luôn là `null`.
+- `period`: `year` / `month` / `null` (một lần). `managed_by`: đơn vị quản lý, tối đa 120 ký tự.
 - Tài khoản nhận tiền của mỗi quỹ phải riêng, không trùng quỹ hay cửa hàng khác.
 - `nature`: `mandatory` / `campaign` / `voluntary`. `transfer_code`: mã ngắn cho nội dung chuyển khoản (bỏ trống thì tự tạo).
 - Không đổi trạng thái bằng PATCH (dùng mục 2.5). Quỹ đã khoá sổ không sửa được.
@@ -266,6 +336,7 @@ POST /api/funds/<id>/entries
   "source": "cash",
   "date": "2026-11-02",
   "payer_name": "Nguyễn Văn An",
+  "payer_group": "Xóm Đình",
   "anonymous": false,
   "note": "Đóng quỹ xóm 1"
 }
@@ -273,6 +344,7 @@ POST /api/funds/<id>/entries
 
 - `source`: `cash` (tiền mặt, ghi tay) hoặc `manual` (chuyển khoản vào tài khoản quỹ chưa có trong sổ). Tiền chuyển qua mã QR của quỹ tự vào sổ, không cần gọi API này.
 - `bank_ref`: mã giao dịch ngân hàng, dùng khi `source = manual`. Một mã chỉ ghi được một lần.
+- `payer_group`: xóm / địa chỉ người nộp (không bắt buộc), hiện trên trang công khai trừ khi ẩn danh.
 - `date`: ngày thu, không được ở tương lai. Bỏ trống thì lấy hôm nay.
 
 Khoản thu ghi sổ ngay. Phiếu chi (`type: out`) vẫn theo luồng nháp, gửi duyệt rồi người duyệt đồng ý.
@@ -287,8 +359,8 @@ POST /api/funds/<id>/import                   # ghi sổ
 ```
 
 - `file`: nội dung file `.xlsx` hoặc `.csv` mã hóa base64 (có hoặc không kèm tiền tố `data:`), tối đa 5MB và 2000 dòng.
-- Thay cho `file`, có thể gửi `rows`: `[{ "date", "payer_name", "amount", "source", "bank_ref", "note", "anonymous" }]`.
-- Dòng đầu của file là tiêu đề. Các cột: **Ngày** (`YYYY-MM-DD` hoặc `DD/MM/YYYY`), **Người nộp**, **Số tiền**, **Hình thức** (`Tiền mặt` / `Chuyển khoản`), **Mã giao dịch**, **Ghi chú**, **Ẩn danh** (ghi `x` nếu ẩn danh).
+- Thay cho `file`, có thể gửi `rows`: `[{ "date", "payer_name", "payer_group", "amount", "source", "bank_ref", "note", "anonymous" }]`.
+- Dòng đầu của file là tiêu đề. Các cột: **Ngày** (`YYYY-MM-DD` hoặc `DD/MM/YYYY`), **Người nộp**, **Xóm** (không bắt buộc), **Số tiền**, **Hình thức** (`Tiền mặt` / `Chuyển khoản`), **Mã giao dịch**, **Ghi chú**, **Ẩn danh** (ghi `x` nếu ẩn danh).
 - Hoặc ghi cả file, hoặc không ghi dòng nào: còn một dòng lỗi là không ghi gì, và API trả về lỗi theo từng dòng.
 
 ```json
