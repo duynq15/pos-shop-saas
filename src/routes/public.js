@@ -19,11 +19,13 @@ const { ok, wrap, str } = require('../lib/util');
 const { sendXlsx } = require('../lib/xlsx');
 const { renderPdf, available } = require('../lib/pdf');
 const { fundQr, fundSummary, fundPeriod } = require('./funds');
+const hh = require('../lib/households');
+const skhg = require('../lib/skhg');
 
 const router = express.Router(); // mount tại /public/api
 // API công khai, chỉ đọc: App / Web người dân gọi thẳng từ trình duyệt (docs/API-SO-QUY.md)
 router.use((req, res, next) => {
-  res.set({ 'Access-Control-Allow-Origin': '*', 'Access-Control-Max-Age': '600' });
+  res.set({ 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization', 'Access-Control-Max-Age': '600' });
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -532,6 +534,77 @@ router.get('/donations/:token/report', wrap((req, res) => {
   const sum = (k) => funds.reduce((s, f) => s + f[k], 0);
   ok(res, { community_name: pt.c.name, month, from, to, funds,
     totals: { opening_balance: sum('opening_balance'), income: sum('income'), expense: sum('expense'), adjust: sum('adjust'), closing_balance: sum('closing_balance') } });
+}));
+
+/* ---------- Của tôi: người dân đăng nhập App Làng Số bằng tài khoản SKHG ----------
+   Authorization: Bearer <token SKHG>. Hộ của người dùng tìm theo SĐT tài khoản SKHG trong danh sách hộ đồng bộ từ Hành chính
+   (so mã băm, không lưu SĐT). Chỉ trả dữ liệu của hộ đó; không có hộ thì 404 kèm lý do để App hướng dẫn. */
+const bearer = (req) => (/^Bearer\s+(\S+)$/i.exec(req.headers.authorization || '') || [])[1];
+async function myHousehold(req) {
+  const pt = publicTenant(req.params.token);
+  if (!pt || !pt.tenant) return { status: 404, error: 'Không tìm thấy' };
+  const u = await skhg.profile(bearer(req));
+  if (!u) return { status: 401, error: 'Phiên đăng nhập Sáng Kiến Hưng Gia không hợp lệ' };
+  const phone = hh.normPhone(u.phone || u.phone_number);
+  if (!phone) return { status: 404, error: 'Tài khoản Sáng Kiến Hưng Gia chưa có số điện thoại, không tìm được hộ' };
+  const houses = db.runWith(pt.tenant.code, () => hh.householdsByPhone(phone));
+  const want = String(req.query.ho || '');
+  const house = want ? houses.find((h) => h.code === want) : houses[0];
+  if (!house) return { status: 404, error: 'Số điện thoại của bạn chưa có trong danh sách hộ của thôn. Liên hệ cán bộ thôn để cập nhật.' };
+  return { pt, user: u, house, houses };
+}
+const meRoute = (fn) => wrap(async (req, res) => {
+  const m = await myHousehold(req);
+  if (m.error) return res.status(m.status).json({ error: m.error });
+  const data = await db.runWith(m.pt.tenant.code, () => fn(m, req, res));
+  if (data !== undefined) ok(res, data);
+});
+// Mỗi quỹ công khai: phải đóng, đã đóng (kỳ hiện tại), còn thiếu; QR riêng của hộ khi Đang thu và còn thiếu
+async function myFund(f, house) {
+  const { stateOf, transferRef } = pf();
+  const state = stateOf(f);
+  const { due, exempt } = hh.dueOf(f, house);
+  const paid = hh.paidBy(f, house.code);
+  const remaining = due == null ? null : Math.max(0, due - paid);
+  const transfer = hh.householdTransfer(transferRef(f), house.code);
+  let qr = null;
+  if (state === 'collecting' && f.bank_account && f.bank_bin) {
+    try { qr = await fundQr({ ...f, transfer_code: transfer, round: 1 }, remaining || undefined); } catch { qr = null; }
+  }
+  return {
+    id: f.id, name: f.name, state, nature: f.nature || null, nature_label: NATURE_LABEL[f.nature] || null,
+    contribution_text: contributionText(f), period: f.period || null, period_from: hh.periodStart(f), end_date: f.end_date,
+    due, exempt, paid, remaining, done: due != null && paid >= due,
+    status_text: due == null ? (paid ? `Đã đóng góp ${vnd(paid)}` : 'Đóng góp tuỳ tâm') : exempt ? 'Được miễn' : paid >= due ? 'Đã đóng đủ' : `Cần đóng ${vnd(due - paid)}`,
+    transfer_content: state === 'collecting' ? transfer : null,
+    bank_account: state === 'collecting' ? f.bank_account : null, bank_name: state === 'collecting' ? f.bank_name : null,
+    account_holder: state === 'collecting' ? f.account_holder : null, qrDataUrl: qr ? qr.qrDataUrl : null,
+  };
+}
+const houseOut = (h) => ({ code: h.code, head_name: h.head_name, hamlet: h.hamlet, members: h.members, categories: h.categories });
+
+router.get('/donations/:token/me', meRoute(async ({ house, houses, user }) => {
+  const funds = [];
+  for (const f of db.prepare(publicFundSql).all()) funds.push(await myFund(f, house));
+  const owing = funds.filter((x) => x.state === 'collecting' && x.remaining > 0);
+  const year = new Date().getFullYear() + '-01-01';
+  return {
+    user: { name: user.name || null }, household: houseOut(house), households: houses.map(houseOut),
+    summary: { owing_count: owing.length, owing_total: owing.reduce((s, x) => s + x.remaining, 0),
+      next_deadline: owing.map((x) => x.end_date).filter(Boolean).sort()[0] || null,
+      paid_this_year: Number(db.prepare(`SELECT COALESCE(SUM(e.amount),0) s FROM fund_entries e JOIN funds f ON f.id=e.fund_id
+        WHERE f.is_public=1 AND e.household_code=? AND e.type='in' AND e.status='approved' AND date(e.approved_at)>=date(?)`).get(house.code, year).s) },
+    funds,
+  };
+}));
+
+// Giao dịch của hộ tôi (mọi quỹ công khai, hoặc ?fund=<id>), mới nhất trước, tối đa 200
+router.get('/donations/:token/me/entries', meRoute(({ house }, req) => {
+  const fid = Number(req.query.fund) || null;
+  // Của chính hộ mình nên hiện cả tên khi người nộp xin ẩn danh trên trang công khai
+  return { household: houseOut(house), entries: db.prepare(`SELECT e.*, f.name fund_name, f.stopped_at FROM fund_entries e JOIN funds f ON f.id=e.fund_id
+      WHERE f.is_public=1 AND e.household_code=? AND e.status='approved' ${fid ? 'AND e.fund_id=?' : ''} ORDER BY e.approved_at DESC, e.id DESC LIMIT 200`)
+    .all(house.code, ...(fid ? [fid] : [])).map((e) => ({ ...publicEntry({ stopped_at: e.stopped_at }, { ...e, anonymous: 0 }), fund_id: e.fund_id, fund_name: e.fund_name })) };
 }));
 
 // Tài liệu / biên bản của quỹ công khai
