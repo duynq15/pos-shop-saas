@@ -32,6 +32,15 @@ Object.assign(SKHG, { 'tok-m-admin': member(901, 1, 'nhom_truong'), 'tok-m-user'
   'tok-m-wait': member(903, 0, 'thanh_vien_thuong'), 'tok-m-left': member(901, 1, null) });
 Object.assign(SKHG_LOGIN, { '0977000901': 'tok-m-admin', '0977000902': 'tok-m-user', '0977000903': 'tok-m-wait' });
 const skhgLoggedOut = [];
+// Trang Hành chính giả (GET /tich-hop/so-quy/ho, khoá "khoa-test"); HOUSES đổi được giữa các bước test
+const phoneKey = (p) => require('crypto').createHmac('sha256', 'khoa-test').update(p).digest('hex');
+let HOUSES = [
+  { ma_ho: 'XT-0001', chu_ho: 'Trần Văn Hùng', xom: 'Xóm Đình', dia_chi: 'Ngõ 3', so_nhan_khau: 4, dien_ho: [], sdt_khop: [phoneKey('0912000111')] },
+  { ma_ho: 'XT-0002', chu_ho: 'Lê Thị Nghèo', xom: 'Xóm Đông', dia_chi: null, so_nhan_khau: 2, dien_ho: ['Hộ nghèo'], sdt_khop: [] },
+  { ma_ho: 'XT-0003', chu_ho: 'Phạm Văn C', xom: 'Xóm Đình', dia_chi: null, so_nhan_khau: 3, dien_ho: [], sdt_khop: [] },
+];
+Object.assign(SKHG, { 'tok-dan': [200, { success: true, data: { user: { id: 5001, name: 'Trần Văn Hùng', phone: '+84912000111' } } }],
+  'tok-la': [200, { success: true, data: { user: { id: 5002, phone: '0900999888' } } }] });
 require('http').createServer((rq, rs) => {
   const send = (code, body) => { rs.writeHead(rq.headers['user-agent'] === 'ThanhToanSo/1.0' ? code : 403, { 'Content-Type': 'application/json' }); rs.end(JSON.stringify(body)); };
   const auth = (rq.headers.authorization || '').replace('Bearer ', '');
@@ -47,6 +56,10 @@ require('http').createServer((rq, rs) => {
     return;
   }
   if (rq.url.endsWith('/logout')) { skhgLoggedOut.push(auth); return send(200, { status: true }); }
+  if (rq.url.startsWith('/tich-hop/so-quy/ho')) {
+    if (rq.headers['x-khoa-tich-hop'] !== 'khoa-test') return send(401, {});
+    return /cong_dong=LGHZKS/i.test(rq.url) ? send(200, { ma_thon: 'xt', ten_thon: 'Xuân Trạch', so_ho: HOUSES.length, ho: HOUSES }) : send(404, {});
+  }
   const [code, body] = SKHG[auth] || [401, {}];
   send(rq.url.endsWith('/current-profile-2') ? code : 403, body);
 }).listen(3112).unref();
@@ -845,6 +858,40 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   const repF = rep1.funds.find((x) => x.id === cloned.data.id);
   ok('public monthly report', repF && repF.income === 800000 + 21 * 1000 + 210 && repF.closing_balance === repF.opening_balance + repF.income - repF.expense + repF.adjust, JSON.stringify(repF));
   ok('public report: bad month 400', (await fetch(lsBase + '/report?month=2026-13')).status === 400);
+  // Theo hộ: danh sách hộ từ trang Hành chính, QR riêng hộ, khoản phải đóng, API "của tôi" (đăng nhập SKHG)
+  const cid = cloned.data.id;
+  ok('households: sync needs SKHG community link', !(await cj('c-approver', '/households/sync', { method: 'POST' })).ok);
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { skhg_code: 'LGHZKS' } });
+  ok('households: treasurer cannot sync', (await req('c-treasurer', '/households/sync', { method: 'POST' })).status === 403);
+  const hs = await cj('c-approver', '/households/sync', { method: 'POST' });
+  ok('households: synced from Hành chính', hs.ok && hs.data.count === 3, JSON.stringify(hs));
+  const hl = (await cj('c-treasurer', '/households')).data;
+  ok('households: listed without phone numbers', hl.count === 3 && hl.households[1].categories[0] === 'Hộ nghèo' && !JSON.stringify(hl).includes('0912000111') && !JSON.stringify(hl).includes(phoneKey('0912000111')));
+  await cj('c-approver', '/funds/' + cid, { method: 'PATCH', body: { exempt: 'Hộ nghèo', bank_account: 'LANGSO01', bank_bin: '970422', bank_name: 'MB Bank', account_holder: 'QUY THON' } });
+  const hIn = await cj('c-treasurer', '/funds/' + cid + '/entries', { method: 'POST', body: { type: 'in', amount: 400000, household_code: 'XT-0003' } });
+  ok('households: manual income for a household fills name and hamlet', hIn.ok && hIn.data.household_code === 'XT-0003' && hIn.data.payer_name === 'Phạm Văn C' && hIn.data.payer_group === 'Xóm Đình', JSON.stringify(hIn));
+  ok('households: unknown household rejected', !(await cj('c-treasurer', '/funds/' + cid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000, household_code: 'XT-9999' } })).ok);
+  const cRef = (await cj('cadm', '/funds/' + cid)).data.transfer_content;
+  await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token },
+    body: JSON.stringify({ bankaccount: 'LANGSO01', amount: 150000, content: `XT0001 ${cRef} chuyen tien`, transType: 'C', transactionid: 'HH-TXN-1' }) });
+  const fh = (await cj('c-treasurer', '/funds/' + cid + '/households')).data;
+  const by = Object.fromEntries(fh.households.map((h) => [h.code, h]));
+  ok('households: webhook books to household from transfer content', by['XT-0001'].paid === 150000 && by['XT-0001'].due === 400000 && by['XT-0001'].remaining === 250000, JSON.stringify(by['XT-0001']));
+  ok('households: exempt category and done', by['XT-0002'].exempt && by['XT-0002'].due === 0 && by['XT-0003'].done && fh.summary.done === 1 && fh.summary.exempt === 1, JSON.stringify(fh.summary));
+  const meUrl = ROOT + '/public/api/donations/' + donTok + '/me';
+  ok('me: needs SKHG login', (await fetch(meUrl)).status === 401);
+  const meNo = await fetch(meUrl, { headers: { Authorization: 'Bearer tok-la' } });
+  ok('me: phone not in household list 404 with reason', meNo.status === 404 && /danh sách hộ/.test((await meNo.json()).error));
+  const me = (await (await fetch(meUrl, { headers: { Authorization: 'Bearer tok-dan' } })).json()).data;
+  const meF = me.funds.find((x) => x.id === cid);
+  ok('me: my household and what I owe', me.household.code === 'XT-0001' && meF.due === 400000 && meF.paid === 150000 && meF.remaining === 250000
+    && meF.status_text === 'Cần đóng 250.000 đ' && meF.transfer_content.startsWith('XT0001 ') && !!meF.qrDataUrl && me.summary.owing_total >= 250000, JSON.stringify(meF));
+  const meE = (await (await fetch(meUrl + '/entries', { headers: { Authorization: 'Bearer tok-dan' } })).json()).data.entries;
+  ok('me: my entries only', meE.length === 1 && meE[0].amount === 150000 && meE[0].fund_name === 'Quỹ công đức 2027', JSON.stringify(meE));
+  HOUSES = HOUSES.filter((h) => h.ma_ho !== 'XT-0003');
+  await cj('c-approver', '/households/sync', { method: 'POST' });
+  ok('households: removed household inactive after resync', (await cj('c-treasurer', '/households')).data.count === 2);
+  await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { skhg_code: '' } });
   await cj('cadm', '/users/' + inspector.data.id, { method: 'DELETE' }); // trả suất người dùng của gói cho các test sau
   await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: false } } });
 

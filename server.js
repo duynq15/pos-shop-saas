@@ -94,6 +94,8 @@ function lanUrls() {
 // Tự kiểm mỗi đêm lúc 02:00 (GĐ3.5 — NFR-03), chạy thêm một lần ngay sau khi khởi động.
 function nightlyChecks() {
   try { runChecks(); } catch (e) { console.error('  Tự kiểm lỗi:', e.message); }
+  // Danh sách hộ từ trang Hành chính (khi đã cấu hình LANGSO_HANHCHINH_API / LANGSO_KHOA_TICH_HOP)
+  require('./src/lib/households').syncAll().catch((e) => console.error('  Đồng bộ hộ lỗi:', e.message));
   const next = new Date(); next.setHours(26, 0, 0, 0); // 02:00 ngày mai
   setTimeout(nightlyChecks, next - Date.now()).unref?.();
 }

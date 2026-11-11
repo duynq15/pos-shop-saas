@@ -19,8 +19,8 @@ Có hai nhóm API:
 
 ### Lấy mã liên kết công khai
 
-1. Quản trị nền tảng bật **Công khai đợt thu & công đức** cho thôn (màn Cộng đồng).
-2. Trong sổ quỹ, bấm **Chia sẻ / nhắc đóng quỹ**. Link có dạng `https://<máy chủ>/congduc/<TOKEN>`. Phần `<TOKEN>` là mã dùng cho API.
+1. Tài khoản root vào **Nền tảng › Cộng đồng**, mở thôn, tích **Công khai đợt thu & công đức**, Lưu.
+2. Ô **Link người nộp** hiện `https://thanhtoanso.sangkienhunggia.app/congduc/<TOKEN>` (trong sổ quỹ: nút **Chia sẻ / nhắc đóng quỹ**). Phần `<TOKEN>` là mã dùng cho API. Tắt rồi bật lại không đổi token.
 
 Chỉ những quỹ được đánh dấu **Công khai trên trang người nộp** mới xuất hiện, ở cả ba trạng thái (xem bên dưới).
 Nếu thôn tắt công khai, mọi API dưới đây trả về `404`.
@@ -242,6 +242,42 @@ GET /public/api/donations/<TOKEN>/funds/<id>/qr?amount=200000
 
 Lỗi thường gặp: `404` (sai token, thôn tắt công khai, quỹ không công khai), `400` (số tiền không hợp lệ, quỹ chưa khai tài khoản).
 
+### 1.3. Của tôi: khoản đóng của hộ người dân (đăng nhập SKHG)
+
+App gửi token tài khoản Sáng Kiến Hưng Gia của người dân. Máy chủ lấy SĐT của tài khoản, tìm hộ có thành viên trùng SĐT trong danh sách hộ đồng bộ từ trang Hành chính (Hộ & nhân khẩu), rồi chỉ trả dữ liệu của hộ đó.
+
+```
+GET /public/api/donations/<TOKEN>/me                    Authorization: Bearer <token SKHG>
+GET /public/api/donations/<TOKEN>/me?ho=XT-0001         # người thuộc nhiều hộ: chọn hộ (danh sách ở "households")
+GET /public/api/donations/<TOKEN>/me/entries?fund=<id>  # giao dịch của hộ tôi (mọi quỹ công khai hoặc một quỹ)
+```
+
+```json
+{
+  "ok": true,
+  "data": {
+    "user": { "name": "Nguyễn Văn Hùng" },
+    "household": { "code": "XT-0001", "head_name": "Nguyễn Văn Hùng", "hamlet": "Xóm Đình", "members": 4, "categories": [] },
+    "households": [ { "code": "XT-0001", "...": "..." } ],
+    "summary": { "owing_count": 2, "owing_total": 300000, "next_deadline": "2026-11-30", "paid_this_year": 1150000 },
+    "funds": [
+      { "id": 3, "name": "Quỹ khuyến học", "state": "collecting", "nature_label": "Vận động", "contribution_text": "200.000 đ/hộ",
+        "period": null, "period_from": null, "end_date": "2026-11-30",
+        "due": 200000, "exempt": false, "paid": 0, "remaining": 200000, "done": false, "status_text": "Cần đóng 200.000 đ",
+        "transfer_content": "XT0001 KH26", "bank_account": "9612345678", "bank_name": "MB Bank", "account_holder": "QUY THON XUAN TRACH",
+        "qrDataUrl": "data:image/png;base64,..." },
+      { "id": 1, "name": "Quỹ phúc lợi thôn", "due": 400000, "paid": 400000, "remaining": 0, "done": true, "status_text": "Đã đóng đủ", "...": "..." }
+    ]
+  }
+}
+```
+
+- `due`: số phải đóng trong kỳ hiện tại = mức × 1 (theo hộ) hoặc × số nhân khẩu (theo người). `null` với quỹ tuỳ tâm / mục tiêu. `0` và `exempt: true` khi hộ thuộc diện được miễn của quỹ.
+- `paid`: hộ đã đóng trong kỳ (`period_from`: đầu năm khi `period = year`, đầu tháng khi `month`, cả đợt khi `null`).
+- `transfer_content` + `qrDataUrl`: QR riêng của hộ (có sẵn số tiền còn thiếu). Tiền chuyển với nội dung này tự ghi đúng vào hộ, nên "Tôi đã đóng" cập nhật ngay khi ngân hàng báo về. Chỉ có khi quỹ Đang thu.
+- Dùng cho: "Tôi đã đóng / Cần đóng …", "Khoản đóng của tôi · còn 2 khoản", màn Đóng quỹ, "Chỉ giao dịch của tôi" (`/me/entries`).
+- Lỗi: `401` token SKHG sai / hết hạn; `404` kèm `error` khi tài khoản không có SĐT hoặc SĐT chưa có trong danh sách hộ (App hiển thị lý do, hướng dẫn liên hệ cán bộ thôn).
+
 ### Ví dụ gọi từ App (JavaScript)
 
 ```js
@@ -398,3 +434,17 @@ GET /api/funds/<id>/report/export?from=...&to=...   # file Excel
 ```
 
 `report` trả về `opening_balance`, `income_cash`, `income_bank`, `expense`, `adjust`, `closing_balance` và danh sách bút toán trong kỳ.
+
+### 2.7. Hộ dân
+
+Danh sách hộ lấy từ trang Hành chính (Hộ & nhân khẩu) theo mã cộng đồng SKHG của thôn, tự đồng bộ mỗi đêm và khi bấm **Theo hộ › Đồng bộ danh sách hộ**. Sổ quỹ không lưu SĐT, chỉ lưu mã băm để tìm hộ của người đăng nhập App.
+
+```
+GET  /api/households?q=...            # mã hộ, chủ hộ, xóm, số nhân khẩu, diện hộ
+POST /api/households/sync             # đồng bộ ngay (quản lý quỹ)
+GET  /api/funds/<id>/households       # từng hộ: due, paid, remaining, exempt, done + tổng hợp
+```
+
+- Ghi thu cho một hộ: thêm `household_code` khi `POST /api/funds/<id>/entries` hoặc cột **Mã hộ** khi nhập Excel (tên chủ hộ, xóm tự điền).
+- Quỹ: `exempt` = các diện hộ được miễn, mỗi dòng một diện (vd `Hộ nghèo`).
+- Máy chủ cần `LANGSO_HANHCHINH_API` (vd `https://hanhchinh.xaphuongvietnam.vn/api`) và `LANGSO_KHOA_TICH_HOP` (trùng `LS_KHOA_TICH_HOP_SO_QUY` bên Hành chính).

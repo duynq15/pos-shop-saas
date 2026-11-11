@@ -160,6 +160,7 @@ ${stateBanner(f, manage)}
   ${collecting ? `<button class="btn" id="fd-qr">${icon('card')} QR nhận tiền</button>
   <button class="btn" id="fd-share">Chia sẻ / nhắc đóng quỹ</button>` : ''}
   <button class="btn" id="fd-docs">Nội dung &amp; tài liệu</button>
+  <button class="btn" id="fd-houses">Theo hộ</button>
   ${entry || manage ? `<details class="fd-menu"><summary class="btn" aria-label="Thao tác khác">Thêm ▾</summary><div>
     ${canIn ? '<button class="mi" id="fd-import">Nhập khoản thu từ Excel</button>' : ''}
     ${canOut ? '<button class="mi" id="fd-adjust">Lập bút toán điều chỉnh</button>' : ''}
@@ -240,6 +241,7 @@ async function render() {
   on('fd-clone', () => cloneFund(f));
   on('fd-clone-2', () => { $('.fd-menu').open = false; cloneFund(f); });
   on('fd-docs', () => openDocs(f));
+  on('fd-houses', () => openHouseholds(f));
   for (const id of ['fd-in', 'fd-in-m']) on(id, () => openEntryForm(f, 'in'));
   for (const id of ['fd-out', 'fd-out-m']) on(id, () => openEntryForm(f, 'out'));
   $('#fd-subtabs').onclick = (e) => { const b = e.target.closest('[data-tab]'); if (b) showTab(b.dataset.tab, f); };
@@ -633,6 +635,34 @@ async function cloneFund(f) {
 }
 
 /* ---------------- Nội dung & tài liệu ---------------- */
+// Tình hình đóng theo hộ (danh sách hộ đồng bộ từ trang Hành chính)
+async function openHouseholds(f, q = '') {
+  let d;
+  try { d = await api(`/api/funds/${f.id}/households`); } catch (e) { toast(e.message, true); return; }
+  const meta = await api('/api/households').catch(() => ({}));
+  const s = d.summary;
+  const rows = d.households.filter((h) => !q || `${h.code} ${h.head_name || ''} ${h.hamlet || ''}`.toLowerCase().includes(q.toLowerCase()));
+  const st = (h) => (h.exempt ? '<span class="badge">Miễn</span>' : h.due == null ? (h.paid ? '' : '<span class="muted">—</span>')
+    : h.done ? '<span class="badge paid">Đủ</span>' : `<span class="badge pending">Thiếu ${money(h.remaining)}</span>`);
+  modal(`<h2>Theo hộ — ${esc(f.name)}</h2>
+    ${!d.households.length ? `<p class="muted">${meta.linked === false ? 'Thôn chưa liên kết mã cộng đồng Sáng Kiến Hưng Gia.' : 'Chưa có danh sách hộ.'}
+      Danh sách hộ lấy từ trang Hành chính (Hộ &amp; nhân khẩu).</p>` : `<p class="muted">${s.total} hộ · ${s.with_due ? `${s.done}/${s.with_due} hộ đã đóng đủ · ` : ''}${s.exempt ? s.exempt + ' hộ miễn · ' : ''}đã thu ${money(s.paid)}${s.due ? ' / ' + money(s.due) : ''}${d.period_from ? ' từ ' + viDate(d.period_from) : ''}</p>`}
+    <input class="field" id="fd-hh-q" placeholder="Tìm mã hộ, chủ hộ, xóm" value="${esc(q)}">
+    <div class="scroll-x" style="max-height:50vh;overflow:auto"><table class="line-items"><thead><tr><th>Mã hộ</th><th>Chủ hộ</th><th>Xóm</th><th class="r">Đã đóng</th><th></th></tr></thead>
+      <tbody>${rows.slice(0, 300).map((h) => `<tr><td>${esc(h.code)}</td><td>${esc(h.head_name || '')}</td><td>${esc(h.hamlet || '')}</td>
+        <td class="r">${h.paid ? money(h.paid) : ''}</td><td>${st(h)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">Không có hộ</td></tr>'}</tbody></table></div>
+    <div class="modal-actions">${meta.configured && can('fund.manage') ? `<span class="muted">${meta.synced_at ? 'Đồng bộ lúc ' + esc(meta.synced_at.slice(0, 16)) : ''}</span>
+      <button class="btn" id="fd-hh-sync">Đồng bộ danh sách hộ</button>` : ''}<button class="btn" id="fd-hh-close">Đóng</button></div>`);
+  $('#fd-hh-close').onclick = closeModal;
+  const qi = $('#fd-hh-q');
+  qi.onchange = () => openHouseholds(f, qi.value);
+  const sync = $('#fd-hh-sync');
+  if (sync) sync.onclick = async () => {
+    sync.disabled = true;
+    try { const r = await api('/api/households/sync', { method: 'POST' }); toast(`Đã đồng bộ ${r.count} hộ`); openHouseholds(f, qi.value); } catch (e) { toast(e.message, true); sync.disabled = false; }
+  };
+}
+
 async function openDocs(f) {
   let docs = [];
   try { docs = await api(`/api/funds/${f.id}/documents`); } catch (e) { toast(e.message, true); return; }
@@ -753,6 +783,8 @@ async function openFundForm(f) {
         value="${d.target_amount ? nf.format(d.target_amount) : ''}"></label>
       <label class="fld" id="fd-f-period-wrap">Chu kỳ đóng<select class="field" id="fd-f-period"><option value="">Một lần cho đợt thu</option>${Object.entries(PERIOD).map(([k, v]) =>
         `<option value="${k}" ${k === d.period ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></label>
+      <label class="fld" id="fd-f-exempt-wrap">Diện hộ được miễn<input class="field" id="fd-f-exempt" maxlength="500" value="${esc((d.exempt || '').split('\n').join(', '))}" placeholder="Hộ nghèo, Gia đình chính sách">
+        <span class="muted fd-field-hint">Theo tên diện hộ bên Hành chính, cách nhau dấu phẩy.</span></label>
       <label class="fld">Đơn vị quản lý<input class="field" id="fd-f-managed" maxlength="120" value="${esc(d.managed_by || '')}" placeholder="Ban quản lý thôn, Hội Khuyến học…"></label>
       <label class="fld">Bắt đầu thu<input class="field" id="fd-f-start" type="date" value="${esc(d.start_date || '')}"></label>
       <label class="fld">Hạn thu<input class="field" id="fd-f-end" type="date" value="${esc(d.end_date || '')}">
@@ -780,6 +812,7 @@ async function openFundForm(f) {
     const c = CONTRIB[$('#fd-f-contrib').value];
     $('#fd-f-target-wrap').hidden = !c.amount;
     $('#fd-f-period-wrap').hidden = !c.amount || $('#fd-f-contrib').value === 'goal';
+    $('#fd-f-exempt-wrap').hidden = $('#fd-f-period-wrap').hidden;
     $('#fd-f-target-label').textContent = c.amount || '';
   };
   $('#fd-f-contrib').onchange = contrib; contrib();
@@ -800,6 +833,7 @@ async function openFundForm(f) {
       bank_bin: bank ? bank[0] : '', bank_name: bank ? bank[1] : '', account_holder: $('#fd-f-holder').value,
       manager_user_id: $('#fd-f-manager').value || null,
       nature: $('#fd-f-nature').value || null, managed_by: $('#fd-f-managed').value,
+      exempt: $('#fd-f-exempt').value.split(',').map((x) => x.trim()).filter(Boolean).join('\n'),
       period: ['household', 'person'].includes($('#fd-f-contrib').value) ? $('#fd-f-period').value || null : null, content: $('#fd-f-content').value, transfer_code: $('#fd-f-tcode').value,
     };
     try {
@@ -846,6 +880,8 @@ async function openEntryForm(f, type, draft) {
       </div>
       <label class="fld" id="fd-e-ref-wrap" hidden>Mã giao dịch ngân hàng<input class="field" id="fd-e-bankref" placeholder="Trên sao kê / tin nhắn ngân hàng, để không ghi trùng"></label>
       <div class="form-grid">
+        <label class="fld">Mã hộ<input class="field" id="fd-e-house" maxlength="20" list="fd-e-houses" placeholder="Không bắt buộc">
+          <datalist id="fd-e-houses"></datalist></label>
         <label class="fld">Người nộp<input class="field" id="fd-e-payer" placeholder="Để trống nếu không rõ"></label>
         <label class="fld">Xóm / địa chỉ<input class="field" id="fd-e-group" maxlength="80" placeholder="Không bắt buộc"></label>
       </div>
@@ -866,6 +902,12 @@ async function openEntryForm(f, type, draft) {
   bindMoney(amt, type === 'adjust');
   document.querySelectorAll('.fd-quick [data-q]').forEach((b) => { b.onclick = () => { amt.value = nf.format(Number(b.dataset.q)); amt.focus(); }; });
   const src = $('#fd-e-source');
+  // Gợi ý mã hộ (danh sách đồng bộ từ Hành chính); chọn hộ thì điền sẵn tên chủ hộ và xóm
+  if ($('#fd-e-house')) api('/api/households').then((r) => {
+    const byCode = Object.fromEntries(r.households.map((h) => [h.code, h]));
+    $('#fd-e-houses').innerHTML = r.households.map((h) => `<option value="${esc(h.code)}">${esc(h.head_name || '')} · ${esc(h.hamlet || '')}</option>`).join('');
+    $('#fd-e-house').onchange = () => { const h = byCode[$('#fd-e-house').value.trim()]; if (h) { $('#fd-e-payer').value = h.head_name || ''; $('#fd-e-group').value = h.hamlet || ''; } };
+  }).catch(() => {});
   if (src) src.onchange = () => { $('#fd-e-ref-wrap').hidden = src.value !== 'manual'; };
   const file = $('#fd-e-file');
   if (file) file.onchange = () => {
@@ -880,7 +922,7 @@ async function openEntryForm(f, type, draft) {
     if (!body.amount) { toast('Nhập số tiền', true); amt.focus(); return; }
     if (!draft) body.type = type;
     if (type === 'in') {
-      Object.assign(body, { payer_name: $('#fd-e-payer').value, payer_group: $('#fd-e-group').value, anonymous: $('#fd-e-anon').checked, source: src.value, date: $('#fd-e-date').value });
+      Object.assign(body, { household_code: $('#fd-e-house').value.trim() || undefined, payer_name: $('#fd-e-payer').value, payer_group: $('#fd-e-group').value, anonymous: $('#fd-e-anon').checked, source: src.value, date: $('#fd-e-date').value });
       if (src.value === 'manual') body.bank_ref = $('#fd-e-bankref').value;
     }
     if (type === 'adjust' && !draft) body.ref_entry_id = $('#fd-e-ref').value;

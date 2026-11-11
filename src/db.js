@@ -437,11 +437,28 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     ['locked_at', 'TEXT'], ['locked_by_name', 'TEXT'], ['lock_note', 'TEXT'], ['lock_balance', 'INTEGER'], ['lock_doc_id', 'INTEGER'],
     ['unlocked_at', 'TEXT'], ['unlock_reason', 'TEXT'],
     // App Làng Số: chu kỳ mức đóng ('year' | 'month' | NULL = mỗi đợt) và đơn vị quản lý quỹ (Hội Khuyến học, Ban quản lý thôn…)
-    ['period', 'TEXT'], ['managed_by', 'TEXT']]) {
+    ['period', 'TEXT'], ['managed_by', 'TEXT'],
+    // Diện hộ được miễn đóng (mỗi dòng một diện, khớp tên diện hộ bên Hành chính, vd "Hộ nghèo")
+    ['exempt', 'TEXT']]) {
     ensureColumn('funds', name, def);
   }
   ensureColumn('fund_entries', 'round', 'INTEGER');
   ensureColumn('fund_entries', 'payer_group', 'TEXT'); // xóm / địa chỉ người nộp
+  ensureColumn('fund_entries', 'household_code', 'TEXT'); // mã hộ (danh sách hộ đồng bộ từ Hành chính)
+  conn.exec(`
+    -- Danh sách hộ của thôn, đồng bộ từ trang Hành chính (thon-thong-minh, GET /tich-hop/so-quy/ho).
+    -- phone_keys: HMAC(khoá tích hợp, SĐT) của thành viên, để App tìm hộ của người đăng nhập SKHG mà không lưu SĐT.
+    -- Hộ không còn trong danh sách thì active=0 (giữ lại vì bút toán cũ trỏ tới mã hộ).
+    CREATE TABLE IF NOT EXISTS households (
+      code TEXT PRIMARY KEY,
+      head_name TEXT, hamlet TEXT, address TEXT,
+      members INTEGER NOT NULL DEFAULT 0,
+      categories TEXT NOT NULL DEFAULT '[]',
+      phone_keys TEXT NOT NULL DEFAULT '[]',
+      active INTEGER NOT NULL DEFAULT 1,
+      synced_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_fund_entries_household ON fund_entries(household_code, fund_id);`);
   conn.exec(`
     -- Nội dung quỹ: văn bản, tờ trình, biên bản (PDF / ảnh / Word / Excel). kind='minutes' là biên bản khoá / mở khoá sổ.
     CREATE TABLE IF NOT EXISTS fund_documents (
