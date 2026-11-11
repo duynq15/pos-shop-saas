@@ -174,10 +174,10 @@ webhook.post('/bank/api/transaction-sync', wrap((req, res) => {
   const b = req.body || {};
   // Nhận diện shop theo orderId (đã ghi lúc tạo QR) -> đúng cho mọi mô hình,
   // kể cả khi tiền về một tài khoản quản lý chung. Dự phòng: theo tài khoản quỹ (GĐ2.3,
-  // luôn duy nhất theo BR-02), rồi theo số TK của tenant, rồi theo token.
+  // không trùng giữa các thôn theo BR-02; nhiều quỹ dùng chung thì chọn theo mã nội dung), rồi theo số TK của tenant, rồi theo token.
   const orderIdForResolve = str(b.orderId, 20) || ((String(b.content || '').match(/P\d{10}/) || [])[0] || '');
   const mapped = getQrOrder(orderIdForResolve);
-  const fundHit = mapped ? null : funds.resolveFundByBank(b.bankaccount);
+  const fundHit = mapped ? null : funds.resolveFundByBank(b.bankaccount, b.content);
   const code = (mapped && mapped.tenant_code) || (fundHit && fundHit.tenantCode) || resolveTenantByBank(b.bankaccount) || pl.t;
   console.log(`[vqr] sync nhận: shop=${code || '?'} orderId=${b.orderId || ''} amount=${b.amount || ''} content=${b.content || ''}${fundHit ? ' quỹ=' + fundHit.fundId : ''}`);
   // GĐ3.0: token cấp bằng thông tin đăng nhập riêng của một tenant (pl.t) chỉ được ghi vào chính tenant đó.

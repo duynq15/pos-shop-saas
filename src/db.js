@@ -303,7 +303,7 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     created_by INTEGER,
     created_at TEXT DEFAULT (datetime('now','localtime'))
   );
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_funds_account ON funds(bank_account) WHERE bank_account IS NOT NULL AND bank_account <> '';
+  CREATE INDEX IF NOT EXISTS idx_funds_bank ON funds(bank_account);
 
   -- Thu (in) và chi (out) lưu số dương; điều chỉnh (adjust) lưu số có dấu và trỏ về bút toán được sửa.
   -- Chỉ bút toán approved mới tính vào tồn quỹ.
@@ -439,12 +439,18 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     // App Làng Số: chu kỳ mức đóng ('year' | 'month' | NULL = mỗi đợt) và đơn vị quản lý quỹ (Hội Khuyến học, Ban quản lý thôn…)
     ['period', 'TEXT'], ['managed_by', 'TEXT'],
     // Diện hộ được miễn đóng (mỗi dòng một diện, khớp tên diện hộ bên Hành chính, vd "Hộ nghèo")
-    ['exempt', 'TEXT']]) {
+    ['exempt', 'TEXT'],
+    // Hình thức nộp tiền người dân được dùng: cash tiền mặt, transfer chuyển khoản, both cả hai.
+    // 'cash' thì không tạo QR; 'transfer' thì không nhận tiền mặt.
+    ['payment_methods', "TEXT NOT NULL DEFAULT 'both'"]]) {
     ensureColumn('funds', name, def);
   }
   ensureColumn('fund_entries', 'round', 'INTEGER');
   ensureColumn('fund_entries', 'payer_group', 'TEXT'); // xóm / địa chỉ người nộp
   ensureColumn('fund_entries', 'household_code', 'TEXT'); // mã hộ (danh sách hộ đồng bộ từ Hành chính)
+  // Nhiều quỹ cùng thôn được dùng chung một tài khoản khi bật Cài đặt "fund_shared_account" (kiểm ở funds.js);
+  // giữa các thôn / cửa hàng vẫn không trùng. Bỏ ràng buộc duy nhất cũ.
+  conn.exec('DROP INDEX IF EXISTS idx_funds_account');
   conn.exec(`
     -- Danh sách hộ của thôn, đồng bộ từ trang Hành chính (thon-thong-minh, GET /tich-hop/so-quy/ho).
     -- phone_keys: HMAC(khoá tích hợp, SĐT) của thành viên, để App tìm hộ của người đăng nhập SKHG mà không lưu SĐT.
@@ -554,7 +560,7 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     vqr_terminal_code: '', vqr_exposed_username: '', vqr_exposed_password: '', vqr_secret_key: '',
     vqr_mock_autopay: '0',
     // Sổ quỹ thôn: danh sách loại quỹ và xóm / đoàn thể (mỗi dòng một mục), thôn tự sửa trong Cài đặt
-    fund_types: 'Quỹ chung | Bắt buộc\nQuỹ quốc phòng – an ninh | Bắt buộc\nQuỹ phòng chống thiên tai | Bắt buộc\nCông đức | Tự nguyện\nKhuyến học | Vận động\nThiện nguyện | Tự nguyện', fund_groups: '',
+    fund_shared_account: '0', fund_types: 'Quỹ chung | Bắt buộc\nQuỹ quốc phòng – an ninh | Bắt buộc\nQuỹ phòng chống thiên tai | Bắt buộc\nCông đức | Tự nguyện\nKhuyến học | Vận động\nThiện nguyện | Tự nguyện', fund_groups: '',
   };
   const insSetting = conn.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
   for (const [k, v] of Object.entries(defaults)) insSetting.run(k, v);
