@@ -165,6 +165,13 @@ const FUND_SETTINGS = `
     <textarea class="field fd-textarea" rows="6" data-s="fund_types"></textarea>
   </div>
   <div class="card">
+    <h3>Tài khoản nhận tiền</h3>
+    <label class="chk"><input type="checkbox" data-s="fund_shared_account"> Cho phép nhiều quỹ dùng chung một tài khoản ngân hàng</label>
+    <p class="muted">Tắt: mỗi quỹ một tài khoản riêng, tiền về luôn đúng quỹ. Bật: các quỹ nhập cùng số tài khoản, tiền về được chia theo
+      <b>mã nội dung chuyển khoản</b> của từng quỹ (vd KH26, PL26; QR đã điền sẵn). Người nộp gõ thiếu mã thì khoản tiền vào mục
+      <b>Chưa phân loại</b> để thủ quỹ chọn quỹ. Đối soát sao kê tính chung cho cả tài khoản.</p>
+  </div>
+  <div class="card">
     <h3>Xóm / đoàn thể</h3>
     <p class="muted">Mỗi dòng một xóm hoặc đoàn thể, ví dụ: Xóm 1, Xóm 2, Hội Phụ nữ, Hội Cựu chiến binh, Chi đoàn thanh niên.
       Dùng để chọn phạm vi thu của từng quỹ (mặc định là cả thôn).</p>

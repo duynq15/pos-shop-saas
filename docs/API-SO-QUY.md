@@ -349,7 +349,7 @@ PATCH /api/funds/<id>
 - `code` không bắt buộc. Bỏ trống thì hệ thống tự sinh từ tên (ví dụ `quy-khuyen-hoc-2026`).
 - `contribution` thuộc `household`, `person`, `voluntary`, `goal`. Với `voluntary` thì `target_amount` luôn là `null`.
 - `period`: `year` / `month` / `null` (một lần). `managed_by`: đơn vị quản lý, tối đa 120 ký tự.
-- Tài khoản nhận tiền của mỗi quỹ phải riêng, không trùng quỹ hay cửa hàng khác.
+- Tài khoản nhận tiền: mặc định mỗi quỹ một tài khoản riêng. Bật **Cài đặt › Cho phép nhiều quỹ dùng chung một tài khoản** (`PUT /api/settings { "fund_shared_account": "1" }`) thì nhiều quỹ của thôn nhập cùng số tài khoản; mỗi quỹ khi đó bắt buộc có `transfer_code` riêng. Tiền về được chia theo mã đó trong nội dung chuyển khoản (QR đã điền sẵn); không có mã thì vào mục Chưa phân loại để thủ quỹ chọn quỹ. Không bao giờ trùng tài khoản với thôn khác hay cửa hàng.
 - `nature`: `mandatory` / `campaign` / `voluntary`. `transfer_code`: mã ngắn cho nội dung chuyển khoản (bỏ trống thì tự tạo).
 - Không đổi trạng thái bằng PATCH (dùng mục 2.5). Quỹ đã khoá sổ không sửa được.
 

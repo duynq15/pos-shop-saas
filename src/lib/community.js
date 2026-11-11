@@ -12,15 +12,20 @@ const bankAccountOf = (code) => db.runWith(code, (conn) =>
 // nên tài khoản quỹ không được trùng với bất kỳ tenant hay quỹ nào khác.
 // skip: { tenantCode, fundId } — bỏ qua chính quỹ đang sửa.
 // ponytail: quét DB mọi tenant cộng đồng; đủ cho vài chục thôn, nhiều hơn thì đưa tài khoản quỹ lên control.db.
-function fundByAccount(account, skip = {}) {
+// Mọi quỹ nhận tiền vào tài khoản `account` (một thôn có thể cho nhiều quỹ dùng chung một tài khoản): [{ tenantCode, fundId }]
+function fundsByAccount(account) {
   const acc = normAccount(account);
-  if (!acc) return null;
+  if (!acc) return [];
+  const out = [];
   for (const t of control.prepare("SELECT code FROM tenants WHERE kind='community'").all()) {
-    const hit = db.runWith(t.code, (conn) => conn.prepare('SELECT id, bank_account FROM funds').all())
-      .find((f) => normAccount(f.bank_account) === acc && !(t.code === skip.tenantCode && f.id === skip.fundId));
-    if (hit) return { tenantCode: t.code, fundId: hit.id };
+    for (const f of db.runWith(t.code, (conn) => conn.prepare('SELECT id, bank_account FROM funds').all())) {
+      if (normAccount(f.bank_account) === acc) out.push({ tenantCode: t.code, fundId: f.id });
+    }
   }
-  return null;
+  return out;
+}
+function fundByAccount(account, skip = {}) {
+  return fundsByAccount(account).find((x) => !(x.tenantCode === skip.tenantCode && x.fundId === skip.fundId)) || null;
 }
 
 // communityId: truyền khi đang đổi cộng đồng của tenant (chưa lưu); bỏ qua để đọc từ DB.
@@ -32,4 +37,4 @@ function accountConflict(tenantCode, account, communityId) {
 
 const CONFLICT_MSG = 'Tài khoản nhận tiền phải là tài khoản riêng, không dùng chung với cửa hàng khác (BR-02)';
 
-module.exports = { normAccount, bankAccountOf, fundByAccount, accountConflict, CONFLICT_MSG };
+module.exports = { normAccount, bankAccountOf, fundByAccount, fundsByAccount, accountConflict, CONFLICT_MSG };

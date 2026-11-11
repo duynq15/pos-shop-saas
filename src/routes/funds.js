@@ -10,7 +10,7 @@ const db = require('../db');
 const { control, audit } = require('../control');
 const { ok, fail, wrap, bad, int, str, bool, round, today } = require('../lib/util');
 const { makeCode } = require('../lib/codes');
-const { normAccount, bankAccountOf, fundByAccount } = require('../lib/community');
+const { normAccount, bankAccountOf, fundsByAccount } = require('../lib/community');
 
 const { requirePerm, can } = require('../middleware');
 const QRCode = require('qrcode');
@@ -29,6 +29,9 @@ const amountOk = (n, signedOk) => Number.isSafeInteger(n) && Math.abs(n) <= MAX_
 const CONTRIBUTION = ['household', 'person', 'voluntary', 'goal'];
 // Tính chất quỹ: bắt buộc (theo nghị quyết thôn / pháp luật), vận động, tự nguyện
 const NATURES = ['mandatory', 'campaign', 'voluntary'];
+// Hình thức nộp tiền của quỹ: tiền mặt, chuyển khoản hoặc cả hai
+const PAYMENTS = ['cash', 'transfer', 'both'];
+const PAY_LABEL = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', both: 'Cả hai hình thức' };
 // Chu kỳ mức đóng: mỗi năm / mỗi tháng; để trống = một lần cho đợt thu
 const PERIODS = ['year', 'month'];
 const NOT_COLLECTING = 'Quỹ đang ngừng thu. Mở thu lại nếu cần thu thêm';
@@ -140,12 +143,43 @@ function sendDocument(res, d) {
 }
 const docsOf = (fundId) => db.prepare('SELECT id, kind, name, mime, size, created_by_name, created_at FROM fund_documents WHERE fund_id=? ORDER BY kind, id').all(fundId);
 
-// Tài khoản nhận của quỹ phải riêng: không trùng tài khoản của bất kỳ tenant nào, không trùng quỹ khác (quyết định 0.3, BR-02).
-function fundAccountTaken(account, selfFundId) {
-  if (!normAccount(account)) return false;
-  const others = control.prepare('SELECT code FROM tenants').all();
-  return others.some((t) => normAccount(bankAccountOf(t.code)) === normAccount(account))
-    || !!fundByAccount(account, { tenantCode: db.tenantCode, fundId: selfFundId });
+// Tài khoản nhận của quỹ không trùng tài khoản của bất kỳ tenant nào, không trùng quỹ của thôn khác (BR-02):
+// tiền về được định tuyến tới đúng thôn theo số tài khoản. Trong một thôn, nhiều quỹ dùng chung một tài khoản
+// khi Cài đặt bật "fund_shared_account"; khi đó quỹ được chọn theo mã nội dung chuyển khoản (xem fundForContent).
+const sharedAccountOn = () => db.prepare("SELECT value FROM settings WHERE key='fund_shared_account'").get()?.value === '1';
+const ACCOUNT_TAKEN = 'Tài khoản nhận đã dùng cho quỹ khác. Bật "Cho phép nhiều quỹ dùng chung một tài khoản" trong Cài đặt nếu muốn dùng chung';
+function checkFundAccount(v, selfFundId) {
+  const acc = normAccount(v.bank_account);
+  if (!acc) return;
+  if (control.prepare('SELECT code FROM tenants').all().some((t) => normAccount(bankAccountOf(t.code)) === acc)) {
+    bad('Tài khoản nhận của quỹ không được trùng tài khoản của cửa hàng / tổ chức (BR-02)');
+  }
+  const others = fundsByAccount(acc).filter((x) => !(x.tenantCode === db.tenantCode && x.fundId === selfFundId));
+  if (others.some((x) => x.tenantCode !== db.tenantCode)) bad('Tài khoản nhận đã dùng cho quỹ của thôn khác (BR-02)');
+  if (!others.length) return;
+  if (!sharedAccountOn()) bad(ACCOUNT_TAKEN);
+  // Dùng chung: mỗi quỹ phải có mã nội dung chuyển khoản riêng (một từ, vd KH26) để tách tiền về từng quỹ
+  const mine = alnumKey(v.transfer_code);
+  if (!mine) bad('Quỹ dùng chung tài khoản cần "Mã nội dung chuyển khoản" riêng (vd KH26)');
+  const clash = others.map((x) => getFund(x.fundId)).find((g) => alnumKey(g.transfer_code) === mine);
+  if (clash) bad(`Quỹ "${clash.name}" dùng chung tài khoản và có cùng mã nội dung chuyển khoản ${clash.transfer_code}. Đặt mã khác để tách tiền về từng quỹ`);
+  const noCode = others.map((x) => getFund(x.fundId)).find((g) => !alnumKey(g.transfer_code));
+  if (noCode) bad(`Quỹ "${noCode.name}" cùng tài khoản chưa có mã nội dung chuyển khoản. Đặt mã cho quỹ đó trước`);
+}
+const alnumKey = (x) => removeVietnamese(String(x || '')).toUpperCase().replace(/[^A-Z0-9]/g, '');
+// Quỹ của khoản tiền về tài khoản dùng chung: mã nội dung chuyển khoản (kèm mã đợt) là một từ riêng trong nội dung.
+// Khớp nguyên từ để "PL" không nhận nhầm "PL26"; nhiều quỹ khớp thì lấy mã dài nhất (cụ thể nhất).
+function fundForContent(fundIds, content) {
+  // Từ nối gạch giữ cả dạng ghép (mã đợt "QC26-D2") lẫn từng phần (ngân hàng thay khoảng trắng bằng gạch: "QC26-ung-ho")
+  const toks = removeVietnamese(String(content || '')).toUpperCase().split(/[^A-Z0-9-]+/).filter(Boolean);
+  const words = new Set([...toks, ...toks.flatMap((t) => t.split('-'))].map(alnumKey).filter(Boolean));
+  let best = null;
+  for (const id of fundIds) {
+    const f = getFund(id);
+    const key = f && alnumKey(transferRef(f));
+    if (key && words.has(key) && (!best || key.length > best.key.length)) best = { id, key };
+  }
+  return best ? best.id : null;
 }
 
 function fundInput(b, current = {}) {
@@ -170,6 +204,7 @@ function fundInput(b, current = {}) {
     // Nội dung chi tiết (văn bản dài, xuống dòng giữ nguyên); file đính kèm ở fund_documents
     content: b.content !== undefined ? str(b.content, 20000) || null : current.content ?? null,
     nature: b.nature !== undefined ? b.nature || null : current.nature ?? null,
+    payment_methods: b.payment_methods !== undefined ? b.payment_methods : current.payment_methods || 'both',
     period: b.period !== undefined ? b.period || null : current.period ?? null,
     managed_by: b.managed_by !== undefined ? str(b.managed_by, 120) || null : current.managed_by ?? null,
     exempt: b.exempt !== undefined ? str(b.exempt, 500) || null : current.exempt ?? null,
@@ -183,6 +218,7 @@ function fundInput(b, current = {}) {
   if (!['active', 'closed'].includes(v.status)) bad('Trạng thái quỹ không hợp lệ');
   if (!CONTRIBUTION.includes(v.contribution)) bad('Cách đóng không hợp lệ');
   if (v.nature && !NATURES.includes(v.nature)) bad('Tính chất quỹ phải là Bắt buộc, Vận động hoặc Tự nguyện');
+  if (!PAYMENTS.includes(v.payment_methods)) bad('Hình thức nộp phải là Tiền mặt, Chuyển khoản hoặc Cả hai');
   if (v.period && !PERIODS.includes(v.period)) bad('Chu kỳ đóng phải là năm, tháng hoặc để trống');
   if (v.contribution === 'voluntary') v.target_amount = null; // tùy tâm: không có mức
   if (v.target_amount != null && (!Number.isSafeInteger(v.target_amount) || v.target_amount < 0 || v.target_amount > MAX_AMOUNT)) {
@@ -253,11 +289,12 @@ router.post('/funds', requirePerm('fund.manage'), wrap((req, res) => {
     if (db.prepare('SELECT 1 FROM funds WHERE code=?').get(code)) bad('Mã quỹ đã tồn tại');
   } else code = fundCode(v.name);
   checkManager(req, v.manager_user_id);
-  if (fundAccountTaken(v.bank_account)) bad('Tài khoản nhận của quỹ phải là tài khoản riêng, không trùng cửa hàng hay quỹ khác (BR-02)');
-  const r = db.prepare(`INSERT INTO funds(code,name,kind,category,fund_type,nature,contribution,target_amount,period,managed_by,exempt,is_public,bank_account,bank_bin,bank_name,account_holder,
-    manager_user_id,description,content,transfer_code,start_date,end_date,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?)`)
-    .run(code, v.name, v.kind, v.category, v.fund_type, v.nature, v.contribution, v.target_amount, v.period, v.managed_by, v.exempt, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder,
-      v.manager_user_id, v.description, v.content, v.transfer_code || shortCode(v.name), v.start_date, v.end_date, req.user.id);
+  v.transfer_code = v.transfer_code || shortCode(v.name);
+  checkFundAccount(v);
+  const r = db.prepare(`INSERT INTO funds(code,name,kind,category,fund_type,nature,payment_methods,contribution,target_amount,period,managed_by,exempt,is_public,bank_account,bank_bin,bank_name,account_holder,
+    manager_user_id,description,content,transfer_code,start_date,end_date,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?)`)
+    .run(code, v.name, v.kind, v.category, v.fund_type, v.nature, v.payment_methods, v.contribution, v.target_amount, v.period, v.managed_by, v.exempt, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder,
+      v.manager_user_id, v.description, v.content, v.transfer_code, v.start_date, v.end_date, req.user.id);
   const f = getFund(r.lastInsertRowid);
   log(req, 'fund.create', 'fund', f.id, { code, name: v.name });
   ok(res, f);
@@ -496,8 +533,8 @@ router.post('/funds/:id/clone', requirePerm('fund.manage'), wrap((req, res) => {
   const name = str(b.name, 160) || src.name.replace(/\b20\d\d\b/, (y) => String(Number(y) + 1));
   if (name === src.name) bad('Đặt tên quỹ mới khác quỹ cũ (ví dụ thêm năm)');
   const code = fundCode(name);
-  const r = db.prepare(`INSERT INTO funds(code,name,kind,category,fund_type,nature,contribution,target_amount,period,managed_by,exempt,is_public,manager_user_id,description,content,status,created_by)
-    SELECT ?,?,kind,category,fund_type,nature,contribution,target_amount,period,managed_by,exempt,is_public,manager_user_id,description,content,'active',? FROM funds WHERE id=?`)
+  const r = db.prepare(`INSERT INTO funds(code,name,kind,category,fund_type,nature,payment_methods,contribution,target_amount,period,managed_by,exempt,is_public,manager_user_id,description,content,status,created_by)
+    SELECT ?,?,kind,category,fund_type,nature,payment_methods,contribution,target_amount,period,managed_by,exempt,is_public,manager_user_id,description,content,'active',? FROM funds WHERE id=?`)
     .run(code, name, req.user.id, src.id);
   log(req, 'fund.clone', 'fund', r.lastInsertRowid, { from: src.id, name });
   ok(res, getFund(r.lastInsertRowid));
@@ -528,10 +565,10 @@ router.patch('/funds/:id', requirePerm('fund.manage'), wrap((req, res) => {
   delete b.status;
   const v = fundInput(b, cur);
   checkManager(req, v.manager_user_id);
-  if (v.bank_account !== cur.bank_account && fundAccountTaken(v.bank_account, cur.id)) bad('Tài khoản nhận của quỹ phải là tài khoản riêng, không trùng cửa hàng hay quỹ khác (BR-02)');
-  db.prepare(`UPDATE funds SET name=?,kind=?,category=?,fund_type=?,nature=?,contribution=?,target_amount=?,period=?,managed_by=?,exempt=?,is_public=?,bank_account=?,bank_bin=?,bank_name=?,account_holder=?,
+  if (v.bank_account !== cur.bank_account || v.transfer_code !== cur.transfer_code || v.name !== cur.name) checkFundAccount(v, cur.id);
+  db.prepare(`UPDATE funds SET name=?,kind=?,category=?,fund_type=?,nature=?,payment_methods=?,contribution=?,target_amount=?,period=?,managed_by=?,exempt=?,is_public=?,bank_account=?,bank_bin=?,bank_name=?,account_holder=?,
     manager_user_id=?,description=?,content=?,transfer_code=?,start_date=?,end_date=? WHERE id=?`)
-    .run(v.name, v.kind, v.category, v.fund_type, v.nature, v.contribution, v.target_amount, v.period, v.managed_by, v.exempt, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder,
+    .run(v.name, v.kind, v.category, v.fund_type, v.nature, v.payment_methods, v.contribution, v.target_amount, v.period, v.managed_by, v.exempt, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder,
       v.manager_user_id, v.description, v.content, v.transfer_code, v.start_date, v.end_date, cur.id);
   log(req, 'fund.update', 'fund', cur.id, req.body);
   ok(res, getFund(cur.id));
@@ -541,6 +578,7 @@ router.patch('/funds/:id', requirePerm('fund.manage'), wrap((req, res) => {
 // Dựng chuỗi VietQR (NAPAS) ngay tại máy chủ, không gọi API VietQR: tiền về được định tuyến theo
 // số tài khoản quỹ (BR-02), không cần orderId, nên QR in dán vẫn dùng được khi mất mạng hoặc đổi môi trường.
 async function fundQr(f, amount) {
+  if (f.payment_methods === 'cash') bad('Quỹ chỉ nhận tiền mặt, không dùng mã QR chuyển khoản');
   if (!f.bank_account || !f.bank_bin) bad('Quỹ chưa cấu hình tài khoản ngân hàng (số tài khoản + mã ngân hàng)');
   const qrCode = buildVietQR({ bankBin: f.bank_bin, accountNo: f.bank_account, amount, message: transferRef(f).slice(0, 25) });
   const qrDataUrl = await QRCode.toDataURL(qrCode, { width: 340, margin: 1, errorCorrectionLevel: 'M' });
@@ -844,12 +882,16 @@ router.get('/funds/:id/report/export', requirePerm('report.export'), wrap((req, 
 // Lệch thì bổ sung khoản thiếu bằng "Thu tiền" nguồn chuyển khoản (manual, có mã giao dịch) rồi đối soát lại.
 // ponytail: chỉ đối soát chiều tiền vào; phiếu chi chưa ghi chi bằng tiền mặt hay chuyển khoản. Thêm cột
 // phương thức chi cho fund_entries khi thôn cần đối soát cả số dư tài khoản.
+// Tài khoản dùng chung: sao kê là của cả tài khoản nên cộng mọi quỹ cùng tài khoản (shared_funds liệt kê các quỹ đó).
 function bankIncome(fundId, from, to) {
   if (!DAY.test(from) || !DAY.test(to) || from > to) bad('Khoảng ngày không hợp lệ');
-  const entries = db.prepare(`SELECT id, code, amount, source, bank_ref, payer_name, anonymous, note, approved_at FROM fund_entries
-    WHERE fund_id=? AND status='approved' AND type='in' AND source IN ('vietqr','manual')
-      AND date(approved_at)>=date(?) AND date(approved_at)<=date(?) ORDER BY approved_at, id`).all(fundId, from, to);
-  return { total: entries.reduce((s, e) => s + e.amount, 0), entries };
+  const f = getFund(fundId);
+  const acc = normAccount(f?.bank_account);
+  const ids = acc ? db.prepare('SELECT id, name, bank_account FROM funds').all().filter((g) => normAccount(g.bank_account) === acc) : [{ id: fundId, name: f?.name }];
+  const entries = db.prepare(`SELECT e.id, e.code, e.fund_id, e.amount, e.source, e.bank_ref, e.payer_name, e.anonymous, e.note, e.approved_at FROM fund_entries e
+    WHERE e.fund_id IN (SELECT value FROM json_each(?)) AND e.status='approved' AND e.type='in' AND e.source IN ('vietqr','manual')
+      AND date(e.approved_at)>=date(?) AND date(e.approved_at)<=date(?) ORDER BY e.approved_at, e.id`).all(JSON.stringify(ids.map((g) => g.id)), from, to);
+  return { total: entries.reduce((s, e) => s + e.amount, 0), entries, shared_funds: ids.length > 1 ? ids.map((g) => ({ id: g.id, name: g.name })) : [] };
 }
 
 router.get('/funds/:id/reconcile', requirePerm('fund.view'), wrap((req, res) => {
@@ -858,7 +900,7 @@ router.get('/funds/:id/reconcile', requirePerm('fund.view'), wrap((req, res) => 
   const { from, to } = rangeOf(req.query);
   const inc = bankIncome(f.id, from, to);
   const history = db.prepare('SELECT * FROM fund_reconciliations WHERE fund_id=? ORDER BY id DESC LIMIT 24').all(f.id);
-  ok(res, { from, to, system_in: inc.total, count: inc.entries.length, entries: inc.entries, history });
+  ok(res, { from, to, system_in: inc.total, count: inc.entries.length, entries: inc.entries, shared_funds: inc.shared_funds, history });
 }));
 
 router.post('/funds/:id/reconciliations', requirePerm('fund.entry'), wrap((req, res) => {
@@ -879,9 +921,16 @@ router.post('/funds/:id/reconciliations', requirePerm('fund.entry'), wrap((req, 
 }));
 
 /* ===================== Webhook VietQR (dùng bởi src/routes/vietqr.js) ===================== */
-// Tài khoản của quỹ luôn duy nhất toàn hệ thống (BR-02), nên tài khoản đủ để xác định
-// tenant + quỹ, không cần bảng theo dõi đơn hàng như luồng hóa đơn.
-const resolveFundByBank = (account) => fundByAccount(account);
+// Tài khoản quỹ không trùng giữa các thôn (BR-02), nên tài khoản xác định được thôn. Một quỹ: ghi vào quỹ đó.
+// Nhiều quỹ dùng chung tài khoản: chọn quỹ theo mã nội dung chuyển khoản; không khớp quỹ nào thì fundId=null
+// (processFundPayment đưa vào hàng chờ chưa phân loại để thủ quỹ chọn quỹ).
+function resolveFundByBank(account, content) {
+  const hits = fundsByAccount(account);
+  if (!hits.length) return null;
+  if (hits.length === 1) return hits[0];
+  const t = hits[0].tenantCode;
+  return { tenantCode: t, fundId: db.runWith(t, () => fundForContent(hits.map((x) => x.fundId), content)) };
+}
 
 // p: { transactionid, bankaccount, amount, content, transType, raw }. Khoản thu ghi sổ ngay (approved),
 // khớp nguyên tắc đã chốt ở GĐ2.1: tiền đã về quỹ thì ghi nhận luôn, không qua duyệt.
@@ -899,7 +948,7 @@ function processFundPayment(code, fundId, p) {
     if (db.prepare('SELECT 1 FROM vietqr_transactions WHERE transactionid=?').get(txnId)) {
       return { ref: '', message: 'Giao dịch đã xử lý trước đó', paid: true };
     }
-    const f = getFund(fundId);
+    const f = fundId ? getFund(fundId) : null;
     const insRaw = db.prepare(`INSERT INTO vietqr_transactions(transactionid,invoice_id,bank_account,amount,content,order_id,trans_type,matched,note,raw_json,category,bank_time)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
     const insTxn = { run: (id, invId, bk, amt, ct, oid, tt, matched, note, rj) =>
@@ -907,7 +956,7 @@ function processFundPayment(code, fundId, p) {
     // Ngừng thu / khoá sổ: không tự ghi, để thủ quỹ xử lý ở mục chưa phân loại. Đang thu đợt mới thì nội dung chuyển khoản
     // phải có mã đợt mới (vd AN26-D2); chuyển theo QR đợt cũ (thiếu mã đợt) cũng vào mục chưa phân loại để không nộp nhầm.
     if (!f || f.status !== 'active') {
-      insTxn.run(txnId, null, bank, amount, content, '', transType, 0, f ? 'Quỹ đang ngừng thu' : 'Quỹ không hoạt động', raw);
+      insTxn.run(txnId, null, bank, amount, content, '', transType, 0, f ? 'Quỹ đang ngừng thu' : fundId ? 'Quỹ không hoạt động' : 'Tài khoản dùng chung: nội dung không có mã quỹ', raw);
       return { ref: '', message: 'Quỹ không nhận tiền', paid: false };
     }
     const alnum = (x) => removeVietnamese(x).toUpperCase().replace(/[^A-Z0-9]/g, ''); // ngân hàng hay bỏ dấu gạch / khoảng trắng

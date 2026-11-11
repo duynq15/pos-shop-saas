@@ -530,7 +530,7 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('leader can create fund with bank account', leaderFund.ok && leaderFund.data.bank_account === 'QUYLD001');
   const leaderEdit = await cj('c-community_leader', '/funds/' + leaderFund.data.id, { method: 'PATCH', body: { category: 'Thôn', target_amount: 100000 } });
   ok('leader can configure fund campaign', leaderEdit.ok && leaderEdit.data.category === 'Thôn' && leaderEdit.data.target_amount === 100000);
-  ok('fund dup account rejected', !(await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-2', name: 'Quỹ 2', bank_account: 'QUYA001' } })).ok);
+  ok('fund dup account rejected while sharing is off', /Cài đặt/.test((await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-2', name: 'Quỹ 2', bank_account: 'QUYA001' } })).error || ''));
   ok('fund cannot reuse shop account', !(await cj('cadm', '/funds', { method: 'POST', body: { code: 'quy-3', name: 'Quỹ 3', bank_account: 'SELLERA01' } })).ok);
   ok('treasurer cannot create fund', (await req('c-treasurer', '/funds', { method: 'POST', body: { code: 'quy-4', name: 'Quỹ 4' } })).status === 403);
   ok('shop tenant has no fund book', (await req('admin', '/funds')).status === 403 && (await req('admin', '/fund-entries/1/attachment')).status === 403);
@@ -965,6 +965,27 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('BR-02: shop cannot take a fund account', !(await api('/settings', { method: 'PUT', body: { bank_account: 'QUY CHUNG 01' } })).ok);
   const syncNeg = await (await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: -5000, content: 'x', transType: 'C', transactionid: 'FUND-TXN-NEG' }) })).json();
   ok('webhook ignores non-positive amount', syncNeg.error === false && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === balBefore + 250000);
+  // Nhiều quỹ dùng chung một tài khoản (bật trong Cài đặt): tiền về chia theo mã nội dung chuyển khoản
+  await cj('cadm', '/settings', { method: 'PUT', body: { fund_shared_account: '1' } });
+  ok('shared: needs a distinct transfer code', !(await cj('cadm', '/funds', { method: 'POST', body: { name: 'Quỹ khác', bank_account: 'QUYCHUNG01', transfer_code: (await cj('cadm', '/funds/' + fund2.data.id)).data.transfer_code } })).ok);
+  await cj('c-approver', '/funds/' + fund2.data.id, { method: 'PATCH', body: { transfer_code: 'QC26' } });
+  const sh = await cj('cadm', '/funds', { method: 'POST', body: { name: 'Quỹ khuyến học chung', bank_account: 'QUY CHUNG 01', transfer_code: 'KHC26', bank_bin: '970422', bank_name: 'MB Bank' } });
+  ok('shared: second fund on the same account', sh.ok && sh.data.bank_account === 'QUYCHUNG01', JSON.stringify(sh));
+  ok('shared: still not across villages / shops', !(await cj('cadm', '/funds', { method: 'POST', body: { name: 'Quỹ x', bank_account: 'SELLERA01', transfer_code: 'X1' } })).ok);
+  const shSync = (id, amount, content) => fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token },
+    body: JSON.stringify({ bankaccount: 'QUYCHUNG01', amount, content, transType: 'C', transactionid: id }) });
+  const shB1 = (await cj('cadm', '/funds/' + sh.data.id)).data.balance; const shB2 = (await cj('cadm', '/funds/' + fund2.data.id)).data.balance;
+  await shSync('SH-1', 30000, 'Nguyen Van A KHC26 dong quy');
+  await shSync('SH-2', 40000, `${(await cj('cadm', '/funds/' + fund2.data.id)).data.transfer_content}-ung ho`);
+  await shSync('SH-3', 50000, 'chuyen tien quy thon');
+  await shSync('SH-4', 60000, 'KHC2 sai ma');
+  ok('shared: routed by transfer code', (await cj('cadm', '/funds/' + sh.data.id)).data.balance === shB1 + 30000 && (await cj('cadm', '/funds/' + fund2.data.id)).data.balance === shB2 + 40000);
+  const shQ = (await cj('c-treasurer', '/vietqr/unclassified')).data.items;
+  ok('shared: no / partial code goes to the treasurer queue', ['SH-3', 'SH-4'].every((id) => shQ.some((x) => x.transactionid === id)) && !shQ.some((x) => x.transactionid === 'SH-1'));
+  const shRc = (await cj('c-treasurer', '/funds/' + sh.data.id + '/reconcile?from=2000-01-01&to=2999-12-31')).data;
+  ok('shared: reconcile covers the whole account', shRc.shared_funds.length === 2 && shRc.entries.some((e) => e.bank_ref === 'SH-2') && shRc.entries.some((e) => e.bank_ref === 'SH-1'), JSON.stringify(shRc.shared_funds));
+  await cj('cadm', '/settings', { method: 'PUT', body: { fund_shared_account: '0' } });
+  ok('shared: off again blocks new sharing', !(await cj('cadm', '/funds', { method: 'POST', body: { name: 'Quỹ y', bank_account: 'QUYCHUNG01', transfer_code: 'Y26' } })).ok);
   // Tiền vào tài khoản quỹ đang đóng -> hàng chờ của thủ quỹ; thủ quỹ chọn quỹ khác để ghi sổ
   await cj('c-approver', '/funds/' + fund2.data.id + '/stop', { method: 'POST', body: {} });
   await fetch(ROOT + '/vqr/bank/api/transaction-sync', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok.access_token }, body: JSON.stringify({ bankaccount: fund2.data.bank_account, amount: 60000, content: 'ung ho', transType: 'C', transactionid: 'FQ-1' }) });
