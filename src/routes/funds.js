@@ -655,6 +655,8 @@ router.post('/funds/:id/entries', requirePerm('fund.entry'), wrap((req, res) => 
 // Chuyển khoản (manual) có mã giao dịch thì không ghi trùng một giao dịch hai lần.
 function insertIncome(req, f, b) {
   const when = entryDate(b.date);
+  if (f.payment_methods === 'cash' && b.source !== 'cash') bad('Quỹ chỉ nhận tiền mặt');
+  if (f.payment_methods === 'transfer' && b.source === 'cash') bad('Quỹ chỉ nhận chuyển khoản');
   // Hộ nộp (mã hộ trong danh sách đồng bộ từ Hành chính): điền sẵn tên chủ hộ và xóm nếu thủ quỹ để trống
   const house = b.household_code ? hh.getHousehold(str(b.household_code, 20)) : null;
   if (b.household_code && !house) bad(`Không có hộ ${b.household_code} trong danh sách hộ của thôn`);
@@ -724,6 +726,8 @@ router.post('/funds/:id/import', requirePerm('fund.entry'), wrap((req, res) => {
     if (!amountOk(amount)) return err('Số tiền không hợp lệ');
     const source = SOURCE_ALIAS[removeVietnamese(String(x?.source ?? '')).toLowerCase()];
     if (!source) return err('Hình thức phải là "Tiền mặt" hoặc "Chuyển khoản"');
+    if (f.payment_methods === 'cash' && source !== 'cash') return err('Quỹ chỉ nhận tiền mặt');
+    if (f.payment_methods === 'transfer' && source === 'cash') return err('Quỹ chỉ nhận chuyển khoản');
     const date = importDate(x?.date);
     try { entryDate(date); } catch (e) { return err(e.message); }
     const bankRef = source === 'manual' ? str(x?.bank_ref, 80) : '';
@@ -953,6 +957,11 @@ function processFundPayment(code, fundId, p) {
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
     const insTxn = { run: (id, invId, bk, amt, ct, oid, tt, matched, note, rj) =>
       insRaw.run(id, invId, bk, amt, ct, oid, tt, matched, note, rj, tt === 'D' ? 'refund' : matched && f ? (f.kind === 'donation' ? 'donation' : 'fund') : 'unclassified', bankTime(p.raw)) };
+    // Quỹ chỉ nhận tiền mặt: chuyển khoản vào tài khoản cũ không tự ghi, để thủ quỹ xử lý ở mục chưa phân loại.
+    if (f && f.payment_methods === 'cash') {
+      insTxn.run(txnId, null, bank, amount, content, '', transType, 0, 'Quỹ chỉ nhận tiền mặt', raw);
+      return { ref: '', message: 'Quỹ chỉ nhận tiền mặt, chờ thủ quỹ xử lý', paid: false };
+    }
     // Ngừng thu / khoá sổ: không tự ghi, để thủ quỹ xử lý ở mục chưa phân loại. Đang thu đợt mới thì nội dung chuyển khoản
     // phải có mã đợt mới (vd AN26-D2); chuyển theo QR đợt cũ (thiếu mã đợt) cũng vào mục chưa phân loại để không nộp nhầm.
     if (!f || f.status !== 'active') {

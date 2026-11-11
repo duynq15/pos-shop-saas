@@ -33,6 +33,7 @@ function stateBlock(p) {
 }
 
 function qrBlock(p) {
+  if (p.accept_transfer === false) return '<div class="rp-empty">Quỹ chỉ nhận tiền mặt. Vui lòng nộp trực tiếp cho thủ quỹ.</div>';
   if (!p.qrDataUrl) return '<div class="rp-empty">Đợt thu chưa cấu hình tài khoản nhận tiền.</div>';
   return `<div class="dn-pay">
     <div class="dn-qr"><img id="dn-img-${p.id}" src="${p.qrDataUrl}" alt="Mã QR chuyển khoản ${esc(p.name)}"></div>
@@ -53,6 +54,7 @@ function programCard(p) {
   const facts = [
     `<span class="dn-chip ${STATE_CLS[p.state] || ''}">${esc(p.state_label || '')}</span>`,
     p.nature_label ? `<span class="dn-chip">${esc(p.nature_label)}</span>` : '',
+    p.payment_methods_label ? `<span class="dn-chip">Nộp: ${esc(p.payment_methods_label)}</span>` : '',
     p.category ? `<span class="dn-chip">${esc(p.category)}</span>` : '',
     p.status_text ? `<span class="rp-hint">${esc(p.status_text)}</span>` : '',
     p.contribution === 'voluntary' ? '<span class="rp-hint">Đóng góp tùy tâm</span>'

@@ -525,6 +525,10 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('fund create (account normalised)', fund.ok && fund.data.bank_account === 'QUYA001' && fund.data.balance === 0);
   const fundMeta = await cj('cadm', '/funds/' + fund.data.id, { method: 'PATCH', body: { category: 'Thôn', target_amount: 200000, is_public: 1, bank_bin: '970422', bank_name: 'MB Bank', account_holder: 'Thôn A' } });
   ok('fund campaign fields saved', fundMeta.ok && fundMeta.data.category === 'Thôn' && fundMeta.data.target_amount === 200000 && fundMeta.data.is_public === 1, JSON.stringify(fundMeta.data));
+  ok('fund payment methods default to both', fundMeta.data.payment_methods === 'both');
+  ok('fund payment methods saved', (await cj('cadm', '/funds/' + fund.data.id, { method: 'PATCH', body: { payment_methods: 'transfer' } })).data.payment_methods === 'transfer');
+  ok('bad payment method rejected', !(await cj('cadm', '/funds/' + fund.data.id, { method: 'PATCH', body: { payment_methods: 'card' } })).ok);
+  await cj('cadm', '/funds/' + fund.data.id, { method: 'PATCH', body: { payment_methods: 'both' } });
   // Ban lãnh đạo được cấu hình quỹ và tài khoản nhận tiền, nhưng không nhập/duyệt chi
   const leaderFund = await cj('c-community_leader', '/funds', { method: 'POST', body: { code: 'quy-lanh-dao', name: 'Quỹ Ban lãnh đạo', bank_account: 'QUY-LD 001' } });
   ok('leader can create fund with bank account', leaderFund.ok && leaderFund.data.bank_account === 'QUYLD001');
@@ -581,11 +585,25 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('community public donations enabled', pubCom.ok && pubCom.data.settings.public_donations && /^\/congduc\/[a-f0-9]+$/.test(pubCom.data.donations_url || ''));
   ok('public link exposed to fund account after enabling', (await cj('cadm', '/community/public-link')).data.url === pubCom.data.donations_url);
   const donTok = (pubCom.data.donations_url || '').split('/').pop();
+  await cj('cadm', '/funds/' + fid, { method: 'PATCH', body: { payment_methods: 'transfer' } });
   const pubFunds = await (await fetch(ROOT + '/public/api/donations/' + donTok)).json();
   const pubProg = pubFunds.ok && pubFunds.data.programs.find((p) => p.id === fid);
   ok('public payer page lists campaign with QR + totals', !!pubProg && !!pubProg.qrDataUrl && pubProg.total === 600000 && pubProg.balance === 350000, JSON.stringify(pubProg && { total: pubProg.total, balance: pubProg.balance }));
   const pubQr = await (await fetch(ROOT + '/public/api/donations/' + donTok + '/funds/' + fid + '/qr?amount=150000')).json();
   ok('public payer page creates QR with amount', pubQr.ok && pubQr.data.amount === 150000 && !!pubQr.data.qrDataUrl);
+  ok('public fund exposes payment methods + transfer flag', pubProg.payment_methods === 'transfer' && pubProg.accept_transfer === true
+    && pubProg.accept_cash === false && pubProg.payment_methods_label === 'Chuyển khoản', JSON.stringify(pubProg && { m: pubProg.payment_methods, cash: pubProg.accept_cash, tr: pubProg.accept_transfer }));
+  await cj('cadm', '/funds/' + fid, { method: 'PATCH', body: { payment_methods: 'cash' } });
+  const cashPub = await (await fetch(ROOT + '/public/api/donations/' + donTok)).json();
+  const cashProg = cashPub.data.programs.find((p) => p.id === fid);
+  ok('cash-only fund hides QR and blocks QR endpoint', cashProg.accept_transfer === false && !cashProg.qrDataUrl && cashProg.qr_note === 'Quỹ chỉ nhận tiền mặt, nộp cho thủ quỹ'
+    && (await fetch(ROOT + '/public/api/donations/' + donTok + '/funds/' + fid + '/qr')).status === 404, JSON.stringify(cashProg && { tr: cashProg.accept_transfer, qr: !!cashProg.qrDataUrl, note: cashProg.qr_note }));
+  const cashOnlyCk = await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000, source: 'manual' } });
+  const cashOnlyImp = await cj('c-treasurer', '/funds/' + fid + '/import?dry=1', { method: 'POST', body: { rows: [{ amount: 1000, source: 'Chuyển khoản' }] } });
+  ok('cash-only fund rejects transfer entry + import line', !cashOnlyCk.ok && cashOnlyImp.data?.errors?.[0]?.error === 'Quỹ chỉ nhận tiền mặt', JSON.stringify(cashOnlyImp));
+  await cj('cadm', '/funds/' + fid, { method: 'PATCH', body: { payment_methods: 'transfer' } });
+  ok('transfer-only fund rejects cash entry', !(await cj('c-treasurer', '/funds/' + fid + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 } })).ok);
+  await cj('cadm', '/funds/' + fid, { method: 'PATCH', body: { payment_methods: 'both' } });
   ok('public API allows cross-origin (App người dân)', (await fetch(ROOT + '/public/api/donations/' + donTok)).headers.get('access-control-allow-origin') === '*');
 
   // ---------- API cho Làng Số (SKHGDT-3532) ----------

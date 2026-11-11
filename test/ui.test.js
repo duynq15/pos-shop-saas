@@ -367,6 +367,8 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.locator('#fd-new-fund').click(); await quy.pg.waitForTimeout(300);
     ok('Fund form has no code field, has fund type + contribution', (await quy.pg.locator('#fd-f-code').count()) === 0
       && (await quy.pg.locator('#fd-f-type option').count()) >= 2 && (await quy.pg.locator('#fd-f-contrib option').count()) === 4);
+    ok('Fund form offers cash / transfer / both payment methods', (await quy.pg.locator('#fd-f-pay option').count()) === 3
+      && (await quy.pg.locator('#fd-f-pay').inputValue()) === 'both');
     await quy.pg.locator('#fd-f-contrib').selectOption('voluntary');
     ok('Voluntary hides amount field', await quy.pg.locator('#fd-f-target-wrap').isHidden());
     await quy.pg.locator('#fd-f-name').fill('Quỹ UI');
