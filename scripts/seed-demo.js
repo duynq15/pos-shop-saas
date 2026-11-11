@@ -478,8 +478,8 @@ function seedFunds(code, c) {
   conn.prepare("UPDATE settings SET value=? WHERE key='fund_groups' AND value=''").run(c.type === 'pagoda' ? 'Ban hộ tự\nĐạo tràng'
     : 'Xóm 1\nXóm 2\nXóm 3\nHội Phụ nữ\nHội Cựu chiến binh\nChi đoàn thanh niên');
   // Công đức công khai trên trang người nộp; quỹ chung không
-  const insFund = conn.prepare(`INSERT INTO funds(code,name,kind,fund_type,is_public,contribution,bank_account,bank_bin,bank_name,account_holder,manager_user_id,description,created_by)
-    VALUES (?,?,?,CASE ?3 WHEN 'donation' THEN 'Công đức' ELSE 'Quỹ chung' END,?3='donation',CASE ?3 WHEN 'donation' THEN 'voluntary' ELSE 'household' END,?,'970422','MB Bank',?,?,?,?)`);
+  const insFund = conn.prepare(`INSERT INTO funds(code,name,kind,fund_type,is_public,payment_methods,contribution,bank_account,bank_bin,bank_name,account_holder,manager_user_id,description,created_by)
+    VALUES (?,?,?,CASE ?3 WHEN 'donation' THEN 'Công đức' ELSE 'Quỹ chung' END,?3='donation',?,CASE ?3 WHEN 'donation' THEN 'voluntary' ELSE 'household' END,?,'970422','MB Bank',?,?,?,?)`);
   const insEntry = conn.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,payer_name,anonymous,note,attachment,status,
     created_by,created_by_name,created_at,approved_by,approved_by_name,approved_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   // Cùng khuôn makeCode: số thứ tự đếm riêng theo tiền tố + ngày
@@ -490,17 +490,113 @@ function seedFunds(code, c) {
     seqs[k] += 1; return `${k}-${pad(seqs[k], 4)}`;
   };
   conn.exec('BEGIN');
+  // Nội dung dài + tài liệu đính kèm theo thiết kế Làng Số: quỹ nào cũng có mô tả, căn cứ, đối tượng, mức đóng, cách nộp.
   const FUNDS = c.type === 'pagoda'
-    ? [['quy-chung', 'Quỹ nhà chùa', 'general', 'Điện nước, hương đèn, sinh hoạt', 30],
-      ['cong-duc', 'Công đức đúc chuông', 'donation', 'Đúc đại hồng chung', 45],
-      ['phat-dan', 'Lễ Phật đản', 'donation', 'Tổ chức đại lễ Phật đản', 25]]
-    : [['quy-chung', 'Quỹ chung ' + c.name, 'general', 'Chi tiêu chung, sửa đường, điện chiếu sáng', 22],
-      ['cong-duc', 'Công đức tu sửa đình làng', 'donation', 'Chương trình công đức năm nay', 28],
-      ['khuyen-hoc', 'Quỹ khuyến học', 'donation', 'Thưởng học sinh giỏi, hỗ trợ học sinh khó khăn', 16],
-      ['tet-2026', 'Chương trình Tết cho hộ nghèo', 'donation', 'Đã kết thúc, quyết toán xong', 10]];
-  for (const [fcode, name, kind, desc, nIn] of FUNDS) {
-    if (conn.prepare('SELECT 1 FROM funds WHERE code=?').get(fcode)) continue; // chạy lại seed: giữ quỹ đã có
-    const fid = Number(insFund.run(fcode, name, kind, acc(fcode), 'BAN QUAN LY ' + removeVietnamese(c.name).toUpperCase(), tq.id, desc, dy.id).lastInsertRowid);
+    ? [
+      { code: 'quy-chung', name: 'Quỹ nhà chùa', kind: 'general', desc: 'Điện nước, hương đèn, sinh hoạt', nIn: 30, nature: 'voluntary', pay: 'both',
+        content: 'Quỹ nhà chùa dùng cho chi phí thường xuyên của chùa: tiền điện, nước, hương đèn, vệ sinh, sửa chữa nhỏ.\n'
+          + 'Đối tượng: toàn thể Phật tử và nhân dân trong thôn, khách thập phương.\n'
+          + 'Mức đóng: tùy tâm, không quy định mức tối thiểu.\n'
+          + 'Hình thức nộp: tiền mặt tại nhà chùa hoặc chuyển khoản vào tài khoản của quỹ.\n'
+          + 'Công khai: sổ thu chi được cập nhật hằng tháng, niêm yết tại bảng tin nhà chùa và trên trang Làng Số.' },
+      { code: 'cong-duc', name: 'Công đức đúc chuông', kind: 'donation', desc: 'Đúc đại hồng chung', nIn: 45, nature: 'voluntary', pay: 'both',
+        contribution: 'goal', target: 300000000,
+        content: 'Chương trình công đức đúc đại hồng chung cho chùa, chào mừng đại lễ.\n'
+          + 'Mục tiêu huy động: 300.000.000 đồng (theo dự toán của Ban hộ tự).\n'
+          + 'Đối tượng: Phật tử, nhân dân trong thôn và con em xa quê.\n'
+          + 'Cách nộp: tùy tâm, có thể nộp tiền mặt hoặc chuyển khoản. Mọi khoản đóng góp được ghi tên trên bảng công đức (trừ người xin ẩn danh).\n'
+          + 'Sử dụng: đúc chuông, vận chuyển, lắp đặt. Quyết toán công khai sau khi hoàn thành.' },
+      { code: 'phat-dan', name: 'Lễ Phật đản', kind: 'donation', desc: 'Tổ chức đại lễ Phật đản', nIn: 25, nature: 'campaign', pay: 'both',
+        contribution: 'goal', target: 50000000,
+        content: 'Kinh phí tổ chức đại lễ Phật đản: thuê rạp, âm thanh, ánh sáng, hoa đăng, cơm chay phục vụ khách.\n'
+          + 'Mục tiêu huy động: 50.000.000 đồng.\n'
+          + 'Đối tượng vận động: Phật tử và nhân dân trong thôn.\n'
+          + 'Hình thức: tiền mặt hoặc chuyển khoản, có biên nhận. Ban hộ tự công khai sao kê sau đại lễ.' }]
+    : [
+      { code: 'quy-chung', name: 'Quỹ chung ' + c.name, kind: 'general', desc: 'Chi tiêu chung, sửa đường, điện chiếu sáng', nIn: 22, nature: 'mandatory', pay: 'both',
+        contribution: 'household', target: 100000, period: 'year', managedBy: 'Ban quản lý thôn',
+        content: 'Quỹ chung thôn dùng cho chi tiêu thường xuyên của thôn: điện chiếu sáng, sửa đường, cống thoát nước, loa phát thanh, phát quang bụi rậm và các việc chung khác.\n'
+          + 'Căn cứ: Nghị quyết Hội nghị nhân dân thôn về mức đóng góp và kế hoạch chi tiêu hằng năm.\n'
+          + 'Đối tượng: các hộ thường trú trên địa bàn thôn.\n'
+          + 'Mức đóng: 100.000 đồng/hộ/năm.\n'
+          + 'Hình thức nộp: tiền mặt tại thủ quỹ hoặc chuyển khoản vào tài khoản của quỹ. Với chuyển khoản, ghi đúng mã nội dung để hệ thống tự ghi sổ.\n'
+          + 'Quản lý: Ban quản lý thôn; thủ quỹ thu, người duyệt chi duyệt; Ban kiểm tra giám sát và khoá sổ cuối năm.' },
+      { code: 'cong-duc', name: 'Công đức tu sửa đình làng', kind: 'donation', desc: 'Chương trình công đức năm nay', nIn: 28, nature: 'voluntary', pay: 'both',
+        contribution: 'goal', target: 500000000, managedBy: 'Ban khánh tiết đình làng',
+        content: 'Chương trình công đức tu sửa đình làng: lợp lại mái ngói, sơn cột, thay cửa gỗ lim, chống mối và tôn tạo sân đình.\n'
+          + 'Mục tiêu huy động: 500.000.000 đồng theo dự toán đã được Hội nghị nhân dân thông qua.\n'
+          + 'Căn cứ: Tờ trình của Ban khánh tiết và Nghị quyết Hội nghị nhân dân thôn.\n'
+          + 'Đối tượng: toàn thể nhân dân, con em xa quê, doanh nghiệp và khách thập phương.\n'
+          + 'Hình thức nộp: tiền mặt hoặc chuyển khoản; tùy tâm, không quy định mức.\n'
+          + 'Cam kết: sổ thu chi công khai; danh sách công đức niêm yết tại đình và trên trang Làng Số; quyết toán khi hoàn thành.' },
+      { code: 'khuyen-hoc', name: 'Quỹ khuyến học', kind: 'donation', desc: 'Thưởng học sinh giỏi, hỗ trợ học sinh khó khăn', nIn: 16, nature: 'campaign', pay: 'both',
+        contribution: 'person', target: 200000, period: 'year', managedBy: 'Hội Khuyến học thôn',
+        content: 'Quỹ khuyến học dùng để thưởng học sinh giỏi, hỗ trợ sách vở và học phí cho học sinh có hoàn cảnh khó khăn.\n'
+          + 'Căn cứ: Kế hoạch hoạt động của Hội Khuyến học thôn và Nghị quyết Hội nghị nhân dân.\n'
+          + 'Đối tượng vận động: nhân khẩu trong độ tuổi lao động và các hộ gia đình.\n'
+          + 'Mức đóng: 200.000 đồng/người/năm, hộ có nhiều nhân khẩu đóng theo số nhân khẩu.\n'
+          + 'Hình thức nộp: tiền mặt hoặc chuyển khoản.\n'
+          + 'Sử dụng: trao thưởng tại lễ tổng kết năm học; danh sách học sinh được hỗ trợ công khai tại nhà văn hoá thôn.' },
+      { code: 'tet-2026', name: 'Chương trình Tết cho hộ nghèo', kind: 'donation', desc: 'Đã kết thúc, quyết toán xong', nIn: 10, nature: 'campaign', pay: 'cash',
+        contribution: 'goal', target: 80000000, managedBy: 'Ban quản lý thôn',
+        content: 'Chương trình vận động ủng hộ Tết cho các hộ nghèo, hộ cận nghèo và gia đình chính sách trên địa bàn thôn.\n'
+          + 'Mục tiêu: 80.000.000 đồng, tương đương 80 suất quà (mỗi suất 1.000.000 đồng gồm gạo, dầu ăn, bánh kẹo và tiền mặt).\n'
+          + 'Đối tượng vận động: nhân dân, con em xa quê, doanh nghiệp trên địa bàn.\n'
+          + 'Hình thức nộp: tiền mặt tại thủ quỹ (chương trình đã kết thúc, không còn nhận chuyển khoản).\n'
+          + 'Kết quả: trao đủ 80 suất quà trước Tết; sổ quyết toán và biên bản đối soát đã công khai.' },
+      { code: 'man-hinh-led', name: 'Quỹ vận động Màn hình LED', kind: 'general', desc: 'Lắp màn hình LED tại nhà văn hoá thôn', nIn: 35, nature: 'campaign', pay: 'transfer', isPublic: 1,
+        contribution: 'goal', target: 100000000, managedBy: 'Ban quản lý thôn',
+        content: 'Quỹ vận động lắp đặt màn hình LED ngoài trời tại sân nhà văn hoá thôn phục vụ họp thôn, tuyên truyền và các hoạt động văn hoá.\n'
+          + 'Mục tiêu huy động: 100.000.000 đồng (màn hình LED P4 ngoài trời 3m x 2m, khung bảo vệ, hệ thống điện và chống sét).\n'
+          + 'Căn cứ: Nghị quyết Hội nghị nhân dân thôn và Tờ trình của Ban quản lý thôn.\n'
+          + 'Đối tượng vận động: toàn thể nhân dân, con em xa quê, doanh nghiệp, nhà hảo tâm.\n'
+          + 'Mức đóng: vận động theo hạn mức, tùy tâm; khuyến khích đóng góp theo hộ hoặc theo cá nhân.\n'
+          + 'Hình thức nộp: chỉ nhận chuyển khoản vào tài khoản của quỹ để tiện đối soát và công khai. Quét mã QR trên trang Làng Số, ghi đúng nội dung chuyển khoản.\n'
+          + 'Tiến độ và danh sách ủng hộ được cập nhật công khai; quyết toán và bàn giao khi lắp đặt xong.' }];
+  const FUND_DOCS = {
+    'quy-chung': ['Nghị quyết Hội nghị nhân dân.pdf', 'Kế hoạch chi tiêu năm.pdf'],
+    'cong-duc': ['Tờ trình tu sửa đình làng.pdf', 'Bảng dự toán công trình.pdf', 'Nghị quyết Hội nghị nhân dân.pdf'],
+    'khuyen-hoc': ['Kế hoạch hoạt động Hội Khuyến học.pdf', 'Danh sách học sinh được hỗ trợ.pdf'],
+    'tet-2026': ['Kế hoạch vận động Tết.pdf', 'Biên bản trao quà.pdf'],
+    'man-hinh-led': ['Tờ trình lắp màn hình LED.pdf', 'Bảng dự toán thiết bị.pdf', 'Nghị quyết Hội nghị nhân dân.pdf'],
+    'phat-dan': ['Kế hoạch tổ chức đại lễ.pdf', 'Bảng dự toán kinh phí.pdf'],
+  };
+  const textPdf = (lines) => {
+    const esc = (s) => String(s).replace(/[\\()]/g, (m) => '\\' + m);
+    const body = `BT /F1 11 Tf 50 780 Td 16 TL ${lines.map((l) => `(${esc(removeVietnamese(l))}) Tj T*`).join(' ')} ET`;
+    const objs = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', `<< /Length ${Buffer.byteLength(body)} >>\nstream\n${body}\nendstream`];
+    let pdf = '%PDF-1.4\n'; const off = [0];
+    objs.forEach((o, i) => { off.push(Buffer.byteLength(pdf)); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+    const xref = Buffer.byteLength(pdf);
+    pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${off.slice(1).map((o) => String(o).padStart(10, '0') + ' 00000 n \n').join('')}`;
+    pdf += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    return Buffer.from(pdf);
+  };
+  const addDocs = (fid, fcode, fundName) => {
+    const names = FUND_DOCS[fcode] || ['Tờ trình kế hoạch.pdf'];
+    const insDoc = conn.prepare("INSERT INTO fund_documents(fund_id,kind,name,filename,mime,size,created_by_name) VALUES (?,'doc',?,?,'application/pdf',?,?)");
+    names.forEach((name, i) => {
+      const filename = `DOC-${fid}-seed-${i}.pdf`;
+      const buf = textPdf([`${fundName}`, name.replace(/\.pdf$/i, ''), '', 'Tai lieu mau cua So quy thon - du lieu demo.',
+        'Noi dung chi tiet duoc cap nhat trong ho so cua thon.']);
+      fs.writeFileSync(path.join(dir, filename), buf);
+      insDoc.run(fid, name, filename, buf.length, dy.full_name);
+    });
+  };
+  for (const fd of FUNDS) {
+    const { code: fcode, name, kind, desc, nIn } = fd;
+    // Chạy lại seed: quỹ đã có thì chỉ cập nhật nội dung / loại / hình thức nộp (để bổ sung dữ liệu demo mới),
+    // không tạo thêm giao dịch. Tài liệu chỉ thêm khi quỹ chưa có tài liệu nào.
+    const prev = conn.prepare('SELECT id FROM funds WHERE code=?').get(fcode);
+    const fid = prev ? prev.id : Number(insFund.run(fcode, name, kind, fd.pay || 'both', acc(fcode), 'BAN QUAN LY ' + removeVietnamese(c.name).toUpperCase(), tq.id, desc, dy.id).lastInsertRowid);
+    conn.prepare(`UPDATE funds SET nature=?, content=?, contribution=?, target_amount=?, period=?, managed_by=?, payment_methods=?, is_public=? WHERE id=?`)
+      .run(fd.nature || null, fd.content || null, fd.contribution || (kind === 'donation' ? 'voluntary' : 'household'),
+        fd.target || null, fd.period || null, fd.managedBy || null, fd.pay || 'both',
+        fd.isPublic ?? (kind === 'donation' ? 1 : 0), fid);
+    if (!conn.prepare('SELECT 1 FROM fund_documents WHERE fund_id=?').get(fid)) addDocs(fid, fcode, name);
+    if (prev) continue;
     let balance = 0;
     const closed = fcode === 'tet-2026';
     const span = closed ? 180 : 170; // quỹ đã đóng: giao dịch cách đây 3–6 tháng
@@ -529,6 +625,7 @@ function seedFunds(code, c) {
       'khuyen-hoc': ['Thưởng học sinh giỏi học kỳ I', 'Mua sách vở cho học sinh', 'Hỗ trợ học phí em Lan', 'Mua cặp sách'],
       'tet-2026': ['Mua 40 suất quà Tết', 'Chở quà tới hộ nghèo', 'Mua gạo phát Tết'],
       'phat-dan': ['Thuê rạp, âm thanh', 'Hoa đăng, đèn lồng', 'Cơm chay phục vụ khách'],
+      'man-hinh-led': ['Đặt cọc màn hình LED', 'Thi công khung thép ngoài trời', 'Mua thiết bị điện, chống sét'],
     }[fcode] || ['Chi phí chung'];
     let spent = 0;
     if (closed) {

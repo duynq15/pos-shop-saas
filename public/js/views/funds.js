@@ -148,7 +148,7 @@ ${stateBanner(f, manage)}
   ${f.category ? `<span class="badge">${esc(f.category)}</span>` : ''}
   ${f.is_public ? '<span class="badge paid">Công khai</span>' : ''}
   <span>Phụ trách: ${esc(f.manager_name || 'chưa giao')}</span>
-  <span>${f.bank_account ? `TK ${esc(f.bank_account)}${f.bank_name ? ' · ' + esc(f.bank_name) : ''}` : 'Chưa khai tài khoản nhận'}</span>
+  <span>${f.bank_account ? `TK ${esc(f.bank_account)}${f.bank_name ? ' · ' + esc(f.bank_name) : ''}` : (canTransfer(f) ? 'Chưa khai tài khoản nhận — chưa có QR' : 'Quỹ chỉ nhận tiền mặt')}</span>
   <span>${esc(contribText(f))}</span>
 </div>
 <div class="stats fd-stats">
@@ -160,7 +160,7 @@ ${stateBanner(f, manage)}
 <div class="toolbar fd-actions">
   ${canIn ? '<button class="btn primary fd-desk" id="fd-in">+ Thu tiền</button>' : ''}
   ${canOut ? '<button class="btn fd-desk" id="fd-out">+ Lập phiếu chi</button>' : ''}
-  ${collecting && canTransfer(f) ? `<button class="btn" id="fd-qr">${icon('card')} QR nhận tiền</button>` : ''}
+  ${collecting && canTransfer(f) && f.bank_account && f.bank_bin ? `<button class="btn" id="fd-qr">${icon('card')} QR nhận tiền</button>` : ''}
   ${collecting ? `<button class="btn" id="fd-share">Chia sẻ / nhắc đóng quỹ</button>` : ''}
   <button class="btn" id="fd-docs">Nội dung &amp; tài liệu</button>
   <button class="btn" id="fd-houses">Theo hộ</button>

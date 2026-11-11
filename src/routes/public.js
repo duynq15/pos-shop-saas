@@ -318,6 +318,9 @@ const PUBLIC_FUND_SELECT = "SELECT * FROM funds WHERE status='active' AND locked
 const publicFundSql = `SELECT * FROM funds WHERE is_public=1
   ORDER BY CASE WHEN locked_at IS NOT NULL THEN 2 WHEN status='active' THEN 0 ELSE 1 END, COALESCE(locked_at, stopped_at) DESC, id`;
 const NATURE_LABEL = { mandatory: 'Bắt buộc', campaign: 'Vận động', voluntary: 'Tự nguyện' };
+const PAY_LABEL = { cash: 'Tiền mặt', transfer: 'Chuyển khoản', both: 'Cả hai hình thức' };
+const canTransfer = (f) => (f.payment_methods || 'both') !== 'cash';
+const canCash = (f) => (f.payment_methods || 'both') !== 'transfer';
 const viDate = (d) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}` : '');
 
 // Dòng trạng thái hiển thị sẵn cho web / App (đúng câu chữ của thiết kế Làng Số)
@@ -358,8 +361,9 @@ function publicEntry(f, e) {
 async function publicFund(f, token, { withEntries = true } = {}) {
   const { stateOf, STATE_LABEL, transferRef, docsOf } = pf();
   const state = stateOf(f);
+  const transfer = canTransfer(f);
   let qr = null;
-  if (state === 'collecting') try { qr = await fundQr(f); } catch { qr = null; }
+  if (state === 'collecting' && transfer) try { qr = await fundQr(f); } catch { qr = null; }
   const sum = fundSummary(f); // tổng trên toàn bộ bút toán, không chỉ 300 dòng hiển thị
   const docUrl = (id) => `/public/api/donations/${token}/documents/${id}`;
   const docs = docsOf(f.id);
@@ -367,6 +371,9 @@ async function publicFund(f, token, { withEntries = true } = {}) {
   const out = {
     id: f.id, code: f.code, name: f.name, kind: f.kind, fund_type: f.fund_type,
     nature: f.nature || null, nature_label: NATURE_LABEL[f.nature] || null,
+    // Hình thức nộp tiền người dân được chọn: cả hai / tiền mặt / chuyển khoản
+    payment_methods: f.payment_methods || 'both', payment_methods_label: PAY_LABEL[f.payment_methods || 'both'],
+    accept_cash: canCash(f), accept_transfer: transfer,
     contribution: f.contribution, category: f.category, description: f.description, content: f.content || null,
     start_date: f.start_date, end_date: f.end_date, target_amount: f.target_amount,
     state, state_label: STATE_LABEL[state], status_text: statusText(f, state), round: f.round,
@@ -378,11 +385,12 @@ async function publicFund(f, token, { withEntries = true } = {}) {
     minutes_url: minutes ? docUrl(minutes.id) : null,
     unlocked_at: f.unlocked_at || null, unlock_reason: f.unlocked_at ? f.unlock_reason : null,
     unlock_text: f.unlocked_at ? `Đã mở khoá sổ ngày ${viDate(f.unlocked_at.slice(0, 10))} – lý do: ${f.unlock_reason}` : null,
-    bank_account: state === 'collecting' ? f.bank_account : null, bank_name: state === 'collecting' ? f.bank_name : null,
-    account_holder: state === 'collecting' ? f.account_holder : null,
-    transfer_content: state === 'collecting' ? transferRef(f) : null,
+    bank_account: state === 'collecting' && transfer ? f.bank_account : null, bank_name: state === 'collecting' && transfer ? f.bank_name : null,
+    account_holder: state === 'collecting' && transfer ? f.account_holder : null,
+    transfer_content: state === 'collecting' && transfer ? transferRef(f) : null,
     qrDataUrl: qr ? qr.qrDataUrl : null,
-    qr_note: state === 'locked' ? 'Quỹ đã khoá sổ' : state === 'stopped' ? 'Quỹ đang ngừng thu' : null,
+    qr_note: state === 'locked' ? 'Quỹ đã khoá sổ' : state === 'stopped' ? 'Quỹ đang ngừng thu'
+      : !transfer ? 'Quỹ chỉ nhận tiền mặt, nộp cho thủ quỹ' : null,
     total: sum.total_in, spent: sum.total_out, balance: sum.balance, donors: sum.donors, progress: sum.progress,
     documents: docs.filter((d) => d.kind === 'doc').map((d) => ({ id: d.id, name: d.name, mime: d.mime, size: d.size, url: docUrl(d.id) })),
   };
@@ -563,22 +571,25 @@ const meRoute = (fn) => wrap(async (req, res) => {
 async function myFund(f, house) {
   const { stateOf, transferRef } = pf();
   const state = stateOf(f);
+  const transfer = canTransfer(f);
   const { due, exempt } = hh.dueOf(f, house);
   const paid = hh.paidBy(f, house.code);
   const remaining = due == null ? null : Math.max(0, due - paid);
-  const transfer = hh.householdTransfer(transferRef(f), house.code);
+  const transferContent = hh.householdTransfer(transferRef(f), house.code);
   let qr = null;
-  if (state === 'collecting' && f.bank_account && f.bank_bin) {
-    try { qr = await fundQr({ ...f, transfer_code: transfer, round: 1 }, remaining || undefined); } catch { qr = null; }
+  if (state === 'collecting' && transfer && f.bank_account && f.bank_bin) {
+    try { qr = await fundQr({ ...f, transfer_code: transferContent, round: 1 }, remaining || undefined); } catch { qr = null; }
   }
   return {
     id: f.id, name: f.name, state, nature: f.nature || null, nature_label: NATURE_LABEL[f.nature] || null,
+    payment_methods: f.payment_methods || 'both', payment_methods_label: PAY_LABEL[f.payment_methods || 'both'],
+    accept_cash: canCash(f), accept_transfer: transfer,
     contribution_text: contributionText(f), period: f.period || null, period_from: hh.periodStart(f), end_date: f.end_date,
     due, exempt, paid, remaining, done: due != null && paid >= due,
     status_text: due == null ? (paid ? `Đã đóng góp ${vnd(paid)}` : 'Đóng góp tuỳ tâm') : exempt ? 'Được miễn' : paid >= due ? 'Đã đóng đủ' : `Cần đóng ${vnd(due - paid)}`,
-    transfer_content: state === 'collecting' ? transfer : null,
-    bank_account: state === 'collecting' ? f.bank_account : null, bank_name: state === 'collecting' ? f.bank_name : null,
-    account_holder: state === 'collecting' ? f.account_holder : null, qrDataUrl: qr ? qr.qrDataUrl : null,
+    transfer_content: state === 'collecting' && transfer ? transferContent : null,
+    bank_account: state === 'collecting' && transfer ? f.bank_account : null, bank_name: state === 'collecting' && transfer ? f.bank_name : null,
+    account_holder: state === 'collecting' && transfer ? f.account_holder : null, qrDataUrl: qr ? qr.qrDataUrl : null,
   };
 }
 const houseOut = (h) => ({ code: h.code, head_name: h.head_name, hamlet: h.hamlet, members: h.members, categories: h.categories });
@@ -626,6 +637,7 @@ router.get('/donations/:token/funds/:id/qr', wrap(async (req, res) => {
   if (!tenant) return res.status(404).json({ error: 'Không tìm thấy' });
   const f = db.runWith(tenant.code, () => db.prepare(PUBLIC_FUND_SELECT + ' AND id=?').get(Number(req.params.id)));
   if (!f) return res.status(404).json({ error: 'Không tìm thấy đợt thu' });
+  if (!canTransfer(f)) return res.status(404).json({ error: 'Quỹ chỉ nhận tiền mặt, không có mã QR' });
   let amount;
   if (req.query.amount !== undefined && req.query.amount !== '') {
     amount = Math.round(Number(String(req.query.amount).replace(/[^\d]/g, '')));

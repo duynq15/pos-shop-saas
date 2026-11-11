@@ -114,6 +114,8 @@ Ví dụ trả về (rút gọn):
 | `name` | Tên quỹ |
 | `fund_type` | Loại quỹ do thôn đặt (Quỹ chung, Quỹ quốc phòng – an ninh, Công đức, Khuyến học…) |
 | `nature`, `nature_label` | Tính chất: `mandatory` Bắt buộc, `campaign` Vận động, `voluntary` Tự nguyện (`null` nếu chưa chọn) |
+| `payment_methods`, `payment_methods_label` | Hình thức nộp: `both` Cả hai hình thức, `cash` Tiền mặt, `transfer` Chuyển khoản |
+| `accept_cash`, `accept_transfer` | `true` nếu người dân được nộp tiền mặt / chuyển khoản. Quỹ `cash` không có QR; quỹ `transfer` không nhận tiền mặt |
 | `category` | Phạm vi thu: `Cả thôn` hoặc tên xóm / đoàn thể. `null` ở quỹ cũ = cả thôn |
 | `contribution` | Cách đóng: `household` theo hộ, `person` theo nhân khẩu, `voluntary` tùy tâm, `goal` huy động theo mục tiêu |
 | `target_amount` | Mức mỗi hộ / mỗi người / tổng mục tiêu theo `contribution`. `null` khi tùy tâm |
@@ -129,10 +131,10 @@ Ví dụ trả về (rút gọn):
 | `stopped_at` | Thời điểm ngừng thu |
 | `locked_at`, `lock_balance`, `minutes_url` | Thời điểm khoá sổ, số dư khi khoá sổ, link biên bản khoá sổ |
 | `unlocked_at`, `unlock_reason`, `unlock_text` | Lần mở khoá sổ gần nhất (nếu có) |
-| `bank_account`, `bank_name`, `account_holder` | Tài khoản nhận tiền (chỉ khi Đang thu) |
-| `transfer_content` | Nội dung chuyển khoản của đợt hiện tại (chỉ khi Đang thu), ví dụ `QPAN26-D2` |
-| `qrDataUrl` | Ảnh QR (PNG data URL) khi Đang thu; `null` khi Ngừng thu / Khoá sổ / chưa khai tài khoản |
-| `qr_note` | Nhãn thay QR: "Quỹ đang ngừng thu" / "Quỹ đã khoá sổ" |
+| `bank_account`, `bank_name`, `account_holder` | Tài khoản nhận tiền (chỉ khi Đang thu và quỹ có nhận chuyển khoản) |
+| `transfer_content` | Nội dung chuyển khoản của đợt hiện tại (chỉ khi Đang thu và nhận chuyển khoản), ví dụ `QPAN26-D2` |
+| `qrDataUrl` | Ảnh QR (PNG data URL) khi Đang thu và nhận chuyển khoản; `null` khi Ngừng thu / Khoá sổ / quỹ chỉ nhận tiền mặt / chưa khai tài khoản |
+| `qr_note` | Nhãn thay QR: "Quỹ đang ngừng thu" / "Quỹ đã khoá sổ" / "Quỹ chỉ nhận tiền mặt, nộp cho thủ quỹ" |
 | `total`, `spent`, `balance` | Tổng đã thu, đã chi, số dư (trên toàn bộ sổ) |
 | `donors` | Số lượt đóng góp |
 | `progress` | % đạt mục tiêu (chỉ `contribution = goal`) |
@@ -218,7 +220,7 @@ GET /public/api/donations/<TOKEN>/funds/<id>/qr?amount=200000
 ```
 
 - `amount` không bắt buộc. Bỏ trống thì trả QR để người nộp tự nhập số tiền.
-- Chỉ quỹ **Đang thu** mới tạo được QR (quỹ khác trả `404`).
+- Chỉ quỹ **Đang thu** và **có nhận chuyển khoản** (`accept_transfer: true`) mới tạo được QR (quỹ khác trả `404`).
 - Nội dung chuyển khoản trong QR là `transfer_content` của đợt hiện tại. Tiền chuyển vào tài khoản quỹ với nội dung này được tự ghi vào sổ.
 
 ```json
@@ -329,6 +331,7 @@ PATCH /api/funds/<id>
   "name": "Quỹ khuyến học 2026",
   "fund_type": "Khuyến học",
   "nature": "campaign",
+  "payment_methods": "both",
   "content": "Mục đích, căn cứ, đối tượng…",
   "transfer_code": "KH26",
   "category": "Xóm 1",
@@ -351,6 +354,8 @@ PATCH /api/funds/<id>
 - `period`: `year` / `month` / `null` (một lần). `managed_by`: đơn vị quản lý, tối đa 120 ký tự.
 - Tài khoản nhận tiền: mặc định mỗi quỹ một tài khoản riêng. Bật **Cài đặt › Cho phép nhiều quỹ dùng chung một tài khoản** (`PUT /api/settings { "fund_shared_account": "1" }`) thì nhiều quỹ của thôn nhập cùng số tài khoản; mỗi quỹ khi đó bắt buộc có `transfer_code` riêng. Tiền về được chia theo mã đó trong nội dung chuyển khoản (QR đã điền sẵn); không có mã thì vào mục Chưa phân loại để thủ quỹ chọn quỹ. Không bao giờ trùng tài khoản với thôn khác hay cửa hàng.
 - `nature`: `mandatory` / `campaign` / `voluntary`. `transfer_code`: mã ngắn cho nội dung chuyển khoản (bỏ trống thì tự tạo).
+- `payment_methods`: `both` (mặc định, người dân nộp tiền mặt hoặc chuyển khoản), `cash` (chỉ tiền mặt, không tạo QR), `transfer` (chỉ chuyển khoản).
+- `content`: nội dung chi tiết dạng văn bản nhiều dòng (tối đa 20.000 ký tự), giữ nguyên xuống dòng. Tài liệu đính kèm gửi qua API tài liệu bên dưới.
 - Không đổi trạng thái bằng PATCH (dùng mục 2.5). Quỹ đã khoá sổ không sửa được.
 
 Tài liệu của quỹ:
