@@ -788,7 +788,7 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('minutes downloadable', (await req('cadm', '/fund-documents/' + locked.data.lock_doc_id)).headers.get('content-type') === 'application/pdf');
   await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: true } } });
   const pubLocked = (await (await fetch(ROOT + '/public/api/donations/' + donTok)).json()).data.programs.find((p) => p.id === fid);
-  ok('public locked fund: label, balance, minutes link, no QR', pubLocked && pubLocked.state === 'locked' && pubLocked.status_text === 'Không thu, không chi'
+  ok('public locked fund: label, balance, minutes link, no QR', pubLocked && pubLocked.state === 'locked' && /^Đã khoá sổ ngày \d\d\/\d\d\/\d{4}$/.test(pubLocked.status_text)
     && pubLocked.qrDataUrl === null && pubLocked.qr_note === 'Quỹ đã khoá sổ' && pubLocked.lock_balance === balR2 + 20000 && /\/documents\/\d+$/.test(pubLocked.minutes_url || ''), JSON.stringify(pubLocked && { ...pubLocked, entries: undefined }));
   ok('public minutes served', (await fetch(ROOT + pubLocked.minutes_url)).headers.get('content-type') === 'application/pdf');
   ok('public QR refused for locked fund', (await fetch(ROOT + '/public/api/donations/' + donTok + '/funds/' + fid + '/qr')).status === 404);
@@ -816,6 +816,35 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('exe rejected as document', !(await cj('c-approver', '/funds/' + cloned.data.id + '/documents', { method: 'POST', body: { name: 'x.exe', data: Buffer.from('MZ....').toString('base64') } })).ok);
   const pubClone = (await (await fetch(ROOT + '/public/api/donations/' + donTok + '/funds/' + cloned.data.id)).json()).data;
   ok('public: nature label, content, documents', pubClone.nature_label === 'Bắt buộc' && pubClone.content === 'Theo nghị quyết số 01' && pubClone.documents.length === 1);
+  // App Làng Số: mức đóng, đơn vị quản lý, thu chi lọc / phân trang, tháng này, báo cáo tháng
+  ok('period validated', !(await cj('c-approver', '/funds/' + cloned.data.id, { method: 'PATCH', body: { period: 'week' } })).ok);
+  await cj('c-approver', '/funds/' + cloned.data.id, { method: 'PATCH', body: { contribution: 'household', target_amount: 400000, period: 'year', managed_by: 'Ban quản lý thôn', end_date: '2999-12-31' } });
+  await cj('c-treasurer', '/funds/' + cloned.data.id + '/entries', { method: 'POST', body: { type: 'in', amount: 400000, payer_name: 'Lê Thị Hoa', payer_group: 'Xóm Đông', source: 'manual', bank_ref: 'FT-LS-1' } });
+  await cj('c-treasurer', '/funds/' + cloned.data.id + '/entries', { method: 'POST', body: { type: 'in', amount: 400000, payer_name: 'Bí Mật', payer_group: 'Xóm Kín', anonymous: true } });
+  for (let i = 0; i < 21; i++) await cj('c-treasurer', '/funds/' + cloned.data.id + '/entries', { method: 'POST', body: { type: 'in', amount: 1000 + i } });
+  const lsBase = ROOT + '/public/api/donations/' + donTok;
+  const lsAll = (await (await fetch(lsBase)).json()).data;
+  const lsFund = lsAll.programs.find((p) => p.id === cloned.data.id);
+  ok('public: contribution text, managed by, month, updated', lsFund.contribution_text === '400.000 đ/hộ/năm' && lsFund.managed_by === 'Ban quản lý thôn'
+    && lsFund.month.income === 800000 + 21 * 1000 + 210 && !!lsFund.updated_at, JSON.stringify({ t: lsFund.contribution_text, m: lsFund.month }));
+  ok('public: community summary counts states', lsAll.summary.funds === lsAll.programs.length && lsAll.summary.collecting + lsAll.summary.stopped + lsAll.summary.locked === lsAll.programs.length
+    && lsAll.summary.balance === lsAll.programs.reduce((s, p) => s + p.balance, 0), JSON.stringify(lsAll.summary));
+  const pg1 = (await (await fetch(lsBase + '/funds/' + cloned.data.id + '/entries?type=in')).json()).data;
+  ok('public entries: 20 per page, totals, month header', pg1.entries.length === 20 && pg1.total_count === 23 && pg1.pages === 2 && pg1.months[0].count === 23, JSON.stringify({ ...pg1, entries: undefined }));
+  const pg2 = (await (await fetch(lsBase + '/funds/' + cloned.data.id + '/entries?type=in&page=2&limit=20')).json()).data;
+  ok('public entries: page 2', pg2.entries.length === 3 && pg2.page === 2);
+  const hoa = (await (await fetch(lsBase + '/funds/' + cloned.data.id + '/entries?q=Hoa')).json()).data.entries;
+  ok('public entries: search, source, group, bank ref', hoa.length === 1 && hoa[0].source_label === 'Chuyển khoản' && hoa[0].group === 'Xóm Đông' && hoa[0].bank_ref === 'FT-LS-1' && !!hoa[0].match_text, JSON.stringify(hoa));
+  ok('public entries: search never matches anonymous name', (await (await fetch(lsBase + '/funds/' + cloned.data.id + '/entries?q=Bí')).json()).data.total_count === 0
+    && !JSON.stringify(pg1).includes('Xóm Kín'));
+  ok('public entries: bad filter 400', (await fetch(lsBase + '/funds/' + cloned.data.id + '/entries?from=hom-qua')).status === 400);
+  const lsX = await fetch(lsBase + '/funds/' + cloned.data.id + '/entries.xlsx');
+  ok('public entries Excel', lsX.status === 200 && (lsX.headers.get('content-type') || '').includes('spreadsheetml'));
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const rep1 = (await (await fetch(lsBase + '/report?month=' + thisMonth)).json()).data;
+  const repF = rep1.funds.find((x) => x.id === cloned.data.id);
+  ok('public monthly report', repF && repF.income === 800000 + 21 * 1000 + 210 && repF.closing_balance === repF.opening_balance + repF.income - repF.expense + repF.adjust, JSON.stringify(repF));
+  ok('public report: bad month 400', (await fetch(lsBase + '/report?month=2026-13')).status === 400);
   await cj('cadm', '/users/' + inspector.data.id, { method: 'DELETE' }); // trả suất người dùng của gói cho các test sau
   await rootJ('/platform/communities/' + com.data.id, { method: 'PUT', body: { settings: { public_donations: false } } });
 

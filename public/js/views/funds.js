@@ -22,10 +22,11 @@ const CONTRIB = {
   voluntary: { label: 'Tùy tâm (không quy định mức)' },
   goal: { label: 'Huy động theo mục tiêu', amount: 'Tổng số tiền cần huy động' },
 };
+const PERIOD = { year: 'mỗi năm', month: 'mỗi tháng' };
 const contribText = (f) => {
   const c = CONTRIB[f.contribution] || CONTRIB.household;
   if (!c.amount) return 'Đóng tùy tâm';
-  return f.target_amount ? `${c.amount}: ${money(f.target_amount)}` : c.label;
+  return f.target_amount ? `${c.amount}: ${money(f.target_amount)}${f.contribution !== 'goal' && PERIOD[f.period] ? ' ' + PERIOD[f.period] : ''}` : c.label;
 };
 
 let funds = [];
@@ -407,6 +408,7 @@ async function openDetail(f, id, known) {
     <div class="fd-detail-amt">${signedMoney(signed(e))}</div>
     ${row('Loại', TYPE_LABEL[e.type] + (e.type === 'in' ? ' · ' + (SRC_LABEL[e.source] || e.source) : ''))}
     ${row('Người nộp', e.type === 'in' ? esc(e.payer_name || 'Chưa rõ tên') + (e.anonymous ? ' <span class="badge">Ẩn trên trang công khai</span>' : '') : '')}
+    ${row('Xóm / địa chỉ', esc(e.payer_group || ''))}
     ${row('Ghi chú', esc(e.note || ''))}
     ${row('Mã giao dịch ngân hàng', esc(e.bank_ref || ''))}
     ${row('Người lập', esc(e.created_by_name || '') + ' · ' + esc((e.created_at || '').slice(0, 16)))}
@@ -749,6 +751,9 @@ async function openFundForm(f) {
         `<option value="${k}" ${k === (d.contribution || 'household') ? 'selected' : ''}>${v.label}</option>`).join('')}</select></label>
       <label class="fld" id="fd-f-target-wrap"><span id="fd-f-target-label"></span><input class="field fd-amount" id="fd-f-target" inputmode="numeric" autocomplete="off" placeholder="0"
         value="${d.target_amount ? nf.format(d.target_amount) : ''}"></label>
+      <label class="fld" id="fd-f-period-wrap">Chu kỳ đóng<select class="field" id="fd-f-period"><option value="">Một lần cho đợt thu</option>${Object.entries(PERIOD).map(([k, v]) =>
+        `<option value="${k}" ${k === d.period ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}</select></label>
+      <label class="fld">Đơn vị quản lý<input class="field" id="fd-f-managed" maxlength="120" value="${esc(d.managed_by || '')}" placeholder="Ban quản lý thôn, Hội Khuyến học…"></label>
       <label class="fld">Bắt đầu thu<input class="field" id="fd-f-start" type="date" value="${esc(d.start_date || '')}"></label>
       <label class="fld">Hạn thu<input class="field" id="fd-f-end" type="date" value="${esc(d.end_date || '')}">
         <span class="muted fd-field-hint">Hết hạn thì hệ thống tự chuyển Ngừng thu.</span></label>
@@ -774,6 +779,7 @@ async function openFundForm(f) {
   const contrib = () => {
     const c = CONTRIB[$('#fd-f-contrib').value];
     $('#fd-f-target-wrap').hidden = !c.amount;
+    $('#fd-f-period-wrap').hidden = !c.amount || $('#fd-f-contrib').value === 'goal';
     $('#fd-f-target-label').textContent = c.amount || '';
   };
   $('#fd-f-contrib').onchange = contrib; contrib();
@@ -793,7 +799,8 @@ async function openFundForm(f) {
       start_date: $('#fd-f-start').value || null, end_date: $('#fd-f-end').value || null,
       bank_bin: bank ? bank[0] : '', bank_name: bank ? bank[1] : '', account_holder: $('#fd-f-holder').value,
       manager_user_id: $('#fd-f-manager').value || null,
-      nature: $('#fd-f-nature').value || null, content: $('#fd-f-content').value, transfer_code: $('#fd-f-tcode').value,
+      nature: $('#fd-f-nature').value || null, managed_by: $('#fd-f-managed').value,
+      period: ['household', 'person'].includes($('#fd-f-contrib').value) ? $('#fd-f-period').value || null : null, content: $('#fd-f-content').value, transfer_code: $('#fd-f-tcode').value,
     };
     try {
       const saved = await api(isNew ? '/api/funds' : `/api/funds/${f.id}`, { method: isNew ? 'POST' : 'PATCH', body });
@@ -838,7 +845,10 @@ async function openEntryForm(f, type, draft) {
         <label class="fld">Ngày thu<input class="field" id="fd-e-date" type="date" value="${today()}" max="${today()}"></label>
       </div>
       <label class="fld" id="fd-e-ref-wrap" hidden>Mã giao dịch ngân hàng<input class="field" id="fd-e-bankref" placeholder="Trên sao kê / tin nhắn ngân hàng, để không ghi trùng"></label>
-      <label class="fld">Người nộp<input class="field" id="fd-e-payer" placeholder="Để trống nếu không rõ"></label>
+      <div class="form-grid">
+        <label class="fld">Người nộp<input class="field" id="fd-e-payer" placeholder="Để trống nếu không rõ"></label>
+        <label class="fld">Xóm / địa chỉ<input class="field" id="fd-e-group" maxlength="80" placeholder="Không bắt buộc"></label>
+      </div>
       <label class="chk fd-chk"><input type="checkbox" id="fd-e-anon"> Người nộp xin ẩn danh (trang công khai hiện "Người hảo tâm")</label>` : ''}
     ${type === 'adjust' && !draft ? `<label class="fld">Bút toán cần sửa *<select class="field" id="fd-e-ref">${refOptions}</select></label>` : ''}
     <label class="fld">${type === 'in' ? 'Ghi chú' : type === 'out' ? 'Chi cho việc gì *' : 'Lý do điều chỉnh *'}<input class="field" id="fd-e-note" value="${esc(draft?.note || '')}"></label>
@@ -870,7 +880,7 @@ async function openEntryForm(f, type, draft) {
     if (!body.amount) { toast('Nhập số tiền', true); amt.focus(); return; }
     if (!draft) body.type = type;
     if (type === 'in') {
-      Object.assign(body, { payer_name: $('#fd-e-payer').value, anonymous: $('#fd-e-anon').checked, source: src.value, date: $('#fd-e-date').value });
+      Object.assign(body, { payer_name: $('#fd-e-payer').value, payer_group: $('#fd-e-group').value, anonymous: $('#fd-e-anon').checked, source: src.value, date: $('#fd-e-date').value });
       if (src.value === 'manual') body.bank_ref = $('#fd-e-bankref').value;
     }
     if (type === 'adjust' && !draft) body.ref_entry_id = $('#fd-e-ref').value;
