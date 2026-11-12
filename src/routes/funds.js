@@ -271,6 +271,20 @@ router.get('/funds', requirePerm('fund.view'), wrap((req, res) => {
   ok(res, rows.map((f) => withState({ ...f, manager_name: managerName(f.manager_user_id) })));
 }));
 
+// Số liệu tổng quan cho trang Sổ quỹ: tổng số dư, thu/chi tháng này của các quỹ người dùng được xem.
+router.get('/funds/overview', requirePerm('fund.view'), wrap((req, res) => {
+  const ids = db.prepare('SELECT * FROM funds').all().filter((f) => canSeeFund(req, f)).map((f) => f.id);
+  if (!ids.length) return ok(res, { total_balance: 0, income_month: 0, expense_month: 0 });
+  const inIds = ids.map(() => '?').join(',');
+  const from = today().slice(0, 7) + '-01';
+  const row = db.prepare(`SELECT
+      COALESCE(SUM(CASE WHEN status='approved' THEN CASE type WHEN 'out' THEN -amount ELSE amount END END),0) total_balance,
+      COALESCE(SUM(CASE WHEN status='approved' AND type='in'  AND date(created_at)>=date(?) AND date(created_at)<=date(?) THEN amount ELSE 0 END),0) income_month,
+      COALESCE(SUM(CASE WHEN status='approved' AND type='out' AND date(created_at)>=date(?) AND date(created_at)<=date(?) THEN amount ELSE 0 END),0) expense_month
+    FROM fund_entries WHERE fund_id IN (${inIds})`).get(from, today(), from, today(), ...ids);
+  ok(res, row);
+}));
+
 // Hộp "Cần xử lý" của cả thôn, theo vai trò người xem:
 //   người duyệt: phiếu người khác gửi chờ duyệt; thủ quỹ: phiếu nháp của mình, phiếu mình gửi đang chờ;
 //   kiểm tra / duyệt: đề nghị mở khoá sổ chờ mình ký. Tiền vào chưa rõ quỹ đếm riêng (unclassified).

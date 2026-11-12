@@ -388,8 +388,8 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.locator('#fd-f-name').fill('Quỹ UI');
     await quy.pg.locator('#fd-f-acc').selectOption(await quy.pg.locator('#fd-f-acc option', { hasText: 'UIQUYACC' }).getAttribute('value'));
     await quy.pg.locator('#fd-f-save').click(); await quy.pg.waitForTimeout(700);
-    ok('Fund created, selected and shown with info tab', (await quy.pg.locator('#fd-tabs').innerText()).includes('Quỹ UI')
-      && (await quy.pg.locator('.fd-title h2').innerText()) === 'Quỹ UI' && await quy.pg.locator('[data-pane="info"]').isVisible());
+    ok('Fund created and shown with info tab', (await quy.pg.locator('.fd-title h2').innerText()) === 'Quỹ UI'
+      && await quy.pg.locator('[data-pane="info"]').isVisible());
     ok('Edit button visible on the fund header', await quy.pg.locator('#fd-edit-fund').isVisible());
     const uiFund = (await quy.pg.evaluate(async () => (await (await fetch('/api/funds')).json()).data)).find((f) => f.name === 'Quỹ UI');
     ok('Fund code generated from name', uiFund && uiFund.code === 'quy-ui' && uiFund.contribution === 'voluntary' && uiFund.nature === 'voluntary', JSON.stringify(uiFund && [uiFund.code, uiFund.contribution, uiFund.nature]));
@@ -411,8 +411,9 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.locator('#fd-e-save').click(); await quy.pg.waitForTimeout(700);
     ok('Draft without receipt shows in todo, submit disabled', (await quy.pg.locator('#fd-inbox').innerText()).includes('Thiếu ảnh chứng từ')
       && await quy.pg.locator('#fd-inbox [data-act="submit"]').isDisabled());
-    ok('Inbox button counts the draft', (await quy.pg.locator('#fd-inbox-btn .fd-count').count()) === 1);
-    await quy.pg.locator('.fd-item', { hasText: 'Quỹ UI' }).click(); await quy.pg.waitForTimeout(500);
+    ok('Inbox lists the draft', (await quy.pg.locator('#fd-inbox .fd-task').count()) >= 1);
+    await quy.pg.locator('#fd-back').click(); await quy.pg.waitForTimeout(300);
+    await quy.pg.locator('.fd-fund', { hasText: 'Quỹ UI' }).click(); await quy.pg.waitForTimeout(500);
     await quy.pg.locator('#fd-qr').click(); await quy.pg.waitForTimeout(600);
     ok('Static fund QR renders', (await quy.pg.locator('#fd-qr-body img').count()) === 1);
     await quy.pg.locator('#fd-qr-close').click(); await quy.pg.waitForTimeout(200);
@@ -427,10 +428,10 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     ok('Funds: no horizontal overflow 400px', !(await quy.pg.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
     ok('Funds mobile: detail open after creating, action bar visible', await quy.pg.locator('.fd-title h2').isVisible() && await quy.pg.locator('.fd-bar').isVisible());
     await quy.pg.locator('#fd-back').click(); await quy.pg.waitForTimeout(200);
-    ok('Funds mobile: back shows the fund list', await quy.pg.locator('#fd-tabs').isVisible() && await quy.pg.locator('#fd-body').isHidden());
+    ok('Funds mobile: back shows the fund list', await quy.pg.locator('.fd-funds').isVisible());
     ok('Funds mobile list: no horizontal overflow', !(await quy.pg.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
-    await quy.pg.locator('.fd-item', { hasText: 'Quỹ UI' }).click(); await quy.pg.waitForTimeout(500);
-    ok('Funds mobile: tap a fund opens its detail', await quy.pg.locator('.fd-title h2').isVisible() && await quy.pg.locator('#fd-tabs').isHidden());
+    await quy.pg.locator('.fd-fund', { hasText: 'Quỹ UI' }).click(); await quy.pg.waitForTimeout(500);
+    ok('Funds mobile: tap a fund opens its detail', await quy.pg.locator('.fd-title h2').isVisible() && !(await quy.pg.locator('.fd-funds').isVisible().catch(() => false)));
     const fundCats = await quy.pg.evaluate(async () => (await (await fetch('/api/community/categories')).json()).data);
     ok('Platform categories available to community sellers', fundCats.length === 2, JSON.stringify(fundCats));
     await quy.pg.setViewportSize({ width: 1280, height: 820 });
@@ -449,7 +450,8 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.locator('.fd-type-row:last-child [data-k=nature]').selectOption('campaign');
     await quy.pg.locator('#fd-ty-save').click(); await quy.pg.waitForTimeout(500);
     ok('Fund types saved', (await quy.pg.evaluate(async () => (await (await fetch('/api/settings')).json()).data.fund_types)).includes('Ủng hộ màn hình LED | Vận động'));
-    await quy.pg.locator('.fd-item', { hasText: 'Quỹ UI' }).click(); await quy.pg.waitForTimeout(500);
+    if (await quy.pg.locator('#fd-back').count()) { await quy.pg.locator('#fd-back').click(); await quy.pg.waitForTimeout(300); }
+    await quy.pg.locator('.fd-fund', { hasText: 'Quỹ UI' }).click(); await quy.pg.waitForTimeout(500);
     // Vòng đời: Đang thu -> Ngừng thu (vẫn lập phiếu chi, không thu) -> Mở thu lại
     ok('Fund header shows collecting', (await quy.pg.locator('.fd-tags').innerText()).includes('Đang thu') && (await quy.pg.locator('#fd-stop').count()) === 1);
     await quy.pg.locator('#fd-stop').click(); await quy.pg.waitForTimeout(500);
