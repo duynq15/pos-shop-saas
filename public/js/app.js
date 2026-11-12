@@ -1,4 +1,4 @@
-import { bootstrap, state } from './store.js';
+import { bootstrap, state, api } from './store.js';
 import { $, $$, closeModal } from './util.js';
 import { auth, loadMe, login, ssoLogin, skhgLogin, logout, can } from './auth.js';
 import pos from './views/pos.js';
@@ -229,6 +229,7 @@ async function boot() {
     const want = new URLSearchParams(location.search).get('view');
     const first = registry[want] ? want : Object.keys(registry)[0];
     if (first) showView(first);
+    if (!auth.isPlatform && (can('report.view') || can('fund.view'))) initBell();
     // Sổ quỹ thôn và tài khoản nền tảng không dùng máy bán hàng trong mạng LAN
     $('#btn-lan').hidden = auth.isPlatform || auth.tenant?.kind === 'community';
     $('#btn-lan')?.addEventListener('click', async () => {
@@ -270,3 +271,51 @@ async function start() {
     $('#app-loading').innerHTML = `<p style="color:#e5484d">Lỗi khởi động: ${e.message}</p>`;
   }
 })();
+
+/* ---------------- Chuông thông báo (thay các dải cảnh báo đầu trang) ---------------- */
+// Cảnh báo tự kiểm (mất kết nối ngân hàng, giao dịch trùng, tiền chưa phân loại) + thông báo vòng đời quỹ.
+const BELL_ICON = { danger: '⚠', warn: '!', info: 'i' };
+let bellData = { items: [] };
+async function loadBell() {
+  try { bellData = await api('/api/notifications'); } catch { return; }
+  const n = bellData.unread;
+  const c = $('#bell-count');
+  c.hidden = !n; c.textContent = n > 9 ? '9+' : n;
+  $('#btn-bell').classList.toggle('danger', !!bellData.danger);
+  $('#btn-bell').setAttribute('aria-label', n ? `Thông báo, ${n} mục mới` : 'Thông báo');
+  if (!$('#bell-panel').hidden) renderBell();
+}
+function renderBell() {
+  const groups = [['Cần chú ý', bellData.items.filter((x) => x.level !== 'info')], ['Hoạt động quỹ', bellData.items.filter((x) => x.level === 'info')]];
+  $('#bell-panel').innerHTML = `<div class="bell-head"><b>Thông báo</b>${bellData.unread ? '<button class="linkbtn" id="bell-seen">Đánh dấu đã xem</button>' : ''}</div>
+    ${bellData.items.length ? groups.filter(([, l]) => l.length).map(([t, l]) => `<div class="bell-group">${t}</div>${l.map((x) => `
+      <button class="bell-item ${x.level} ${x.unread ? 'unread' : ''}" data-link="${esc(x.link || '')}" data-fund="${x.fund_id || ''}">
+        <span class="bi">${BELL_ICON[x.level]}</span><span class="bt">${esc(x.message)}<small>${esc(String(x.at || '').slice(8, 10))}/${esc(String(x.at || '').slice(5, 7))} ${esc(String(x.at || '').slice(11, 16))}</small></span>
+      </button>`).join('')}`).join('') : '<p class="muted bell-empty">Không có thông báo.</p>'}`;
+  const seen = $('#bell-seen');
+  if (seen) seen.onclick = async () => { await api('/api/notifications/seen', { method: 'POST' }).catch(() => {}); loadBell(); };
+}
+function bellOpen(open) {
+  $('#bell-panel').hidden = !open;
+  $('#btn-bell').setAttribute('aria-expanded', open);
+  if (open) renderBell();
+}
+function initBell() {
+  $('#bell-wrap').hidden = false;
+  $('#btn-bell').onclick = (e) => { e.stopPropagation(); bellOpen($('#bell-panel').hidden); };
+  $('#bell-panel').onclick = (e) => {
+    e.stopPropagation();
+    const it = e.target.closest('.bell-item'); if (!it) return;
+    bellOpen(false);
+    // Đi tới chỗ xử lý: tiền chưa phân loại / giao dịch -> Sổ quỹ (thôn) hoặc màn giao dịch (cửa hàng); thông báo quỹ -> mở quỹ đó
+    const link = it.dataset.link;
+    if (registry.funds) { window.__openFund = it.dataset.fund ? Number(it.dataset.fund) : link === 'unclassified' ? 'inbox' : null; showView('funds'); window.dispatchEvent(new Event('funds:goto')); }
+    else if (registry.vietqr) showView('vietqr');
+  };
+  document.addEventListener('click', () => { if (!$('#bell-panel').hidden) bellOpen(false); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#bell-panel').hidden) { bellOpen(false); $('#btn-bell').focus(); } });
+  loadBell();
+  setInterval(loadBell, 120000);
+  window.addEventListener('notices:changed', loadBell);
+}
+
