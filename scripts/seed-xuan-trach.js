@@ -206,7 +206,6 @@ function seed(pdfDir) {
 
     conn.exec('BEGIN IMMEDIATE');
     try {
-      conn.prepare("INSERT INTO settings(key,value) VALUES ('fund_shared_account','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
       const types = conn.prepare("SELECT value FROM settings WHERE key='fund_types'").get()?.value || '';
       if (!/Vận động công trình/.test(types)) {
         conn.prepare("INSERT INTO settings(key,value) VALUES ('fund_types',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")

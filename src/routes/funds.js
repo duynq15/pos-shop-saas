@@ -55,7 +55,7 @@ function entryDate(d) {
 }
 
 // Mọi route sổ quỹ chỉ cho tenant cộng đồng (trước đây /fund-entries lọt khỏi chốt này).
-router.use(['/funds', '/fund-entries', '/fund-treasurers', '/fund-notices', '/fund-documents', '/fund-requests', '/households'], (req, res, next) => {
+router.use(['/funds', '/fund-accounts', '/fund-types', '/fund-entries', '/fund-treasurers', '/fund-notices', '/fund-documents', '/fund-requests', '/households'], (req, res, next) => {
   if (!req.tenant || req.tenant.kind !== 'community') return fail(res, 'Sổ quỹ chỉ dành cho tài khoản cộng đồng', 403);
   next();
 });
@@ -144,20 +144,21 @@ function sendDocument(res, d) {
 const docsOf = (fundId) => db.prepare('SELECT id, kind, name, mime, size, created_by_name, created_at FROM fund_documents WHERE fund_id=? ORDER BY kind, id').all(fundId);
 
 // Tài khoản nhận của quỹ không trùng tài khoản của bất kỳ tenant nào, không trùng quỹ của thôn khác (BR-02):
-// tiền về được định tuyến tới đúng thôn theo số tài khoản. Trong một thôn, nhiều quỹ dùng chung một tài khoản
-// khi Cài đặt bật "fund_shared_account"; khi đó quỹ được chọn theo mã nội dung chuyển khoản (xem fundForContent).
-const sharedAccountOn = () => db.prepare("SELECT value FROM settings WHERE key='fund_shared_account'").get()?.value === '1';
-const ACCOUNT_TAKEN = 'Tài khoản nhận đã dùng cho quỹ khác. Bật "Cho phép nhiều quỹ dùng chung một tài khoản" trong Cài đặt nếu muốn dùng chung';
-function checkFundAccount(v, selfFundId) {
-  const acc = normAccount(v.bank_account);
-  if (!acc) return;
+// tiền về được định tuyến tới đúng thôn theo số tài khoản. Trong một thôn, nhiều quỹ chọn chung một tài khoản
+// trong danh sách tài khoản nhận tiền; khi đó quỹ được chọn theo mã nội dung chuyển khoản (xem fundForContent).
+function accountBlocked(acc, selfFundId) {
   if (control.prepare('SELECT code FROM tenants').all().some((t) => normAccount(bankAccountOf(t.code)) === acc)) {
     bad('Tài khoản nhận của quỹ không được trùng tài khoản của cửa hàng / tổ chức (BR-02)');
   }
   const others = fundsByAccount(acc).filter((x) => !(x.tenantCode === db.tenantCode && x.fundId === selfFundId));
   if (others.some((x) => x.tenantCode !== db.tenantCode)) bad('Tài khoản nhận đã dùng cho quỹ của thôn khác (BR-02)');
+  return others;
+}
+function checkFundAccount(v, selfFundId) {
+  const acc = normAccount(v.bank_account);
+  if (!acc) return;
+  const others = accountBlocked(acc, selfFundId);
   if (!others.length) return;
-  if (!sharedAccountOn()) bad(ACCOUNT_TAKEN);
   // Dùng chung: mỗi quỹ phải có mã nội dung chuyển khoản riêng (một từ, vd KH26) để tách tiền về từng quỹ
   const mine = alnumKey(v.transfer_code);
   if (!mine) bad('Quỹ dùng chung tài khoản cần "Mã nội dung chuyển khoản" riêng (vd KH26)');
@@ -183,6 +184,12 @@ function fundForContent(fundIds, content) {
 }
 
 function fundInput(b, current = {}) {
+  // Quỹ chọn tài khoản trong danh sách tài khoản nhận tiền (account_id); rỗng = bỏ tài khoản
+  if (b.account_id !== undefined) {
+    const a = b.account_id ? db.prepare('SELECT * FROM fund_accounts WHERE id=?').get(Number(b.account_id)) : {};
+    if (!a) bad('Tài khoản nhận không có trong danh sách');
+    b = { ...b, bank_account: a.bank_account || '', bank_bin: a.bank_bin || '', bank_name: a.bank_name || '', account_holder: a.account_holder || '' };
+  }
   const v = {
     name: b.name !== undefined ? str(b.name, 160) : current.name,
     // kind chỉ còn dùng để phân loại giao dịch VietQR (fund/donation); suy từ loại quỹ khi client không gửi
@@ -295,9 +302,91 @@ router.post('/funds', requirePerm('fund.manage'), wrap((req, res) => {
     manager_user_id,description,content,transfer_code,start_date,end_date,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?)`)
     .run(code, v.name, v.kind, v.category, v.fund_type, v.nature, v.payment_methods, v.contribution, v.target_amount, v.period, v.managed_by, v.exempt, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder,
       v.manager_user_id, v.description, v.content, v.transfer_code, v.start_date, v.end_date, req.user.id);
+  rememberAccount(v);
   const f = getFund(r.lastInsertRowid);
   log(req, 'fund.create', 'fund', f.id, { code, name: v.name });
   ok(res, f);
+}));
+
+/* ===================== Loại quỹ (danh mục) ===================== */
+// Lưu ở settings.fund_types, mỗi dòng "Tên | Tính chất". Người quản lý quỹ sửa được (không cần quyền Cài đặt).
+const NATURE_VI = { mandatory: 'Bắt buộc', campaign: 'Vận động', voluntary: 'Tự nguyện' };
+router.put('/fund-types', requirePerm('fund.manage'), wrap((req, res) => {
+  const list = Array.isArray(req.body?.types) ? req.body.types : bad('Danh sách loại quỹ không hợp lệ');
+  const seen = new Set();
+  const rows = list.map((t) => {
+    const name = str(t?.name, 80).replace(/\|/g, '-');
+    if (!name) return null;
+    const key = name.toLowerCase();
+    if (seen.has(key)) bad(`Loại quỹ "${name}" bị trùng`);
+    seen.add(key);
+    if (t.nature && !NATURE_VI[t.nature]) bad('Tính chất phải là Bắt buộc, Vận động hoặc Tự nguyện');
+    return t.nature ? `${name} | ${NATURE_VI[t.nature]}` : name;
+  }).filter(Boolean);
+  if (!rows.length) bad('Cần ít nhất một loại quỹ');
+  db.prepare("INSERT INTO settings(key,value) VALUES ('fund_types',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(rows.join('\n'));
+  log(req, 'fund_types.update', 'settings', null, { count: rows.length });
+  ok(res, { fund_types: rows.join('\n') });
+}));
+
+/* ===================== Tài khoản nhận tiền của thôn ===================== */
+// Tài khoản khai trực tiếp trên quỹ (API cũ) cũng được đưa vào danh sách
+function rememberAccount(v) {
+  if (v.bank_account) db.prepare('INSERT OR IGNORE INTO fund_accounts(bank_account,bank_bin,bank_name,account_holder) VALUES (?,?,?,?)').run(v.bank_account, v.bank_bin, v.bank_name, v.account_holder);
+}
+function accountList() {
+  const fs = db.prepare('SELECT id, name, transfer_code, bank_account, status, locked_at FROM funds ORDER BY id').all();
+  return db.prepare('SELECT * FROM fund_accounts ORDER BY id').all().map((a) => ({ ...a,
+    funds: fs.filter((f) => f.bank_account === a.bank_account).map((f) => ({ id: f.id, name: f.name, transfer_code: f.transfer_code, state: stateOf(f) })) }));
+}
+function accountInput(b, cur = {}) {
+  const v = {
+    bank_account: b.bank_account !== undefined ? normAccount(str(b.bank_account, 40)) : cur.bank_account,
+    bank_bin: b.bank_bin !== undefined ? str(b.bank_bin, 20) : cur.bank_bin,
+    bank_name: b.bank_name !== undefined ? str(b.bank_name, 80) || null : cur.bank_name,
+    account_holder: b.account_holder !== undefined ? str(b.account_holder, 120).toUpperCase() || null : cur.account_holder,
+    label: b.label !== undefined ? str(b.label, 80) || null : cur.label ?? null,
+  };
+  if (!v.bank_account) bad('Nhập số tài khoản');
+  if (!/^\d{6}$/.test(v.bank_bin || '')) bad('Chọn ngân hàng trong danh sách');
+  if (!v.account_holder) bad('Nhập tên chủ tài khoản (như trên ứng dụng ngân hàng)');
+  return v;
+}
+router.get('/fund-accounts', requirePerm('fund.view'), wrap((req, res) => ok(res, accountList())));
+router.post('/fund-accounts', requirePerm('fund.manage'), wrap((req, res) => {
+  const v = accountInput(req.body || {});
+  if (db.prepare('SELECT 1 FROM fund_accounts WHERE bank_account=?').get(v.bank_account)) bad('Tài khoản này đã có trong danh sách');
+  accountBlocked(v.bank_account);
+  const id = Number(db.prepare('INSERT INTO fund_accounts(bank_account,bank_bin,bank_name,account_holder,label) VALUES (?,?,?,?,?)')
+    .run(v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.label).lastInsertRowid);
+  log(req, 'fund_account.create', 'fund_account', id, v);
+  ok(res, accountList().find((a) => a.id === id));
+}));
+// Sửa ngân hàng / chủ tài khoản / tên gọi: áp luôn cho các quỹ đang dùng (trừ quỹ đã khoá sổ). Đổi số tài khoản chỉ khi chưa quỹ nào dùng.
+router.patch('/fund-accounts/:id', requirePerm('fund.manage'), wrap((req, res) => {
+  const cur = db.prepare('SELECT * FROM fund_accounts WHERE id=?').get(Number(req.params.id));
+  if (!cur) return fail(res, 'Không tìm thấy tài khoản', 404);
+  const v = accountInput(req.body || {}, cur);
+  const used = db.prepare('SELECT COUNT(*) n FROM funds WHERE bank_account=?').get(cur.bank_account).n;
+  if (v.bank_account !== cur.bank_account) {
+    if (used) bad('Tài khoản đang dùng cho quỹ, không đổi số được. Thêm tài khoản mới rồi chọn cho quỹ');
+    if (db.prepare('SELECT 1 FROM fund_accounts WHERE bank_account=? AND id<>?').get(v.bank_account, cur.id)) bad('Tài khoản này đã có trong danh sách');
+    accountBlocked(v.bank_account);
+  }
+  db.prepare('UPDATE fund_accounts SET bank_account=?,bank_bin=?,bank_name=?,account_holder=?,label=? WHERE id=?')
+    .run(v.bank_account, v.bank_bin, v.bank_name, v.account_holder, v.label, cur.id);
+  db.prepare('UPDATE funds SET bank_bin=?,bank_name=?,account_holder=? WHERE bank_account=? AND locked_at IS NULL').run(v.bank_bin, v.bank_name, v.account_holder, cur.bank_account);
+  log(req, 'fund_account.update', 'fund_account', cur.id, v);
+  ok(res, accountList().find((a) => a.id === cur.id));
+}));
+router.delete('/fund-accounts/:id', requirePerm('fund.manage'), wrap((req, res) => {
+  const cur = db.prepare('SELECT * FROM fund_accounts WHERE id=?').get(Number(req.params.id));
+  if (!cur) return fail(res, 'Không tìm thấy tài khoản', 404);
+  const used = db.prepare('SELECT name FROM funds WHERE bank_account=?').all(cur.bank_account).map((f) => f.name);
+  if (used.length) bad('Tài khoản đang dùng cho: ' + used.join(', ') + '. Đổi tài khoản của các quỹ này trước');
+  db.prepare('DELETE FROM fund_accounts WHERE id=?').run(cur.id);
+  log(req, 'fund_account.delete', 'fund_account', cur.id, { bank_account: cur.bank_account });
+  ok(res, { deleted: true });
 }));
 
 /* ===================== Hộ dân (đồng bộ từ trang Hành chính) ===================== */
@@ -570,6 +659,7 @@ router.patch('/funds/:id', requirePerm('fund.manage'), wrap((req, res) => {
     manager_user_id=?,description=?,content=?,transfer_code=?,start_date=?,end_date=? WHERE id=?`)
     .run(v.name, v.kind, v.category, v.fund_type, v.nature, v.payment_methods, v.contribution, v.target_amount, v.period, v.managed_by, v.exempt, v.is_public, v.bank_account, v.bank_bin, v.bank_name, v.account_holder,
       v.manager_user_id, v.description, v.content, v.transfer_code, v.start_date, v.end_date, cur.id);
+  rememberAccount(v);
   log(req, 'fund.update', 'fund', cur.id, req.body);
   ok(res, getFund(cur.id));
 }));
