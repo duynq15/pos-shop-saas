@@ -276,22 +276,27 @@ async function start() {
 // Cảnh báo tự kiểm (mất kết nối ngân hàng, giao dịch trùng, tiền chưa phân loại) + thông báo vòng đời quỹ.
 const BELL_ICON = { danger: '⚠', warn: '!', info: 'i' };
 let bellData = { items: [] };
+let bellTasks = 0; // số việc đang chờ chính người dùng xử lý (hộp Cần xử lý của sổ quỹ)
 async function loadBell() {
   try { bellData = await api('/api/notifications'); } catch { return; }
-  const n = bellData.unread;
+  bellTasks = 0;
+  if (can('fund.view')) { try { bellTasks = (await api('/api/fund-inbox')).count || 0; } catch { /* không có quyền hoặc mất mạng */ } }
+  const n = Math.max(bellData.unread || 0, bellTasks); // một con số chung: việc cần xử lý nhiều hơn thì ưu tiên hiện
   const c = $('#bell-count');
   c.hidden = !n; c.textContent = n > 9 ? '9+' : n;
   $('#btn-bell').classList.toggle('danger', !!bellData.danger);
-  $('#btn-bell').setAttribute('aria-label', n ? `Thông báo, ${n} mục mới` : 'Thông báo');
+  $('#btn-bell').setAttribute('aria-label', bellTasks ? `Thông báo, ${bellTasks} việc cần xử lý` : n ? `Thông báo, ${n} mục mới` : 'Thông báo');
   if (!$('#bell-panel').hidden) renderBell();
 }
 function renderBell() {
   const groups = [['Cần chú ý', bellData.items.filter((x) => x.level !== 'info')], ['Hoạt động quỹ', bellData.items.filter((x) => x.level === 'info')]];
+  const tasks = bellTasks ? `<button class="bell-task" data-task="1">${icon('bell')}<span><b>${bellTasks} việc</b> cần xử lý</span><span class="go">Xem ›</span></button>` : '';
   $('#bell-panel').innerHTML = `<div class="bell-head"><b>Thông báo</b>${bellData.unread ? '<button class="linkbtn" id="bell-seen">Đánh dấu đã xem</button>' : ''}</div>
+    ${tasks}
     ${bellData.items.length ? groups.filter(([, l]) => l.length).map(([t, l]) => `<div class="bell-group">${t}</div>${l.map((x) => `
       <button class="bell-item ${x.level} ${x.unread ? 'unread' : ''}" data-link="${esc(x.link || '')}" data-fund="${x.fund_id || ''}">
         <span class="bi">${BELL_ICON[x.level]}</span><span class="bt">${esc(x.message)}<small>${esc(String(x.at || '').slice(8, 10))}/${esc(String(x.at || '').slice(5, 7))} ${esc(String(x.at || '').slice(11, 16))}</small></span>
-      </button>`).join('')}`).join('') : '<p class="muted bell-empty">Không có thông báo.</p>'}`;
+      </button>`).join('')}`).join('') : (bellTasks ? '' : '<p class="muted bell-empty">Không có thông báo.</p>')}`;
   const seen = $('#bell-seen');
   if (seen) seen.onclick = async () => { await api('/api/notifications/seen', { method: 'POST' }).catch(() => {}); loadBell(); };
 }
@@ -305,6 +310,12 @@ function initBell() {
   $('#btn-bell').onclick = (e) => { e.stopPropagation(); bellOpen($('#bell-panel').hidden); };
   $('#bell-panel').onclick = (e) => {
     e.stopPropagation();
+    const task = e.target.closest('[data-task]');
+    if (task) {
+      bellOpen(false);
+      if (registry.funds) { window.__openFund = 'inbox'; showView('funds'); window.dispatchEvent(new Event('funds:goto')); }
+      return;
+    }
     const it = e.target.closest('.bell-item'); if (!it) return;
     bellOpen(false);
     // Đi tới chỗ xử lý: tiền chưa phân loại / giao dịch -> Sổ quỹ (thôn) hoặc màn giao dịch (cửa hàng); thông báo quỹ -> mở quỹ đó
