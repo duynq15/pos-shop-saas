@@ -507,6 +507,7 @@ div.fld{display:block;margin-bottom:14px;font-size:15px;font-weight:600}
   .fd-layout.show-detail .fd-list{display:none}
   .fd-layout.show-detail .fd-detail{display:block}
   .fd-back{display:inline-flex}
+  .fd-layout .btn.sm{height:44px} /* vùng bấm đủ lớn cho ngón tay */
   .fd-open .view-head{display:none}
   .fd-head{padding:14px 16px}
   .fd-title h2{font-size:19px}
