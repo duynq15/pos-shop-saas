@@ -19,22 +19,29 @@ Thủ quỹ chỉ thấy quỹ được giao cho mình và quỹ chưa giao ai.
 **Máy tính:** bên trái là danh sách quỹ, bên phải là chi tiết quỹ đang chọn.
 **Điện thoại:** màn đầu là danh sách quỹ. Bấm một quỹ để mở chi tiết, bấm **← Danh sách quỹ** để quay lại.
 
-- **Danh sách quỹ:** lọc Đang thu / Ngừng thu / Khoá sổ / Tất cả (có số lượng), ô tìm theo tên. Mỗi dòng có tên, trạng thái, tính chất, tồn quỹ.
+- **Chuông thông báo** (góc trên, mọi màn hình): gom cảnh báo hệ thống (webhook ngân hàng im lặng, tiền vào lâu chưa phân loại, giao dịch trùng) và tin của quỹ 14 ngày gần nhất. Cảnh báo nặng làm chuông đỏ. Bấm một tin để đi thẳng tới quỹ / việc liên quan; **Đã xem** xoá số chưa đọc. Không còn dải cảnh báo vàng ở đầu trang.
+- **Cần xử lý** (nút trên cùng danh sách quỹ, có số việc): gom việc của cả thôn theo nhóm:
+  - người duyệt: **Chờ bạn duyệt** (Duyệt / Từ chối / Xem chứng từ ngay tại chỗ), **Đề nghị mở khoá sổ chờ bạn ký**
+  - thủ quỹ: **Phiếu nháp của bạn** (Sửa / Thêm ảnh / Gửi duyệt), **Tiền vào chưa rõ quỹ** (Ghi vào quỹ), **Bạn đã gửi, đang chờ duyệt**
+  - mở Sổ quỹ lần đầu mà có việc thì vào thẳng màn này
+- **Danh sách quỹ:** chia nhóm Đang thu / Ngừng thu / Khoá sổ (nhóm Khoá sổ thu gọn), ô tìm theo tên. Mỗi dòng có tên, tính chất, tồn quỹ, số ngày còn lại / quá hạn, thanh tiến độ nếu có mục tiêu, chấm cam nếu quỹ có việc chờ.
 - **Đầu trang chi tiết:**
   - tên quỹ và các nhãn (trạng thái, loại, tính chất, công khai hay không)
-  - nút **Sửa thông tin quỹ**, **+ Thu tiền**, **+ Lập phiếu chi**, **QR nhận tiền**; menu **Thêm** gồm Chia sẻ, Nhập Excel, Điều chỉnh, Tạo quỹ mới từ quỹ này
+  - nút theo vai trò: thủ quỹ thấy **+ Thu tiền**, **+ Lập phiếu chi**; người quản lý thấy **Sửa thông tin quỹ**; có **QR nhận tiền** khi quỹ nhận chuyển khoản; menu **Thêm** gồm Chia sẻ, Nhập Excel, Điều chỉnh, Tạo quỹ mới từ quỹ này
   - băng trạng thái (hạn thu, nút Ngừng thu / Mở thu lại / Khoá sổ)
-  - thanh tiến độ nếu quỹ có mục tiêu
-- **Số liệu:** Tồn quỹ, Thu tháng này, Chi tháng này, Việc cần làm.
+  - dải vàng "Quỹ chưa có …, Bổ sung ngay" khi thiếu tài khoản, nội dung, hạn thu
+  - dải "N việc cần xử lý ở quỹ này" mở Cần xử lý lọc theo quỹ
+  - số liệu: **Tồn quỹ** (to), Thu tháng này, Chi tháng này; thanh tiến độ nếu quỹ có mục tiêu
 - **Các tab:**
+  - **Sổ thu chi** (mặc định với thủ quỹ): 3 tháng gần nhất, chia theo tháng kèm tổng Thu / Chi của tháng; tìm theo người nộp, nội dung, mã; lọc nhanh Tất cả / Thu / Chi / Chờ duyệt; **Xem thêm 3 tháng trước**; bấm dòng để xem chi tiết.
   - **Thông tin quỹ:** ba thẻ Thông tin chung / Nhận tiền / Nội dung chi tiết, mỗi thẻ có nút **Sửa**. Tài liệu đính kèm (xem, thêm, gỡ) nằm ngay trong thẻ Nội dung.
-  - **Việc cần làm:** phiếu nháp, phiếu chờ duyệt, tiền vào chưa rõ quỹ.
-  - **Sổ thu chi:** lọc theo ngày, loại, trạng thái; bấm dòng để xem chi tiết.
   - **Theo hộ:** từng hộ đã đóng bao nhiêu, còn thiếu, được miễn; lọc và tìm; đồng bộ danh sách hộ từ trang Hành chính.
-  - **Báo cáo:** báo cáo kỳ, xuất Excel, in, đối soát sao kê ngân hàng.
+  - **Báo cáo:** chọn nhanh Tháng này / Tháng trước / Quý này / Năm nay / Tuỳ chọn; báo cáo dạng sổ (Tồn đầu kỳ, Thu chuyển khoản, Thu tiền mặt, Chi, Điều chỉnh nếu có, Tồn cuối kỳ); Xuất Excel, In; **Đối soát sao kê ngân hàng** thu gọn, bấm để mở.
+- **Form Thu tiền / Lập phiếu chi:** ô số tiền to và nút tiền nhanh (50k … 1tr); hình thức Tiền mặt / Chuyển khoản dạng nút bấm (chỉ hiện hình thức quỹ cho phép); ô **Hộ nộp** tìm theo tên chủ hộ hoặc mã hộ (khi thôn đã đồng bộ danh sách hộ); ngày thu mặc định hôm nay, bấm **Đổi ngày** để ghi lùi; **Ghi và thu tiếp** để nhập người sau mà không đóng form. Phiếu chi có nút **Chụp chứng từ** (mở camera sau trên điện thoại) và **Chọn ảnh có sẵn**; ảnh tự thu nhỏ trước khi gửi.
+- Thôn chưa có quỹ: người quản lý thấy 4 bước **Bắt đầu dùng Sổ quỹ** (tài khoản, loại quỹ, tạo quỹ, công khai).
 - Nút đầu trang (chỉ người có quyền quản lý quỹ): **Loại quỹ**, **Tài khoản nhận tiền**, **+ Tạo quỹ mới**.
 
-Trên điện thoại có thanh cố định ở đáy với hai nút **+ Thu tiền** và **+ Phiếu chi**.
+Trên điện thoại: thanh cố định ở đáy với hai nút **+ Thu tiền** và **+ Phiếu chi**; form thu / chi trượt từ dưới lên, nút lưu luôn ở đáy.
 
 ## 3. Danh mục
 
@@ -93,15 +100,17 @@ Từ form có thể mở **Sửa danh mục loại quỹ** và **Quản lý danh
 | 5 | Trưởng thôn | Tạo quỹ thứ hai cùng tài khoản, cùng mã nội dung | Báo lỗi trùng mã; đổi mã khác thì lưu được |
 | 6 | Trưởng thôn | Tab Thông tin › bấm **Sửa** ở thẻ Nhận tiền › đổi sang Chỉ tiền mặt | Ẩn ô tài khoản / mã; sau khi lưu không còn nút QR |
 | 7 | Thủ quỹ | Thu tiền mặt cho quỹ Chỉ chuyển khoản (qua API hoặc file Excel có dòng "Tiền mặt") | Bị từ chối, báo "Quỹ chỉ nhận chuyển khoản" |
-| 8 | Thủ quỹ | **+ Thu tiền** 50.000, chọn mã hộ | Tên chủ hộ tự điền; tồn quỹ tăng ngay; tab Theo hộ hiện hộ đã đóng |
-| 9 | Thủ quỹ | **+ Lập phiếu chi** không ảnh › Lưu nháp | Việc cần làm: "Thiếu ảnh chứng từ", nút Gửi duyệt bị khoá |
-| 10 | Người duyệt chi | Việc cần làm › Duyệt / Từ chối (bắt buộc lý do) | Duyệt: trừ tồn quỹ. Từ chối: thủ quỹ thấy lý do |
+| 8 | Thủ quỹ | **+ Thu tiền** 50.000, ô Hộ nộp gõ tên chủ hộ, chọn hộ › **Ghi và thu tiếp** | Tên người nộp tự điền; form trống lại để thu người sau; tồn quỹ tăng ngay; tab Theo hộ hiện hộ đã đóng |
+| 9 | Thủ quỹ | **+ Lập phiếu chi** không ảnh › Lưu nháp | Mở Cần xử lý của quỹ: "Thiếu ảnh chứng từ", nút Gửi duyệt bị khoá; Thêm ảnh › **Chụp chứng từ** › Lưu và gửi duyệt thì vào nhóm "đang chờ duyệt" |
+| 10 | Người duyệt chi | Đăng nhập › vào thẳng **Cần xử lý** › Duyệt / Từ chối (bắt buộc lý do) | Duyệt: trừ tồn quỹ, số việc giảm. Từ chối: thủ quỹ thấy lý do |
 | 11 | Trưởng thôn | Ngừng thu › Mở thu lại (hạn mới, lý do) | Hiện "Đợt 2", nội dung CK có `-D2` |
 | 12 | Trưởng ban kiểm tra | Ngừng thu › Khoá sổ (đính kèm biên bản) | Trạng thái Khoá sổ, không còn nút thu / chi / sửa |
 | 13 | Trưởng ban kiểm tra + Người duyệt chi | Mở khoá sổ: gửi đề nghị, cả hai cùng duyệt | Quỹ về Ngừng thu, trang công khai hiện dòng "Đã mở khoá sổ…" |
 | 14 | Trưởng thôn | **Tài khoản nhận tiền** › xoá tài khoản đang có quỹ dùng | Bị chặn, báo tên các quỹ đang dùng |
 | 15 | Bất kỳ | Điện thoại (rộng 390px): danh sách › chọn quỹ › ← Danh sách quỹ | Không cuộn ngang; chuyển màn đúng; thanh Thu / Chi ở đáy |
 | 16 | Người dân | Mở App Làng Số / trang công khai của thôn | Chỉ thấy quỹ bật công khai; quỹ Chỉ tiền mặt không có QR; người ẩn danh hiện "Người hảo tâm" |
+| 17 | Bất kỳ | Bấm chuông › bấm một tin quỹ › **Đã xem** | Mở đúng quỹ; số chưa đọc về 0; cảnh báo webhook im lặng làm chuông đỏ |
+| 18 | Thủ quỹ | Sổ thu chi › gõ tên người nộp, bấm Thu / Chi / Chờ duyệt, **Xem thêm 3 tháng trước** | Lọc ngay; tổng tháng không đổi theo bộ lọc; xem được tháng cũ |
 
 ## 7. Dữ liệu mẫu Xuân Trạch
 

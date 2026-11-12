@@ -467,4 +467,27 @@ router.post('/vietqr/transactions/:id/classify', classifyPerm, wrap((req, res) =
 router.get('/alerts', (req, res, next) => (can(req, 'report.view') || can(req, 'fund.view') ? next() : fail(res, 'Không có quyền', 403)),
   wrap((req, res) => ok(res, openAlerts([req.tenant.code]))));
 
+// Chuông thông báo: cảnh báo tự kiểm đang mở + thông báo vòng đời quỹ 14 ngày gần nhất.
+// unread: mục mới hơn lần xem cuối của người dùng. Bấm "Đã xem" thì ghi mốc thời gian.
+const ALERT_LINK = { unclassified_stale: 'unclassified', duplicate_txn: 'transactions', webhook_silent: 'transactions' };
+router.get('/notifications', (req, res, next) => (can(req, 'report.view') || can(req, 'fund.view') ? next() : fail(res, 'Không có quyền', 403)),
+  wrap((req, res) => {
+    const seen = control.prepare('SELECT notices_seen_at FROM users WHERE id=?').get(req.user.id)?.notices_seen_at || '';
+    const items = openAlerts([req.tenant.code]).map((a) => ({ id: 'a' + a.id, level: a.kind === 'webhook_silent' ? 'danger' : 'warn', kind: a.kind,
+      message: a.message, at: a.last_seen_at || a.created_at, link: ALERT_LINK[a.kind] }));
+    if (isCommunity(req)) {
+      for (const n of db.prepare(`SELECT n.id, n.kind, n.message, n.created_at, n.fund_id FROM fund_notices n
+          WHERE n.created_at >= datetime('now','localtime','-14 days') ORDER BY n.id DESC LIMIT 30`).all()) {
+        items.push({ id: 'n' + n.id, level: 'info', kind: n.kind, message: n.message, at: n.created_at, link: 'fund', fund_id: n.fund_id });
+      }
+    }
+    items.sort((x, y) => String(y.at).localeCompare(String(x.at)));
+    for (const it of items) it.unread = String(it.at) > seen;
+    ok(res, { items, unread: items.filter((x) => x.unread).length, danger: items.some((x) => x.level === 'danger'), seen_at: seen || null });
+  }));
+router.post('/notifications/seen', wrap((req, res) => {
+  control.prepare("UPDATE users SET notices_seen_at=datetime('now','localtime') WHERE id=?").run(req.user.id);
+  ok(res, { seen: true });
+}));
+
 module.exports = { router, webhook, processPayment };

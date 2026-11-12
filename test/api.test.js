@@ -569,6 +569,14 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('out starts as draft', out.ok && out.data.status === 'draft' && /^PC/.test(out.data.code));
   ok('draft cannot be approved', !(await cj('c-approver', '/fund-entries/' + out.data.id + '/approve', { method: 'POST' })).ok);
   ok('submit', (await cj('c-treasurer', '/fund-entries/' + out.data.id + '/submit', { method: 'POST' })).data.status === 'submitted');
+  const ibA = (await cj('c-approver', '/fund-inbox')).data;
+  ok('inbox: approver gets the submitted expense to approve', ibA.items.some((x) => x.act === 'approve' && x.entry.id === out.data.id) && ibA.count >= 1, JSON.stringify(ibA.items.map((x) => x.act)));
+  const ibT = (await cj('c-treasurer', '/fund-inbox')).data;
+  ok('inbox: treasurer sees it as waiting, not as a task', ibT.items.some((x) => x.act === 'waiting' && x.entry.id === out.data.id) && !ibT.items.some((x) => x.act === 'approve'));
+  const nt = (await cj('c-approver', '/notifications')).data;
+  ok('notifications: items + unread count', Array.isArray(nt.items) && typeof nt.unread === 'number', JSON.stringify(nt).slice(0, 200));
+  await cj('c-approver', '/notifications/seen', { method: 'POST' });
+  ok('notifications: marking seen clears unread', (await cj('c-approver', '/notifications')).data.unread === 0);
   ok('treasurer cannot approve (SEC-04)', (await req('c-treasurer', '/fund-entries/' + out.data.id + '/approve', { method: 'POST' })).status === 403);
   ok('approve', (await cj('c-approver', '/fund-entries/' + out.data.id + '/approve', { method: 'POST' })).data.status === 'approved');
   ok('balance after out', (await cj('cadm', '/funds/' + fid)).data.balance === 400000);

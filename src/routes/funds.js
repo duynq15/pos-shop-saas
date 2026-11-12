@@ -55,7 +55,7 @@ function entryDate(d) {
 }
 
 // Mọi route sổ quỹ chỉ cho tenant cộng đồng (trước đây /fund-entries lọt khỏi chốt này).
-router.use(['/funds', '/fund-accounts', '/fund-types', '/fund-entries', '/fund-treasurers', '/fund-notices', '/fund-documents', '/fund-requests', '/households'], (req, res, next) => {
+router.use(['/funds', '/fund-accounts', '/fund-types', '/fund-entries', '/fund-inbox', '/fund-treasurers', '/fund-notices', '/fund-documents', '/fund-requests', '/households'], (req, res, next) => {
   if (!req.tenant || req.tenant.kind !== 'community') return fail(res, 'Sổ quỹ chỉ dành cho tài khoản cộng đồng', 403);
   next();
 });
@@ -265,8 +265,39 @@ function entryFor(req, id) {
 router.get('/funds', requirePerm('fund.view'), wrap((req, res) => {
   const where = scoped(req) ? 'WHERE ' + SCOPE_SQL : '';
   const args = scoped(req) ? [req.user.id] : [];
-  const rows = db.prepare(`SELECT f.*, (SELECT ${BALANCE} FROM fund_entries WHERE fund_id=f.id) balance FROM funds f ${where} ORDER BY f.locked_at IS NOT NULL, f.status, f.id`).all(...args);
+  const rows = db.prepare(`SELECT f.*, (SELECT ${BALANCE} FROM fund_entries WHERE fund_id=f.id) balance,
+    (SELECT COALESCE(SUM(amount),0) FROM fund_entries WHERE fund_id=f.id AND type='in' AND status='approved') collected
+    FROM funds f ${where} ORDER BY f.locked_at IS NOT NULL, f.status, f.id`).all(...args);
   ok(res, rows.map((f) => withState({ ...f, manager_name: managerName(f.manager_user_id) })));
+}));
+
+// Hộp "Cần xử lý" của cả thôn, theo vai trò người xem:
+//   người duyệt: phiếu người khác gửi chờ duyệt; thủ quỹ: phiếu nháp của mình, phiếu mình gửi đang chờ;
+//   kiểm tra / duyệt: đề nghị mở khoá sổ chờ mình ký. Tiền vào chưa rõ quỹ đếm riêng (unclassified).
+router.get('/fund-inbox', requirePerm('fund.view'), wrap((req, res) => {
+  const visible = db.prepare('SELECT * FROM funds').all().filter((f) => canSeeFund(req, f));
+  const ids = visible.map((f) => f.id);
+  const name = Object.fromEntries(visible.map((f) => [f.id, f.name]));
+  const inIds = `(${ids.map(() => '?').join(',') || 'NULL'})`;
+  const entries = db.prepare(`SELECT * FROM fund_entries WHERE fund_id IN ${inIds} AND status IN ('draft','submitted') ORDER BY created_at DESC, id DESC LIMIT 300`).all(...ids);
+  const items = [];
+  for (const e of entries) {
+    const mine = e.created_by === req.user.id;
+    let act = null;
+    if (e.status === 'submitted' && !mine && can(req, 'fund.approve')) act = 'approve';
+    else if (e.status === 'draft' && mine && can(req, 'fund.entry')) act = 'draft';
+    else if (e.status === 'submitted' && mine) act = 'waiting';
+    if (act) items.push({ type: 'entry', act, fund_id: e.fund_id, fund_name: name[e.fund_id], entry: e });
+  }
+  for (const r of db.prepare(`SELECT * FROM fund_requests WHERE status='pending' AND fund_id IN ${inIds} ORDER BY id DESC`).all(...ids)) {
+    const slot = can(req, 'fund.inspect') && !r.inspector_id ? 'inspector' : can(req, 'fund.approve') && !r.approver_id ? 'approver' : null;
+    if (slot && r.approver_id !== req.user.id && r.inspector_id !== req.user.id) items.push({ type: 'unlock', act: 'sign', fund_id: r.fund_id, fund_name: name[r.fund_id], request: r });
+  }
+  const unclassified = can(req, 'fund.entry')
+    ? db.prepare("SELECT COUNT(*) n FROM vietqr_transactions WHERE dup_of IS NULL AND category='unclassified' AND trans_type='C'").get().n : 0;
+  const byFund = {};
+  for (const it of items) if (it.act !== 'waiting') byFund[it.fund_id] = (byFund[it.fund_id] || 0) + 1;
+  ok(res, { items, unclassified, by_fund: byFund, count: items.filter((x) => x.act !== 'waiting').length + unclassified });
 }));
 
 // Thông báo vòng đời quỹ 14 ngày gần nhất (tự ngừng thu, mở thu lại, khoá / mở khoá) cho Admin sổ quỹ

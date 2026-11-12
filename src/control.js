@@ -179,6 +179,8 @@ for (const [col, def] of [['contact_name', 'TEXT'], ['contact_phone', 'TEXT'], [
 // Mã cộng đồng trên Sáng Kiến Hưng Gia; thành viên cộng đồng đó đăng nhập bằng SKHG được tự tạo tài khoản (users.skhg_id)
 if (!controlColumns('communities').includes('skhg_code')) control.exec('ALTER TABLE communities ADD COLUMN skhg_code TEXT');
 if (!controlColumns('users').includes('skhg_id')) control.exec('ALTER TABLE users ADD COLUMN skhg_id TEXT');
+// Mốc người dùng đã xem thông báo (chuông trên thanh trên cùng)
+if (!controlColumns('users').includes('notices_seen_at')) control.exec('ALTER TABLE users ADD COLUMN notices_seen_at TEXT');
 // Loại mẫu chỉ nạp cho DB mới; root thêm / sửa / xóa loại ở màn Nền tảng
 if (!control.prepare('SELECT COUNT(*) c FROM community_types').get().c) {
   const ins = control.prepare('INSERT INTO community_types(code,name,approver_label,leader_label,sort_order) VALUES (?,?,?,?,?)');

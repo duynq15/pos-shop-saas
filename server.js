@@ -32,7 +32,8 @@ app.locals.port = PORT;
 app.set('trust proxy', 1);
 
 app.use(express.json({ limit: '8mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+// Trình duyệt hỏi lại máy chủ mỗi lần (ETag, 304 nếu không đổi): deploy xong là thấy bản mới, không cần Ctrl+F5
+app.use(express.static(path.join(__dirname, 'public'), { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, data: { status: 'up', time: new Date().toISOString() } }));
 

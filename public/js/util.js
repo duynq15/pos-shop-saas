@@ -39,7 +39,7 @@ const BANK_ALIAS = {
   970422: 'quan doi military', 970407: 'ky thuong', 970416: 'a chau', 970432: 'viet nam thinh vuong',
   970423: 'tien phong', 970403: 'sai gon thuong tin', 970443: 'sai gon ha noi', 970426: 'hang hai', 970449: 'buu dien lien viet',
 };
-const fold = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase().trim();
+export const fold = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase().trim();
 const bankName = (bin, name) => (BANKS.find((b) => b[0] === bin || b[1] === name) || [])[1] || '';
 
 // Ô chọn ngân hàng có tìm kiếm (combobox ARIA). Hành vi gắn một lần cho toàn trang qua ủy quyền sự kiện,
@@ -137,14 +137,6 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault(); e.stopPropagation(); comboClose(input);
   }
 }, true);
-// Dải cảnh báo tự kiểm (GĐ3.5). Chèn vào el; không có cảnh báo thì để trống.
-export async function renderAlerts(el, api) {
-  if (!el) return;
-  let list = [];
-  try { list = await api('/api/alerts'); } catch { list = []; }
-  el.innerHTML = list.map((a) => `<div class="alert-bar ${a.kind}" role="status"><b>Cảnh báo:</b> ${esc(a.message)}
-    <span class="muted">· phát hiện ${esc(String(a.created_at || '').slice(0, 16))}</span></div>`).join('');
-}
 export const fmtDT = (s) => (s ? String(s).slice(0, 16) : '');
 
 export const debounce = (fn, ms = 250) => {
@@ -177,7 +169,7 @@ export function modal(html, opts = {}) {
     box.addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
   }
   const inner = $('#modal-box');
-  inner.className = 'modal-box ' + (opts.wide ? 'wide' : '');
+  inner.className = `modal-box ${opts.wide ? 'wide' : ''} ${opts.cls || ''}`;
   inner.innerHTML = html;
   box.classList.remove('hidden');
   if (opts.focus) setTimeout(() => { const f = $(opts.focus); if (f) f.focus(); }, 40);
