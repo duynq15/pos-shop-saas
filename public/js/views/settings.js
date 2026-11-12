@@ -142,14 +142,14 @@ export default {
       if (el.type === 'checkbox') el.checked = state.settings[el.dataset.s] === '1';
       else el.value = state.settings[el.dataset.s] ?? '';
     }
-    $('#qr-test').innerHTML = '';
+    const qt = $('#qr-test'); if (qt) qt.innerHTML = '';
     renderBackups();
   },
 };
 
-// Sổ quỹ thôn chỉ cần: thông tin thôn, danh sách loại quỹ, xóm / đoàn thể, sao lưu. Tài khoản nhận tiền khai ở từng quỹ.
+// Sổ quỹ thôn chỉ cần: thông tin thôn, sao lưu. Loại quỹ và tài khoản nhận tiền quản lý trên màn Sổ quỹ.
 const FUND_SETTINGS = `
-<div class="view-head"><div><h1>Cài đặt</h1><div class="sub">Thông tin thôn và danh mục dùng khi tạo quỹ</div></div>
+<div class="view-head"><div><h1>Cài đặt</h1><div class="sub">Thông tin thôn và sao lưu dữ liệu</div></div>
   <button class="btn primary" id="btn-save-settings">Lưu cài đặt</button></div>
 <div class="grid2">
   <div class="card">
@@ -159,23 +159,10 @@ const FUND_SETTINGS = `
     <label class="fld">Điện thoại liên hệ<input class="field" data-s="shop_phone" inputmode="tel"></label>
   </div>
   <div class="card">
-    <h3>Loại quỹ</h3>
-    <p class="muted">Mỗi dòng một loại, có thể ghi kèm tính chất sau dấu <b>|</b>: <code>Bắt buộc</code>, <code>Vận động</code> hoặc <code>Tự nguyện</code>.
-      Ví dụ: <code>Quỹ quốc phòng – an ninh | Bắt buộc</code>, <code>Ủng hộ lũ lụt | Vận động</code>, <code>Công đức | Tự nguyện</code>.</p>
-    <textarea class="field fd-textarea" rows="6" data-s="fund_types"></textarea>
-  </div>
-  <div class="card">
-    <h3>Tài khoản nhận tiền</h3>
-    <label class="chk"><input type="checkbox" data-s="fund_shared_account"> Cho phép nhiều quỹ dùng chung một tài khoản ngân hàng</label>
-    <p class="muted">Tắt: mỗi quỹ một tài khoản riêng, tiền về luôn đúng quỹ. Bật: các quỹ nhập cùng số tài khoản, tiền về được chia theo
-      <b>mã nội dung chuyển khoản</b> của từng quỹ (vd KH26, PL26; QR đã điền sẵn). Người nộp gõ thiếu mã thì khoản tiền vào mục
-      <b>Chưa phân loại</b> để thủ quỹ chọn quỹ. Đối soát sao kê tính chung cho cả tài khoản.</p>
-  </div>
-  <div class="card">
-    <h3>Xóm / đoàn thể</h3>
-    <p class="muted">Mỗi dòng một xóm hoặc đoàn thể, ví dụ: Xóm 1, Xóm 2, Hội Phụ nữ, Hội Cựu chiến binh, Chi đoàn thanh niên.
-      Dùng để chọn phạm vi thu của từng quỹ (mặc định là cả thôn).</p>
-    <textarea class="field fd-textarea" rows="6" data-s="fund_groups"></textarea>
+    <h3>Loại quỹ và tài khoản nhận tiền</h3>
+    <p class="muted">Quản lý ngay trên màn <b>Sổ quỹ</b>: nút <b>Loại quỹ</b> (mỗi loại gắn sẵn tính chất Bắt buộc / Vận động / Tự nguyện)
+      và nút <b>Tài khoản nhận tiền</b> (danh sách tài khoản ngân hàng của thôn; nhiều quỹ dùng chung một tài khoản được).</p>
+    <button class="btn" type="button" onclick="window.showView('funds')">Mở Sổ quỹ</button>
   </div>
   <div class="card">
     <h3>Dữ liệu &amp; sao lưu</h3>

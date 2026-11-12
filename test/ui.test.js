@@ -8,7 +8,7 @@ const BASE = process.env.BASE || 'http://localhost:3111';
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, acceptDownloads: true });
   const page = await ctx.newPage();
   const errors = [];
-  page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+  page.on('pageerror', (e) => errors.push('pageerror: ' + e.message + ' @ ' + (e.stack || '').split('\n').slice(1, 3).join(' ')));
   page.on('console', (m) => { if (m.type() === 'error' && !/favicon/.test(m.text()) && !/status of (400|401|403|404)/.test(m.text())) errors.push(m.text()); });
   await page.addInitScript(() => { window.confirm = () => true; window.alert = () => {}; window.prompt = () => 'PL UI'; });
   const api = (url, opts) => page.evaluate(async ([u, o]) => (await fetch(u, o)).json(), [url, opts]);
@@ -296,7 +296,7 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     const loginAs = async (user, pass, sel) => {
       const c = await browser.newContext({ viewport: { width: 1366, height: 900 } });
       const pg = await c.newPage();
-      pg.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+      pg.on('pageerror', (e) => errors.push('pageerror: ' + e.message + ' @ ' + (e.stack || '').split('\n').slice(1, 3).join(' ')));
       await pg.goto(BASE);
       await pg.waitForSelector('#login-screen:not(.hidden)');
       await pg.locator('#login-user').fill(user);
@@ -364,23 +364,36 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     // ---------- Sổ quỹ (GĐ2.8) ----------
     ok('Funds menu present', navs.includes('funds'));
     await quy.pg.evaluate(() => window.showView('funds')); await quy.pg.waitForTimeout(500);
-    await quy.pg.locator('#fd-new-fund').click(); await quy.pg.waitForTimeout(300);
-    ok('Fund form has no code field, has fund type + contribution', (await quy.pg.locator('#fd-f-code').count()) === 0
-      && (await quy.pg.locator('#fd-f-type option').count()) >= 2 && (await quy.pg.locator('#fd-f-contrib option').count()) === 4);
-    ok('Fund form offers cash / transfer / both payment methods', (await quy.pg.locator('#fd-f-pay option').count()) === 3
-      && (await quy.pg.locator('#fd-f-pay').inputValue()) === 'both');
+    // Danh sách tài khoản nhận tiền của thôn: thêm một tài khoản rồi chọn cho quỹ
+    await quy.pg.locator('#fd-accounts').click(); await quy.pg.waitForTimeout(400);
+    await quy.pg.locator('#fd-acc-add').click(); await quy.pg.waitForTimeout(200);
+    await quy.pg.locator('#fd-acc-bin').fill('quân đội');
+    ok('Bank search by alias, no diacritics needed', (await quy.pg.locator('#fd-acc-bin-list [role=option]').allInnerTexts()).join('|').startsWith('MB Bank'));
+    await quy.pg.locator('#fd-acc-bin').press('ArrowDown'); await quy.pg.locator('#fd-acc-bin').press('Enter');
+    await quy.pg.locator('#fd-acc-no').fill('UIQUYACC'); await quy.pg.locator('#fd-acc-holder').fill('Ban quan ly');
+    await quy.pg.locator('#fd-acc-save').click(); await quy.pg.waitForTimeout(600);
+    ok('Account added to the village list', (await quy.pg.locator('.fd-acc-list').innerText()).includes('UIQUYACC'));
+    await quy.pg.locator('#fd-acc-close').click(); await quy.pg.waitForTimeout(200);
+    await quy.pg.locator('#fd-new-fund').click(); await quy.pg.waitForTimeout(400);
+    ok('Fund form: no code / scope field; type, contribution, 3 payment methods', (await quy.pg.locator('#fd-f-code, #fd-f-category').count()) === 0
+      && (await quy.pg.locator('#fd-f-type option').count()) >= 2 && (await quy.pg.locator('#fd-f-contrib option').count()) === 4
+      && (await quy.pg.locator('#fd-f-pay [data-v]').count()) === 3 && (await quy.pg.locator('#fd-f-pay .active').getAttribute('data-v')) === 'both');
+    await quy.pg.locator('#fd-f-type').selectOption('Công đức');
+    ok('Nature follows the fund type (not typed by hand)', (await quy.pg.locator('#fd-f-nature-view').innerText()).includes('Tự nguyện') && (await quy.pg.locator('#fd-f-nature').count()) === 0);
+    await quy.pg.locator('#fd-f-pay [data-v="cash"]').click();
+    ok('Cash only hides account picker', await quy.pg.locator('#fd-f-acc-wrap').isHidden());
+    await quy.pg.locator('#fd-f-pay [data-v="both"]').click();
     await quy.pg.locator('#fd-f-contrib').selectOption('voluntary');
     ok('Voluntary hides amount field', await quy.pg.locator('#fd-f-target-wrap').isHidden());
     await quy.pg.locator('#fd-f-name').fill('Quỹ UI');
-    await quy.pg.locator('#fd-f-account').fill('UIQUYACC');
-    await quy.pg.locator('#fd-f-bin').fill('quân đội');
-    ok('Bank search by alias, no diacritics needed', (await quy.pg.locator('#fd-f-bin-list [role=option]').allInnerTexts()).join('|').startsWith('MB Bank'));
-    await quy.pg.locator('#fd-f-bin').press('ArrowDown'); await quy.pg.locator('#fd-f-bin').press('Enter');
-    await quy.pg.locator('#fd-f-save').click(); await quy.pg.waitForTimeout(500);
-    ok('Fund created and listed', (await quy.pg.locator('#fd-tabs').innerText()).includes('Quỹ UI'));
+    await quy.pg.locator('#fd-f-acc').selectOption(await quy.pg.locator('#fd-f-acc option', { hasText: 'UIQUYACC' }).getAttribute('value'));
+    await quy.pg.locator('#fd-f-save').click(); await quy.pg.waitForTimeout(700);
+    ok('Fund created, selected and shown with info tab', (await quy.pg.locator('#fd-tabs').innerText()).includes('Quỹ UI')
+      && (await quy.pg.locator('.fd-title h2').innerText()) === 'Quỹ UI' && await quy.pg.locator('[data-pane="info"]').isVisible());
+    ok('Edit button visible on the fund header', await quy.pg.locator('#fd-edit-fund').isVisible());
     const uiFund = (await quy.pg.evaluate(async () => (await (await fetch('/api/funds')).json()).data)).find((f) => f.name === 'Quỹ UI');
-    ok('Fund code generated from name', uiFund && uiFund.code === 'quy-ui' && uiFund.contribution === 'voluntary', JSON.stringify(uiFund && [uiFund.code, uiFund.contribution]));
-    ok('Bank search saves BIN + name', uiFund && uiFund.bank_bin === '970422' && uiFund.bank_name === 'MB Bank', JSON.stringify(uiFund && [uiFund.bank_bin, uiFund.bank_name]));
+    ok('Fund code generated from name', uiFund && uiFund.code === 'quy-ui' && uiFund.contribution === 'voluntary' && uiFund.nature === 'voluntary', JSON.stringify(uiFund && [uiFund.code, uiFund.contribution, uiFund.nature]));
+    ok('Fund takes account + bank from the list', uiFund && uiFund.bank_account === 'UIQUYACC' && uiFund.bank_bin === '970422' && uiFund.bank_name === 'MB Bank', JSON.stringify(uiFund && [uiFund.bank_bin, uiFund.bank_name]));
     await quy.pg.locator('#fd-in').click(); await quy.pg.waitForTimeout(300);
     await quy.pg.locator('#fd-e-amount').pressSequentially('50000');
     ok('Money input formats thousands', (await quy.pg.locator('#fd-e-amount').inputValue()) === '50.000');
@@ -410,27 +423,33 @@ const BASE = process.env.BASE || 'http://localhost:3111';
       await quy.pg.locator('#fd-rc-diff').innerText());
     await quy.pg.setViewportSize({ width: 400, height: 820 }); await quy.pg.waitForTimeout(300);
     ok('Funds: no horizontal overflow 400px', !(await quy.pg.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
-    ok('Funds: mobile action bar visible', await quy.pg.locator('.fd-bar').isVisible());
+    ok('Funds mobile: detail open after creating, action bar visible', await quy.pg.locator('.fd-title h2').isVisible() && await quy.pg.locator('.fd-bar').isVisible());
+    await quy.pg.locator('#fd-back').click(); await quy.pg.waitForTimeout(200);
+    ok('Funds mobile: back shows the fund list', await quy.pg.locator('#fd-tabs').isVisible() && await quy.pg.locator('#fd-body').isHidden());
+    ok('Funds mobile list: no horizontal overflow', !(await quy.pg.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2)));
+    await quy.pg.locator('.fd-item', { hasText: 'Quỹ UI' }).click(); await quy.pg.waitForTimeout(500);
+    ok('Funds mobile: tap a fund opens its detail', await quy.pg.locator('.fd-title h2').isVisible() && await quy.pg.locator('#fd-tabs').isHidden());
     const fundCats = await quy.pg.evaluate(async () => (await (await fetch('/api/community/categories')).json()).data);
     ok('Platform categories available to community sellers', fundCats.length === 2, JSON.stringify(fundCats));
     await quy.pg.setViewportSize({ width: 1280, height: 820 });
     await quy.pg.evaluate(() => window.showView('settings')); await quy.pg.waitForTimeout(500);
-    ok('Fund settings: fund types + groups, no sales items', (await quy.pg.locator('[data-s="fund_types"]').count()) === 1
-      && (await quy.pg.locator('[data-s="fund_groups"]').count()) === 1
+    ok('Fund settings: no xóm / đoàn thể, no sales items', (await quy.pg.locator('[data-s="fund_groups"], [data-s="fund_types"]').count()) === 0
       && (await quy.pg.locator('[data-s="invoice_prefix"], [data-s="vat_mode"], [data-s="label_width"], #btn-lan-settings').count()) === 0);
-    await quy.pg.locator('[data-s="fund_groups"]').fill('Xóm 1\nHội Phụ nữ');
-    await quy.pg.locator('#btn-save-settings').click(); await quy.pg.waitForTimeout(400);
     await quy.pg.evaluate(() => window.showView('users')); await quy.pg.waitForTimeout(500);
     await quy.pg.locator('#u-new').click(); await quy.pg.waitForTimeout(300);
     ok('Fund users form: no PIN, role has description', (await quy.pg.locator('#uf-pin').count()) === 0
       && (await quy.pg.locator('#uf-role-desc').innerText()).length > 5);
     await quy.pg.locator('#uf-close').click();
     await quy.pg.evaluate(() => window.showView('funds')); await quy.pg.waitForTimeout(500);
-    await quy.pg.locator('#fd-new-fund').click(); await quy.pg.waitForTimeout(400);
-    ok('Fund scope lists groups from settings', (await quy.pg.locator('#fd-f-category option').allInnerTexts()).join('|') === 'Cả thôn|Xóm 1|Hội Phụ nữ');
-    await quy.pg.locator('#fd-f-close').click();
+    await quy.pg.locator('#fd-types').click(); await quy.pg.waitForTimeout(400);
+    ok('Fund types editor: one row per type with nature', (await quy.pg.locator('.fd-type-row').count()) >= 3);
+    await quy.pg.locator('#fd-ty-add').click(); await quy.pg.locator('.fd-type-row:last-child [data-k=name]').fill('Ủng hộ màn hình LED');
+    await quy.pg.locator('.fd-type-row:last-child [data-k=nature]').selectOption('campaign');
+    await quy.pg.locator('#fd-ty-save').click(); await quy.pg.waitForTimeout(500);
+    ok('Fund types saved', (await quy.pg.evaluate(async () => (await (await fetch('/api/settings')).json()).data.fund_types)).includes('Ủng hộ màn hình LED | Vận động'));
+    await quy.pg.locator('.fd-item', { hasText: 'Quỹ UI' }).click(); await quy.pg.waitForTimeout(500);
     // Vòng đời: Đang thu -> Ngừng thu (vẫn lập phiếu chi, không thu) -> Mở thu lại
-    ok('State banner shows collecting', (await quy.pg.locator('.fd-state').innerText()).includes('Đang thu'));
+    ok('Fund header shows collecting', (await quy.pg.locator('.fd-tags').innerText()).includes('Đang thu') && (await quy.pg.locator('#fd-stop').count()) === 1);
     await quy.pg.locator('#fd-stop').click(); await quy.pg.waitForTimeout(500);
     ok('Stop modal shows summary', (await quy.pg.locator('.fd-sum').innerText()).includes('50.000'));
     await quy.pg.locator('#fd-st-save').click(); await quy.pg.waitForTimeout(700);
@@ -440,9 +459,10 @@ const BASE = process.env.BASE || 'http://localhost:3111';
     await quy.pg.locator('#fd-rs-date').fill('2999-12-31'); await quy.pg.locator('#fd-rs-reason').fill('Gia hạn');
     await quy.pg.locator('#fd-rs-save').click(); await quy.pg.waitForTimeout(700);
     ok('Resumed: round 2 with new transfer content', (await quy.pg.locator('.fd-state').innerText()).includes('Đợt 2'));
-    await quy.pg.locator('#fd-docs').click(); await quy.pg.waitForTimeout(400);
-    ok('Documents modal opens with upload', (await quy.pg.locator('#fd-dc-file').count()) === 1);
-    await quy.pg.locator('#fd-dc-close').click();
+    await quy.pg.locator('#fd-subtabs [data-tab="info"]').click(); await quy.pg.waitForTimeout(500);
+    ok('Info tab lists documents with upload', (await quy.pg.locator('#fd-dc-file').count()) === 1);
+    await quy.pg.locator('#fd-subtabs [data-tab="houses"]').click(); await quy.pg.waitForTimeout(500);
+    ok('Households tab renders inline', (await quy.pg.locator('#fd-hh-body').innerText()).length > 5);
     await quy.c.close();
 
     // ================= GĐ4: Nhận tiền nhanh (người bán, điện thoại) =================

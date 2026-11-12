@@ -448,9 +448,19 @@ function ensureSchema(conn, { withDemo = false } = {}) {
   ensureColumn('fund_entries', 'round', 'INTEGER');
   ensureColumn('fund_entries', 'payer_group', 'TEXT'); // xóm / địa chỉ người nộp
   ensureColumn('fund_entries', 'household_code', 'TEXT'); // mã hộ (danh sách hộ đồng bộ từ Hành chính)
-  // Nhiều quỹ cùng thôn được dùng chung một tài khoản khi bật Cài đặt "fund_shared_account" (kiểm ở funds.js);
+  // Nhiều quỹ cùng thôn được dùng chung một tài khoản (mỗi quỹ một mã nội dung chuyển khoản, kiểm ở funds.js);
   // giữa các thôn / cửa hàng vẫn không trùng. Bỏ ràng buộc duy nhất cũ.
   conn.exec('DROP INDEX IF EXISTS idx_funds_account');
+  // Danh sách tài khoản nhận tiền của thôn: quỹ chọn tài khoản trong danh sách (nhiều quỹ chọn chung một tài khoản được,
+  // mỗi quỹ một mã nội dung chuyển khoản). Lần đầu tạo bảng: nạp các tài khoản quỹ đang dùng.
+  if (!conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fund_accounts'").get()) {
+    conn.exec(`CREATE TABLE fund_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bank_account TEXT NOT NULL UNIQUE, bank_bin TEXT, bank_name TEXT, account_holder TEXT, label TEXT,
+      created_at TEXT DEFAULT (datetime('now','localtime')));
+      INSERT OR IGNORE INTO fund_accounts(bank_account,bank_bin,bank_name,account_holder)
+        SELECT bank_account, bank_bin, bank_name, account_holder FROM funds WHERE bank_account IS NOT NULL AND bank_account<>'' ORDER BY id;`);
+  }
   conn.exec(`
     -- Danh sách hộ của thôn, đồng bộ từ trang Hành chính (thon-thong-minh, GET /tich-hop/so-quy/ho).
     -- phone_keys: HMAC(khoá tích hợp, SĐT) của thành viên, để App tìm hộ của người đăng nhập SKHG mà không lưu SĐT.
@@ -560,7 +570,7 @@ function ensureSchema(conn, { withDemo = false } = {}) {
     vqr_terminal_code: '', vqr_exposed_username: '', vqr_exposed_password: '', vqr_secret_key: '',
     vqr_mock_autopay: '0',
     // Sổ quỹ thôn: danh sách loại quỹ và xóm / đoàn thể (mỗi dòng một mục), thôn tự sửa trong Cài đặt
-    fund_shared_account: '0', fund_types: 'Quỹ chung | Bắt buộc\nQuỹ quốc phòng – an ninh | Bắt buộc\nQuỹ phòng chống thiên tai | Bắt buộc\nCông đức | Tự nguyện\nKhuyến học | Vận động\nThiện nguyện | Tự nguyện', fund_groups: '',
+    fund_types: 'Quỹ chung | Bắt buộc\nQuỹ quốc phòng – an ninh | Bắt buộc\nQuỹ phòng chống thiên tai | Bắt buộc\nCông đức | Tự nguyện\nKhuyến học | Vận động\nThiện nguyện | Tự nguyện', fund_groups: '',
   };
   const insSetting = conn.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
   for (const [k, v] of Object.entries(defaults)) insSetting.run(k, v);

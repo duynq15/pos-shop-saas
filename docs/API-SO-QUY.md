@@ -116,7 +116,7 @@ Ví dụ trả về (rút gọn):
 | `nature`, `nature_label` | Tính chất: `mandatory` Bắt buộc, `campaign` Vận động, `voluntary` Tự nguyện (`null` nếu chưa chọn) |
 | `payment_methods`, `payment_methods_label` | Hình thức nộp: `both` Cả hai hình thức, `cash` Tiền mặt, `transfer` Chuyển khoản |
 | `accept_cash`, `accept_transfer` | `true` nếu người dân được nộp tiền mặt / chuyển khoản. Quỹ `cash` không có QR; quỹ `transfer` không nhận tiền mặt |
-| `category` | Phạm vi thu: `Cả thôn` hoặc tên xóm / đoàn thể. `null` ở quỹ cũ = cả thôn |
+| `category` | Không còn dùng (đã bỏ phạm vi thu theo xóm / đoàn thể); giữ để tương thích, có thể `null` |
 | `contribution` | Cách đóng: `household` theo hộ, `person` theo nhân khẩu, `voluntary` tùy tâm, `goal` huy động theo mục tiêu |
 | `target_amount` | Mức mỗi hộ / mỗi người / tổng mục tiêu theo `contribution`. `null` khi tùy tâm |
 | `period` | Chu kỳ của mức đóng: `year` mỗi năm, `month` mỗi tháng, `null` một lần cho đợt thu |
@@ -334,7 +334,6 @@ PATCH /api/funds/<id>
   "payment_methods": "both",
   "content": "Mục đích, căn cứ, đối tượng…",
   "transfer_code": "KH26",
-  "category": "Xóm 1",
   "contribution": "person",
   "target_amount": 50000,
   "period": "year",
@@ -352,7 +351,7 @@ PATCH /api/funds/<id>
 - `code` không bắt buộc. Bỏ trống thì hệ thống tự sinh từ tên (ví dụ `quy-khuyen-hoc-2026`).
 - `contribution` thuộc `household`, `person`, `voluntary`, `goal`. Với `voluntary` thì `target_amount` luôn là `null`.
 - `period`: `year` / `month` / `null` (một lần). `managed_by`: đơn vị quản lý, tối đa 120 ký tự.
-- Tài khoản nhận tiền: mặc định mỗi quỹ một tài khoản riêng. Bật **Cài đặt › Cho phép nhiều quỹ dùng chung một tài khoản** (`PUT /api/settings { "fund_shared_account": "1" }`) thì nhiều quỹ của thôn nhập cùng số tài khoản; mỗi quỹ khi đó bắt buộc có `transfer_code` riêng. Tiền về được chia theo mã đó trong nội dung chuyển khoản (QR đã điền sẵn); không có mã thì vào mục Chưa phân loại để thủ quỹ chọn quỹ. Không bao giờ trùng tài khoản với thôn khác hay cửa hàng.
+- Tài khoản nhận tiền: thôn quản lý **danh sách tài khoản** (`/api/fund-accounts`, mục 2.8); quỹ chọn tài khoản bằng `account_id`. Nhiều quỹ chọn chung một tài khoản được, mỗi quỹ khi đó bắt buộc có `transfer_code` riêng. Tiền về được chia theo mã đó trong nội dung chuyển khoản (QR đã điền sẵn); không có mã thì vào mục Chưa phân loại để thủ quỹ chọn quỹ. Không bao giờ trùng tài khoản với thôn khác hay cửa hàng. Vẫn nhận `bank_account` / `bank_bin` / `bank_name` / `account_holder` trực tiếp như trước (tài khoản tự vào danh sách).
 - `nature`: `mandatory` / `campaign` / `voluntary`. `transfer_code`: mã ngắn cho nội dung chuyển khoản (bỏ trống thì tự tạo).
 - `payment_methods`: `both` (mặc định, người dân nộp tiền mặt hoặc chuyển khoản), `cash` (chỉ tiền mặt, không tạo QR), `transfer` (chỉ chuyển khoản).
 - `content`: nội dung chi tiết dạng văn bản nhiều dòng (tối đa 20.000 ký tự), giữ nguyên xuống dòng. Tài liệu đính kèm gửi qua API tài liệu bên dưới.
@@ -453,3 +452,17 @@ GET  /api/funds/<id>/households       # từng hộ: due, paid, remaining, exemp
 - Ghi thu cho một hộ: thêm `household_code` khi `POST /api/funds/<id>/entries` hoặc cột **Mã hộ** khi nhập Excel (tên chủ hộ, xóm tự điền).
 - Quỹ: `exempt` = các diện hộ được miễn, mỗi dòng một diện (vd `Hộ nghèo`).
 - Máy chủ cần `LANGSO_HANHCHINH_API` (vd `https://hanhchinh.xaphuongvietnam.vn/api`) và `LANGSO_KHOA_TICH_HOP` (trùng `LS_KHOA_TICH_HOP_SO_QUY` bên Hành chính).
+
+### 2.8. Danh mục: tài khoản nhận tiền, loại quỹ
+
+```
+GET    /api/fund-accounts            # danh sách tài khoản + các quỹ đang dùng (funds: id, name, transfer_code, state)
+POST   /api/fund-accounts            { bank_account, bank_bin, bank_name, account_holder, label? }    # fund.manage
+PATCH  /api/fund-accounts/<id>       # sửa ngân hàng / chủ TK / tên gọi: áp luôn cho quỹ đang dùng (trừ quỹ đã khoá sổ)
+DELETE /api/fund-accounts/<id>       # chỉ khi chưa quỹ nào dùng
+PUT    /api/fund-types               { types: [{ name, nature: "mandatory" | "campaign" | "voluntary" }] }  # fund.manage
+```
+
+- Số tài khoản đang dùng cho quỹ không đổi được (thêm tài khoản mới rồi chọn cho quỹ).
+- Loại quỹ lưu ở `settings.fund_types`, mỗi dòng `Tên | Tính chất`. Form quỹ lấy tính chất theo loại đã chọn.
+
