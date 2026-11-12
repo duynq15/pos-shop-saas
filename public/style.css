@@ -451,7 +451,7 @@ label.fld .combo .field{margin-top:0}
   .fd-head-btns .fd-desk-inline{display:none!important}
   .fd-manage{display:block}
 }
-.fd-layout{display:grid;grid-template-columns:320px minmax(0,1fr);gap:20px;align-items:start}
+.fd-layout{display:block}
 .fd-list{position:sticky;top:12px;padding:12px;display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 24px);background:#EDF3FC;border-color:var(--line-2)}
 .fd-search{min-height:40px}
 .fd-items{display:flex;flex-direction:column;gap:8px;overflow:auto;min-height:0}
@@ -467,7 +467,7 @@ label.fld .combo .field{margin-top:0}
 .fd-item .m .badge{font-size:13px;line-height:20px;padding:0 8px}
 .fd-item .b{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;align-self:center;color:var(--heading)}
 .fd-item.active .b{color:var(--primary-d)}
-.fd-back{display:none;margin-bottom:12px}
+.fd-back{display:inline-flex;margin-bottom:12px}
 .fd-head{margin-bottom:16px;padding:18px 20px}
 .fd-head-top{display:flex;gap:12px 20px;justify-content:space-between;align-items:flex-start;flex-wrap:wrap}
 .fd-title{min-width:0;flex:1 1 280px}
@@ -476,6 +476,61 @@ label.fld .combo .field{margin-top:0}
 .fd-head-acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .fd-head-acts .fd-menu>div{left:auto;right:0}
 .fd-head .fd-state{margin:14px 0 0;padding:10px 14px;border-radius:var(--radius-sm);background:#F7FAFE;border:1px solid var(--line)}
+
+/* Trang tổng quan Sổ quỹ: 4 thẻ số liệu + lưới quỹ 2 cột */
+.fd-home{display:flex;flex-direction:column;gap:20px}
+.fd-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.fd-stat{display:flex;align-items:center;gap:14px;min-width:0;padding:16px 18px;border:1px solid var(--line);border-radius:var(--radius);background:#fff;box-shadow:var(--shadow);text-align:left;font:inherit;color:var(--text)}
+.fd-stat-ic{flex:none;width:48px;height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;background:var(--primary-soft);color:var(--primary)}
+.fd-stat-ic .ico{width:24px;height:24px}
+.fd-stat-in .fd-stat-ic{background:var(--ok-soft);color:var(--ok)}
+.fd-stat-out .fd-stat-ic{background:var(--danger-soft);color:var(--danger)}
+.fd-stat-task .fd-stat-ic{background:var(--warn-soft);color:var(--warn)}
+.fd-stat-body{display:flex;flex-direction:column;gap:2px;min-width:0}
+.fd-stat-l{font-size:15px;font-weight:500;color:var(--muted)}
+.fd-stat-v{font:700 24px/1.25 var(--font-head);font-variant-numeric:tabular-nums;color:var(--heading);letter-spacing:-.01em;white-space:nowrap}
+.fd-stat-total .fd-stat-v{color:var(--primary-d)}
+.fd-stat-in.has .fd-stat-v{color:var(--ok)}
+.fd-stat-out.has .fd-stat-v{color:var(--danger)}
+.fd-stat-task{border-color:var(--warn-line);background:var(--warn-soft);cursor:pointer}
+.fd-stat-task:not(.has){border-color:var(--line);background:#fff;cursor:default}
+.fd-stat-go{font-size:15px;font-weight:600;color:var(--primary)}
+.fd-stat-task:not(.has) .fd-stat-go{color:var(--muted);font-weight:500}
+.fd-home-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px 20px;flex-wrap:wrap}
+.fd-home-head h2{margin:0;font-size:22px;color:var(--heading)}
+.fd-home-sub{margin:2px 0 0;font-size:15px}
+.fd-home-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.fd-home-filters .fd-search-wrap{flex:1 1 240px;min-width:180px}
+.fd-home-filters .field{min-height:42px;font-size:15px}
+.fd-home-filters select.field{width:auto;flex:1 1 160px;min-width:160px}
+.fd-funds{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.fd-fund{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"body qr" "acts qr";column-gap:16px;row-gap:10px;align-items:start;padding:18px;border:1px solid var(--line);border-left:4px solid var(--primary-line);border-radius:var(--radius);background:#fff;box-shadow:0 2px 4px rgba(30,58,138,.04),0 10px 24px rgba(30,58,138,.06);cursor:pointer;transition:border-color var(--ease),box-shadow var(--ease),transform var(--ease)}
+.fd-fund:not(.has-qr){grid-template-columns:minmax(0,1fr);grid-template-areas:"body" "acts"}
+.fd-fund.state-collecting{border-left-color:var(--primary)}
+.fd-fund.state-stopped{border-left-color:var(--warn)}
+.fd-fund.state-locked{border-left-color:#94A3B8}
+.fd-fund:hover{border-color:var(--primary-line);border-left-color:var(--primary);box-shadow:0 4px 8px rgba(30,58,138,.06),0 16px 36px rgba(30,58,138,.14)}
+.fd-fund:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.fd-fund-body{grid-area:body;display:flex;flex-direction:column;gap:8px;min-width:0}
+.fd-fund-qr{grid-area:qr;display:flex;flex-direction:column;align-items:center;gap:6px;width:152px;padding:6px;border:1px solid var(--line);border-radius:12px;background:#fff;cursor:zoom-in;align-self:start}
+.fd-fund-qr img{width:100%;height:auto;display:block;border-radius:8px}
+.fd-fund-qr:hover{border-color:var(--primary-line);box-shadow:var(--shadow)}
+.fd-qr-cap{font-size:13px;font-weight:600;color:var(--muted);text-align:center}
+.fd-qr-load{display:flex;align-items:center;justify-content:center;width:100%;min-height:140px;font-size:13px;color:var(--muted);text-align:center}
+.fd-fund-tags{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.fd-fund-name{margin:0;font-size:20px;line-height:1.3;color:var(--heading);font-weight:700}
+.fd-fund-desc{margin:0;font-size:15px;line-height:1.5;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.fd-fund-status{margin:0;font-size:15px;font-weight:500;color:var(--text)}
+.fd-fund-bal{display:flex;flex-direction:column;gap:1px;margin-top:2px}
+.fd-fund-bal span{font-size:14px;color:var(--muted)}
+.fd-fund-bal b{font:800 26px/1.2 var(--font-head);font-variant-numeric:tabular-nums;color:var(--heading)}
+.fd-fund-progress{height:8px;border-radius:99px;background:#E6EDF8;overflow:hidden}
+.fd-fund-progress span{display:block;height:100%;border-radius:99px;background:var(--ok)}
+.fd-fund-goal{font-size:14px;color:var(--muted);margin-top:-4px}
+.fd-fund-meta{margin:0;font-size:15px;color:var(--muted)}
+.fd-fund-acts{grid-area:acts;display:flex;gap:8px;margin-top:2px}
+.fd-fund-acts .btn{flex:1;height:42px;font-size:15px}
+
 .fd-progress{display:flex;flex-direction:column;gap:6px;margin-top:14px;font-size:15px}
 .fd-bar-track{height:10px;border-radius:99px;background:#E6EDF8;overflow:hidden}
 .fd-bar-track span{display:block;height:100%;background:var(--ok);border-radius:99px}
@@ -527,11 +582,7 @@ div.fld{display:block;margin-bottom:14px;font-size:15px;font-weight:600}
   #view-funds .view-head .sub{display:none}
   #view-funds .fd-head-btns .btn{height:40px;padding:0 12px;font-size:15px}
   .fd-layout{display:block}
-  .fd-list{position:static;max-height:none;padding:10px}
-  .fd-layout .fd-detail{display:none}
-  .fd-layout.show-detail .fd-list{display:none}
-  .fd-layout.show-detail .fd-detail{display:block}
-  .fd-back{display:inline-flex}
+  .fd-layout .fd-detail{display:block}
   .fd-layout .btn.sm{height:44px} /* vùng bấm đủ lớn cho ngón tay */
   .fd-open .view-head{display:none}
   .fd-head{padding:12px 14px}
@@ -702,6 +753,28 @@ div.fld{display:block;margin-bottom:14px;font-size:15px;font-weight:600}
   .fd-kpi-more{display:none}
   #fd-subtabs{gap:14px}
   #fd-subtabs .tab{font-size:15px;padding:10px 0}
+  .fd-home{gap:14px}
+  .fd-stats{grid-template-columns:1fr 1fr;gap:8px}
+  .fd-stat{padding:12px;gap:8px;border-radius:14px;align-items:flex-start;flex-direction:column}
+  .fd-stat-ic{width:38px;height:38px;border-radius:12px}
+  .fd-stat-ic .ico{width:20px;height:20px}
+  .fd-stat-l{font-size:13px}
+  .fd-stat-v{font-size:18px;white-space:nowrap}
+  .fd-home-head{align-items:flex-start;flex-direction:column;gap:10px}
+  .fd-home-head h2{font-size:20px}
+  .fd-home-filters{width:100%;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .fd-home-filters .fd-search-wrap{grid-column:1/-1}
+  .fd-home-filters .fd-search-wrap,.fd-home-filters select.field{width:100%;min-width:0}
+  .fd-home-filters #fd-home-sort{grid-column:1/-1}
+  .fd-funds{grid-template-columns:1fr;gap:12px}
+  .fd-fund{padding:16px;grid-template-columns:1fr;grid-template-areas:"body" "acts"}
+  .fd-fund.has-qr{grid-template-columns:minmax(0,1fr) 118px;grid-template-areas:"body qr" "acts acts";column-gap:12px}
+  .fd-fund-qr{width:118px;justify-self:end}
+  .fd-qr-load{min-height:106px;font-size:12px}
+  .fd-qr-cap{font-size:12px}
+  .fd-fund-name{font-size:18px}
+  .fd-fund-bal b{font-size:22px}
+  .fd-fund-acts .btn{height:44px}
   .fd-le-tools .seg,.fd-rp-tools .seg{width:100%}
   .fd-le-filters{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .fd-filter .field{width:100%;min-width:0}

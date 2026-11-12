@@ -35,6 +35,8 @@ let tab = null; // 'info' | 'ledger' | 'houses' | 'report'
 let view = null; // 'fund' | 'inbox'; null = chưa chọn (mở lần đầu: có việc thì vào Cần xử lý)
 let inbox = { items: [], unclassified: 0, by_fund: {}, count: 0 };
 let ledger = { fundId: null, months: 3, q: '', kind: '', status: '', source: '', page: 1, pageSize: 20, entries: [], from: '' };
+let overview = { total_balance: 0, income_month: 0, expense_month: 0 };
+let fundView = { q: '', status: '', type: '', sort: 'recent' };
 let lastReport = null;
 
 function fileToDataUrl(file) {
@@ -76,11 +78,6 @@ export default {
     </div></details>
   </div></div>
 <div class="fd-layout" id="fd-layout">
-  <aside class="fd-list card" aria-label="Danh sách quỹ">
-    <button class="fd-inbox-btn" id="fd-inbox-btn" hidden></button>
-    <div class="fd-search-wrap">${icon('search')}<input class="field fd-search" id="fd-search" type="search" placeholder="Tìm quỹ" aria-label="Tìm quỹ"></div>
-    <nav id="fd-tabs" class="fd-items" aria-label="Chọn quỹ"></nav>
-  </aside>
   <section class="fd-detail" id="fd-body"><div class="card fd-empty">Đang tải…</div></section>
 </div>`;
     $('#fd-new-fund').onclick = () => openFundForm(null);
@@ -88,28 +85,21 @@ export default {
     $('#fd-accounts').onclick = () => openAccounts();
     $('#fd-types-m').onclick = () => openTypes();
     $('#fd-accounts-m').onclick = () => openAccounts();
-    $('#fd-tabs').onclick = (e) => {
-      const b = e.target.closest('[data-id]'); if (!b) return;
-      activeId = Number(b.dataset.id); view = 'fund'; tab = null; openDetailPane(); renderChips(); render();
-    };
-    $('#fd-inbox-btn').onclick = () => { view = 'inbox'; openDetailPane(); renderChips(); render(); };
-    $('#fd-search').oninput = () => renderChips();
     // Chuông thông báo bấm vào một mục: mở đúng quỹ hoặc hộp Cần xử lý
     window.addEventListener('funds:goto', () => { if (funds.length) goto(); });
   },
 
   async show() {
-    const first = view === null;
-    pane(false); await loadFunds();
-    if (first && view === 'inbox') openDetailPane(); // điện thoại: có việc thì mở thẳng Cần xử lý như máy tính
+    await loadFunds();
     goto();
   },
 };
 
 let renderGen = 0;
-// Điện thoại: danh sách và chi tiết là hai màn; máy tính: hai cột cạnh nhau
-const pane = (open) => { $('#fd-layout').classList.toggle('show-detail', open); $('#fd-layout').closest('.view')?.classList.toggle('fd-open', open); };
+// Điện thoại: vào chi tiết thì ẩn tiêu đề trang để nhường chỗ cho nội dung
+const pane = (open) => { $('#fd-layout')?.closest('.view')?.classList.toggle('fd-open', open); };
 const openDetailPane = () => { pane(true); window.scrollTo({ top: 0 }); };
+const goHome = () => { view = 'home'; activeId = null; pane(false); render(); window.scrollTo({ top: 0 }); };
 
 async function goto() {
   const t = window.__openFund;
@@ -117,7 +107,7 @@ async function goto() {
   window.__openFund = null;
   if (t === 'inbox') view = 'inbox';
   else { activeId = t; view = 'fund'; tab = null; }
-  openDetailPane(); renderChips(); await render();
+  openDetailPane(); await render();
 }
 
 async function loadInbox() {
@@ -125,46 +115,176 @@ async function loadInbox() {
 }
 
 async function loadFunds() {
-  [funds] = await Promise.all([api('/api/funds'), loadInbox()]);
+  const [f, ov] = await Promise.all([api('/api/funds'), api('/api/funds/overview').catch(() => null), loadInbox()]);
+  funds = f;
+  overview = ov || { total_balance: funds.reduce((s, x) => s + (Number(x.balance) || 0), 0), income_month: 0, expense_month: 0 };
   window.dispatchEvent(new Event('notices:changed')); // chuông cập nhật theo việc vừa xử lý
   for (const id of ['fd-new-fund', 'fd-manage', 'fd-types', 'fd-accounts']) $('#' + id).classList.toggle('hidden', !can('fund.manage'));
   if (!activeId || !funds.some((f) => f.id === activeId)) activeId = (funds.find((f) => f.state === 'collecting') || funds[0])?.id ?? null;
-  if (view === null) view = inbox.count ? 'inbox' : 'fund';
-  renderChips();
+  if (view === null) view = 'home'; // mở Sổ quỹ là vào danh sách quỹ; việc cần xử lý vẫn ở thẻ số liệu và chuông
+  if (view === 'fund' && !funds.some((f) => f.id === activeId)) view = 'home';
+  pane(view !== 'home');
   await render();
 }
 
-// Danh sách quỹ chia nhóm theo trạng thái; nhóm Khoá sổ thu gọn (ít khi mở)
-const GROUPS = [['collecting', 'Đang thu'], ['stopped', 'Ngừng thu'], ['locked', 'Khoá sổ']];
 const daysLeft = (f) => (f.end_date ? Math.round((new Date(f.end_date) - new Date(today())) / 864e5) : null);
 const goalPct = (f, got) => (f.contribution === 'goal' && f.target_amount ? Math.min(100, Math.round((got / f.target_amount) * 100)) : null);
-function fundItem(f) {
-  const on = view === 'fund' && f.id === activeId;
-  const n = inbox.by_fund?.[f.id];
-  const d = f.state === 'collecting' ? daysLeft(f) : null;
-  const pct = goalPct(f, f.collected || 0);
-  const due = d == null ? '' : `<span class="${d < 0 ? 'fd-late' : d <= 7 ? 'fd-soon' : ''}">${d < 0 ? 'quá hạn thu' : d === 0 ? 'hết hạn hôm nay' : `còn ${d} ngày`}</span>`;
-  return `<button class="fd-item state-${f.state} ${on ? 'active' : ''}" data-id="${f.id}" ${on ? 'aria-current="true"' : ''}>
-    <span class="n">${esc(f.name)}${n ? ` <span class="fd-dot" aria-label="${n} việc cần xử lý">${n}</span>` : ''}</span>
-    <span class="m">${[f.nature ? NATURE[f.nature] : esc(f.fund_type || ''), due].filter(Boolean).join(' · ')}</span>
-    <span class="b">${money(f.balance)}</span>
-    ${pct != null ? `<span class="fd-mini" title="Đạt ${pct}% mục tiêu"><span style="width:${pct}%"></span></span>` : ''}</button>`;
+const fundHasQr = (f) => f.state === 'collecting' && canTransfer(f) && f.bank_account && f.bank_bin;
+const qrCache = new Map();
+const qrInner = (src) => `<img src="${src}" alt="Mã QR nhận tiền"><span class="fd-qr-cap">Quét để nộp</span>`;
+function hydrateQrs() {
+  const holder = $('#fd-funds'); if (!holder) return;
+  holder.querySelectorAll('[data-qr]').forEach(async (el) => {
+    const f = funds.find((x) => x.id === Number(el.dataset.qr));
+    if (!f) return;
+    const key = `${f.id}:${f.round || 1}:${f.transfer_content || ''}:${f.bank_account || ''}:${f.bank_bin || ''}`;
+    if (qrCache.has(key)) { el.innerHTML = qrInner(qrCache.get(key)); return; }
+    try {
+      const q = await api(`/api/funds/${f.id}/qr`);
+      qrCache.set(key, q.qrDataUrl);
+      el.innerHTML = qrInner(q.qrDataUrl);
+    } catch { el.innerHTML = '<span class="fd-qr-load">Chưa có QR</span>'; }
+  });
 }
-function renderChips() {
-  const q = fold($('#fd-search').value);
-  const ib = $('#fd-inbox-btn');
-  ib.hidden = !inbox.count && !inbox.items.length;
-  ib.classList.toggle('active', view === 'inbox');
-  ib.classList.toggle('calm', !inbox.count);
-  ib.innerHTML = `${icon('bell')}<span>Cần xử lý</span>${inbox.count ? `<b class="fd-count">${inbox.count}</b>` : '<span class="muted fd-small">đang chờ người khác</span>'}`;
-  const list = funds.filter((f) => !q || fold(f.name).includes(q));
-  $('#fd-tabs').innerHTML = GROUPS.map(([st, label]) => {
-    const g = list.filter((f) => f.state === st);
-    if (!g.length) return '';
-    const items = g.map(fundItem).join('');
-    const open = st !== 'locked' || q || (view === 'fund' && g.some((f) => f.id === activeId));
-    return `<details class="fd-group" ${open ? 'open' : ''}><summary>${label} <span class="muted">(${g.length})</span></summary>${items}</details>`;
-  }).join('') || `<p class="muted fd-hint">${q ? 'Không tìm thấy quỹ nào.' : 'Chưa có quỹ nào.'}</p>`;
+
+function fundStatusText(f) {
+  if (f.state === 'collecting') {
+    if (!f.end_date) return 'Đang thu · không thời hạn';
+    const d = daysLeft(f);
+    if (d < 0) return `Đang thu · quá hạn ${viDate(f.end_date)}`;
+    if (d === 0) return 'Đang thu · hết hạn hôm nay';
+    return `Đang thu · hạn ${viDate(f.end_date)}${d <= 7 ? ` · còn ${d} ngày` : ''}`;
+  }
+  if (f.state === 'stopped') return `Ngừng thu từ ${viDate((f.stopped_at || '').slice(0, 10))} · vẫn chi`;
+  return `Đã khoá sổ ${viDate((f.locked_at || '').slice(0, 10))}`;
+}
+
+function fundCard(f) {
+  const n = inbox.by_fund?.[f.id];
+  const pct = goalPct(f, f.collected || 0);
+  const canEntry = can('fund.entry') && f.state !== 'locked';
+  const entryKind = f.state === 'collecting' ? 'in' : 'out';
+  const qr = fundHasQr(f);
+  return `<article class="fd-fund state-${f.state}${qr ? ' has-qr' : ''}" data-id="${f.id}" tabindex="0">
+    <div class="fd-fund-body">
+      <div class="fd-fund-tags">
+        <span class="badge ${STATE_BADGE[f.state]}">${esc(f.state_label)}</span>
+        ${f.fund_type ? `<span class="badge">${esc(f.fund_type)}</span>` : ''}
+        ${f.nature ? `<span class="badge fd-n-${f.nature}">${NATURE[f.nature]}</span>` : ''}
+        ${n ? `<span class="fd-dot" aria-label="${n} việc cần xử lý">${n}</span>` : ''}
+      </div>
+      <h3 class="fd-fund-name">${esc(f.name)}</h3>
+      <p class="fd-fund-desc">${esc(f.description || f.content || 'Chưa có nội dung giới thiệu.')}</p>
+      <p class="fd-fund-status">${fundStatusText(f)}</p>
+      <div class="fd-fund-bal"><span>Số dư</span><b>${money(f.balance)}</b></div>
+      ${pct != null ? `<div class="fd-fund-progress" role="progressbar" aria-label="Tiến độ huy động" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>
+        <div class="fd-fund-goal">${pct}% / ${shortMoney(f.target_amount)} mục tiêu</div>` : ''}
+      <p class="fd-fund-meta">${f.nature ? NATURE[f.nature] : esc(f.fund_type || '')} · ${esc(contribText(f))}</p>
+    </div>
+    ${qr ? `<div class="fd-fund-qr" data-qr="${f.id}" role="button" tabindex="0" aria-label="Xem mã QR của ${esc(f.name)}"><span class="fd-qr-load">Đang tải QR…</span></div>` : ''}
+    <div class="fd-fund-acts">
+      <button class="btn" data-open="${f.id}">Xem sổ</button>
+      ${canEntry ? `<button class="btn primary" data-entry="${f.id}" data-kind="${entryKind}">${entryKind === 'in' ? 'Thu tiền' : 'Lập phiếu chi'}</button>` : ''}
+    </div>
+  </article>`;
+}
+
+function filteredFunds() {
+  const q = fold(fundView.q);
+  const list = funds.filter((f) => (!fundView.status || f.state === fundView.status)
+    && (!fundView.type || f.fund_type === fundView.type)
+    && (!q || fold(`${f.name} ${f.description || ''} ${f.content || ''} ${f.fund_type || ''}`).includes(q)));
+  const sorters = {
+    recent: (a, b) => b.id - a.id,
+    oldest: (a, b) => a.id - b.id,
+    balance: (a, b) => (b.balance || 0) - (a.balance || 0),
+    name: (a, b) => a.name.localeCompare(b.name, 'vi'),
+  };
+  return list.sort(sorters[fundView.sort] || sorters.recent);
+}
+
+function renderFundGrid() {
+  const el = $('#fd-funds'); if (!el) return;
+  const list = filteredFunds();
+  el.innerHTML = list.length ? list.map(fundCard).join('')
+    : `<div class="card fd-empty"><p><b>Không có quỹ nào khớp.</b></p><p class="muted">Thử bỏ bớt bộ lọc.</p></div>`;
+  hydrateQrs();
+}
+
+function openFund(id) {
+  activeId = Number(id); view = 'fund'; tab = null; openDetailPane(); render();
+}
+
+function bindHome() {
+  const q = $('#fd-home-q');
+  if (q) q.oninput = (e) => { fundView.q = e.target.value; renderFundGrid(); };
+  for (const [id, key] of [['fd-home-status', 'status'], ['fd-home-type', 'type'], ['fd-home-sort', 'sort']]) {
+    const el = $('#' + id); if (el) el.onchange = () => { fundView[key] = el.value; renderFundGrid(); };
+  }
+  const ib = $('#fd-home-inbox');
+  if (ib) ib.onclick = () => { view = 'inbox'; pane(true); render(); window.scrollTo({ top: 0 }); };
+  const grid = $('#fd-funds');
+  if (!grid) return;
+  grid.onclick = (e) => {
+    const qr = e.target.closest('[data-qr]');
+    if (qr) { const f = funds.find((x) => x.id === Number(qr.dataset.qr)); if (f) return openQr(f); }
+    const entry = e.target.closest('[data-entry]');
+    if (entry) { const f = funds.find((x) => x.id === Number(entry.dataset.entry)); if (f) return openEntryForm(f, entry.dataset.kind); }
+    const open = e.target.closest('[data-open]');
+    if (open) return openFund(open.dataset.open);
+    const card = e.target.closest('.fd-fund');
+    if (card) openFund(card.dataset.id);
+  };
+  grid.onkeydown = (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const qr = e.target.closest('[data-qr]');
+    if (qr) { e.preventDefault(); const f = funds.find((x) => x.id === Number(qr.dataset.qr)); if (f) return openQr(f); }
+    const card = e.target.closest('.fd-fund');
+    if (card && e.target === card) { e.preventDefault(); openFund(card.dataset.id); }
+  };
+}
+
+function renderHome() {
+  view = 'home'; pane(false);
+  if (!funds.length) return renderStart();
+  const types = [...new Set(funds.map((f) => f.fund_type).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'vi'));
+  const counts = { collecting: 0, stopped: 0, locked: 0 };
+  for (const f of funds) counts[f.state] = (counts[f.state] || 0) + 1;
+  const stat = (cls, ico, label, value, extra = '') => `<div class="fd-stat ${cls}"><span class="fd-stat-ic">${icon(ico)}</span><div class="fd-stat-body"><span class="fd-stat-l">${label}</span><b class="fd-stat-v">${value}</b>${extra}</div></div>`;
+  const task = inbox.count
+    ? `<button class="fd-stat fd-stat-task has" id="fd-home-inbox"><span class="fd-stat-ic">${icon('bell')}</span><div class="fd-stat-body"><span class="fd-stat-l">Việc cần xử lý</span><b class="fd-stat-v">${inbox.count}</b><span class="fd-stat-go">Xem ngay ›</span></div></button>`
+    : `<div class="fd-stat fd-stat-task"><span class="fd-stat-ic">${icon('bell')}</span><div class="fd-stat-body"><span class="fd-stat-l">Việc cần xử lý</span><b class="fd-stat-v">0</b><span class="fd-stat-go">Không có việc</span></div></div>`;
+  $('#fd-body').innerHTML = `
+    <div class="fd-home">
+      <div class="fd-stats">
+        ${stat('fd-stat-total', 'wallet', 'Tổng số dư', money(overview.total_balance))}
+        ${stat('fd-stat-in' + (overview.income_month ? ' has' : ''), 'up', 'Thu tháng này', money(overview.income_month))}
+        ${stat('fd-stat-out' + (overview.expense_month ? ' has' : ''), 'down', 'Chi tháng này', money(overview.expense_month))}
+        ${task}
+      </div>
+      <div class="fd-home-head">
+        <div><h2>Danh sách quỹ <span class="muted">(${funds.length})</span></h2>
+          <p class="muted fd-home-sub">${counts.collecting} đang thu · ${counts.stopped} ngừng thu · ${counts.locked} khoá sổ</p></div>
+        <div class="fd-home-filters">
+          <div class="fd-search-wrap">${icon('search')}<input class="field" id="fd-home-q" type="search" placeholder="Tìm quỹ, nội dung" aria-label="Tìm quỹ" value="${esc(fundView.q)}"></div>
+          <select class="field" id="fd-home-status" aria-label="Lọc theo trạng thái">
+            <option value="">Tất cả trạng thái</option>
+            <option value="collecting">Đang thu</option><option value="stopped">Ngừng thu</option><option value="locked">Khoá sổ</option>
+          </select>
+          <select class="field" id="fd-home-type" aria-label="Lọc theo loại quỹ">
+            <option value="">Tất cả loại quỹ</option>${types.map((t) => `<option value="${esc(t)}"${fundView.type === t ? ' selected' : ''}>${esc(t)}</option>`).join('')}
+          </select>
+          <select class="field" id="fd-home-sort" aria-label="Sắp xếp danh sách quỹ">
+            <option value="recent">Mới nhất</option><option value="oldest">Cũ nhất</option><option value="balance">Số dư nhiều nhất</option><option value="name">Tên A–Z</option>
+          </select>
+        </div>
+      </div>
+      <div class="fd-funds" id="fd-funds"></div>
+    </div>`;
+  $('#fd-home-status').value = fundView.status;
+  $('#fd-home-sort').value = fundView.sort;
+  renderFundGrid();
+  bindHome();
 }
 
 const NATURE = { mandatory: 'Bắt buộc', campaign: 'Vận động', voluntary: 'Tự nguyện' };
@@ -354,15 +474,17 @@ ${canOut ? `<div class="fd-bar">${canIn ? '<button class="btn primary" id="fd-in
 }
 
 async function render() {
-  if (view === 'inbox') return renderInbox();
+  if (view === 'inbox') { pane(true); return renderInbox(); }
+  if (view === 'home' || !view) return renderHome();
   const f = funds.find((x) => x.id === activeId);
   const body = $('#fd-body');
-  if (!f) return renderStart();
+  if (!f) return renderHome();
+  pane(true);
   body.innerHTML = bodyTemplate(f);
   const gen = ++renderGen; // bấm quỹ khác trong lúc đang tải: bỏ kết quả cũ
   const on = (id, fn) => { const el = $('#' + id); if (el) el.onclick = fn; };
   const menu = (fn) => () => { $('.fd-menu').open = false; fn(); };
-  on('fd-back', () => pane(false));
+  on('fd-back', goHome);
   on('fd-qr', () => openQr(f));
   on('fd-qr-2', () => openQr(f));
   on('fd-share', menu(() => openShare(f)));
@@ -373,7 +495,7 @@ async function render() {
   on('fd-lock-m', menu(() => openLock(f)));
   on('fd-unlock-m', menu(() => openUnlock(f)));
   on('fd-fix', () => openFundForm(f));
-  on('fd-todo-strip', () => { view = 'inbox'; inboxFund = f.id; renderChips(); render(); });
+  on('fd-todo-strip', () => { view = 'inbox'; inboxFund = f.id; pane(true); render(); });
   body.querySelectorAll('[data-edit]').forEach((b) => { b.onclick = () => openFundForm(f); });
   on('fd-adjust', menu(() => openEntryForm(f, 'adjust')));
   on('fd-import', menu(() => openImport(f)));
@@ -467,7 +589,7 @@ async function renderInbox() {
     ${groups.map(([t, l]) => `<section class="fd-ib-group"><h3>${t} <span class="muted">(${l.length})</span></h3><div class="fd-todo">${l.join('')}</div></section>`).join('')
       || `<div class="card fd-empty"><p><b>Không còn việc nào.</b></p><p class="muted">${can('fund.approve') ? 'Phiếu chi thủ quỹ gửi sẽ hiện ở đây để bạn duyệt.' : 'Phiếu nháp, khoản chờ duyệt và tiền vào chưa rõ quỹ sẽ hiện ở đây.'}</p></div>`}
   </div>`;
-  $('#fd-back').onclick = () => pane(false);
+  $('#fd-back').onclick = goHome;
   const all = $('#fd-ib-all'); if (all) all.onclick = () => { inboxFund = null; render(); };
   $('#fd-inbox').onclick = (ev) => {
     const q = ev.target.closest('[data-queue]');
