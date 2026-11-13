@@ -691,6 +691,32 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   ok('xlsx template downloads and re-imports', tpl.status === 200 && xImp.ok && xImp.data.count === 2 && !xImp.data.errors.length, JSON.stringify(xImp));
   ok('approver cannot import (BR-05)', (await req('c-approver', '/funds/' + v2id + '/import', { method: 'POST', body: { rows: [{ amount: 1 }] } })).status === 403);
 
+  // Nhập sao kê VietQR: đúng định dạng file "Danh sách giao dịch" của VietQR (ô chuỗi inline, số tiền là ô số)
+  const { buildXlsx } = require('../src/lib/xlsx');
+  const ddk = (await cj('cadm', '/funds', { method: 'POST', body: { name: 'Ngày hội Đại đoàn kết 2026' } })).data.id;
+  const H = { a: 'STT', b: 'Thời gian TT', c: 'Số tiền (VND)', d: 'Loại', e: 'Trạng thái', f: 'Mã giao dịch', j: 'Tài khoản nhận', l: 'Nội dung TT' };
+  const stmt = buildXlsx([
+    { a: '1', b: '12-11-2026 06:28:00', c: 200000, d: 'Giao dịch đến', e: 'Thành công', f: 'FTST0001', j: '08xxxxx688 - MBBank', l: 'LE THI THUY NGUYEN chuyen tien P28IMQN9/222102' },
+    { a: '2', b: '11-11-2026 22:42:00', c: 500000, d: 'Giao dịch đến', e: 'Thành công', f: 'FTST0002', j: '08xxxxx688 - MBBank', l: 'MBVCB.169.ong tu ung ho ngay hoi dai doan ket.CT tu 0961000046588 BUI CONG HUAN toi VQRQANMXU319' },
+    { a: '3', b: '-', c: '*****', d: 'Giao dịch đến', e: 'Đã hủy', f: '-', j: '08xxxxx688 - MBBank', l: 'VQRa59c0678ba Dong tien' },
+  ], { header: H }).toString('base64');
+  const sDry = await cj('c-treasurer', '/fund-statement?dry=1', { method: 'POST', body: { file: stmt } });
+  const [st1, st2] = sDry.data?.rows || [];
+  ok('statement: only successful incoming rows, payer parsed', sDry.ok && sDry.data.rows.length === 2 && sDry.data.skipped === 1
+    && st1.payer_name === 'LE THI THUY NGUYEN' && st2.payer_name === 'BUI CONG HUAN' && st1.time === '2026-11-12 06:28:00', JSON.stringify(sDry));
+  ok('statement: fund guessed by name words, none for unrelated content', st2.fund_id === ddk && st1.fund_id === null, JSON.stringify([st1, st2]));
+  const sImp = await cj('c-treasurer', '/fund-statement', { method: 'POST', body: { file: stmt, picks: { FTST0002: { fund_id: v2id, payer_name: 'Ông Tư' } } } });
+  const bal2 = (await cj('cadm', '/funds/' + v2id)).data.balance;
+  ok('statement: picked row booked, unknown row queued', sImp.ok && sImp.data.booked === 1 && sImp.data.queued === 1 && bal2 === 870000, JSON.stringify(sImp));
+  const qRow = (await cj('c-treasurer', '/vietqr/unclassified')).data.items.find((x) => x.transactionid === 'FTST0001');
+  ok('statement: queued row in unclassified with payer suggestion', qRow && qRow.payer_name === 'LE THI THUY NGUYEN', JSON.stringify(qRow));
+  const qCls = await cj('c-treasurer', '/vietqr/transactions/' + qRow.id + '/classify', { method: 'POST', body: { fund_id: ddk, payer_name: 'Bà Nguyên' } });
+  const ddkRows = (await cj('cadm', '/funds/' + ddk + '/entries')).data.entries;
+  ok('statement: manual classify keeps edited payer', qCls.ok && ddkRows.some((e) => e.bank_ref === 'FTST0001' && e.payer_name === 'Bà Nguyên'), JSON.stringify(ddkRows));
+  const sAgain = await cj('c-treasurer', '/fund-statement?dry=1', { method: 'POST', body: { file: stmt } });
+  ok('statement: re-import marks all as already there', sAgain.data.rows.every((x) => x.dup));
+  ok('statement: approver cannot import', (await req('c-approver', '/fund-statement', { method: 'POST', body: { file: stmt } })).status === 403);
+
   // ---------- Đăng nhập bằng mật khẩu SKHG (SKHGDT-3573) ----------
   const sk = (body) => cj('skhg', '/auth/skhg', { method: 'POST', body });
   const skWrong = await sk({ account: '0912 345 678', password: 'sai' });

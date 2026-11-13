@@ -405,7 +405,7 @@ router.get('/vietqr/unclassified', classifyPerm, wrap((req, res) => {
     ? { funds: db.prepare("SELECT id, name, kind FROM funds WHERE status='active' ORDER BY id").all() }
     : { invoices: db.prepare(`SELECT id, code, total, customer_name, created_at FROM invoices
         WHERE type='sale' AND status='pending' ORDER BY id DESC LIMIT 200`).all() };
-  ok(res, { items, ...options });
+  ok(res, { items: isCommunity(req) ? items.map((x) => ({ ...x, payer_name: funds.payerOf(x.content) })) : items, ...options });
 }));
 
 router.post('/vietqr/transactions/:id/classify', classifyPerm, wrap((req, res) => {
@@ -417,7 +417,7 @@ router.post('/vietqr/transactions/:id/classify', classifyPerm, wrap((req, res) =
   db.exec('BEGIN IMMEDIATE');
   try {
     if (isCommunity(req)) {
-      const r = funds.bookUnclassified(req, t, Number(b.fund_id), by);
+      const r = funds.bookUnclassified(req, t, Number(b.fund_id), by, b.payer_name);
       db.prepare("UPDATE vietqr_transactions SET category=?, matched=1, note=?, classified_by=?, classified_at=datetime('now','localtime') WHERE id=?")
         .run(r.category, 'Đã ghi vào quỹ ' + r.fund.name, by, t.id);
       auditOf(req, 'vqr.classify', t.id, { transactionid: t.transactionid, fund_id: r.fund.id, entry: r.code });
