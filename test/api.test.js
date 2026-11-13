@@ -716,6 +716,25 @@ const ls = (u, tok, o = {}) => fetch(B + '/lang-so' + u, { ...o, headers: tok ? 
   const sAgain = await cj('c-treasurer', '/fund-statement?dry=1', { method: 'POST', body: { file: stmt } });
   ok('statement: re-import marks all as already there', sAgain.data.rows.every((x) => x.dup));
   ok('statement: approver cannot import', (await req('c-approver', '/fund-statement', { method: 'POST', body: { file: stmt } })).status === 403);
+  // Trùng chéo giữa nhập Excel (không mã giao dịch) và sao kê VietQR: cùng số tiền, lệch <= 1 ngày thì bỏ qua, trừ khi xác nhận
+  const xl = (rows) => b64('Ngày;Người nộp;Số tiền;Hình thức;Mã giao dịch\n' + rows.join('\n') + '\n');
+  await cj('c-treasurer', '/funds/' + ddk + '/import', { method: 'POST', body: { file: xl(['09/11/2026;Ông Ba;333000;Chuyển khoản;']) } });
+  const stmt2 = buildXlsx([
+    { a: '1', b: '10-11-2026 08:00:00', c: 333000, d: 'Giao dịch đến', e: 'Thành công', f: 'FTST0003', j: 'x', l: 'ong ba ung ho ngay hoi dai doan ket' },
+    { a: '2', b: '10-11-2026 09:00:00', c: 333000, d: 'Giao dịch đến', e: 'Thành công', f: 'FTST0004', j: 'x', l: 'ong ba ung ho ngay hoi dai doan ket' },
+  ], { header: H }).toString('base64');
+  const m2 = (await cj('c-treasurer', '/fund-statement?dry=1', { method: 'POST', body: { file: stmt2 } })).data.rows;
+  ok('cross-dup: statement row matching an Excel entry is flagged once', !!m2[0].maybe && m2[0].fund_id === null && !m2[1].maybe && m2[1].fund_id === ddk, JSON.stringify(m2));
+  const sk2 = await cj('c-treasurer', '/fund-statement', { method: 'POST', body: { file: stmt2 } });
+  ok('cross-dup: flagged statement row skipped unless confirmed', sk2.data.booked === 1 && sk2.data.queued === 0, JSON.stringify(sk2.data));
+  const sk3 = await cj('c-treasurer', '/fund-statement', { method: 'POST', body: { file: stmt2, picks: { FTST0003: { fund_id: ddk, force: true } } } });
+  ok('cross-dup: confirmed "not a duplicate" row is booked', sk3.data.booked === 1, JSON.stringify(sk3.data));
+  const xd = await cj('c-treasurer', '/funds/' + ddk + '/import?dry=1', { method: 'POST', body: { file: xl(['11/11/2026;Ông Tư;500000;Chuyển khoản;', '12/11/2026;Bà Năm;200000;Tiền mặt;']) } });
+  ok('cross-dup: Excel transfer matching a VietQR entry is warned, cash is not', xd.data.count === 1 && xd.data.warnings.length === 1 && xd.data.warnings[0].line === 2 && xd.data.warnings[0].bank_ref === 'FTST0002', JSON.stringify(xd.data));
+  const xf = await cj('c-treasurer', '/funds/' + ddk + '/import', { method: 'POST', body: { file: xl(['11/11/2026;Ông Tư;500000;Chuyển khoản;']), force_lines: [2] } });
+  ok('cross-dup: Excel row confirmed by line is imported', xf.data.imported === 1, JSON.stringify(xf.data));
+  const xr = await cj('c-treasurer', '/funds/' + ddk + '/import?dry=1', { method: 'POST', body: { file: xl(['12/11/2026;Bà Nguyên;200000;Chuyển khoản;FTST0001']) } });
+  ok('cross-dup: Excel bank ref already received via VietQR is rejected', /đã có từ VietQR/.test(xr.data.errors[0]?.error || ''), JSON.stringify(xr.data));
 
   // ---------- Đăng nhập bằng mật khẩu SKHG (SKHGDT-3573) ----------
   const sk = (body) => cj('skhg', '/auth/skhg', { method: 'POST', body });

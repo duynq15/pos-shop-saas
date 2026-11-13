@@ -1149,7 +1149,8 @@ function openImport(f) {
     <div id="fd-im-result"></div>
     <div class="modal-actions"><button class="btn" id="fd-im-close">Hủy</button><button class="btn primary" id="fd-im-save" disabled>Ghi sổ</button></div>`);
   let file = null;
-  const send = (dry) => api(`/api/funds/${f.id}/import${dry ? '?dry=1' : ''}`, { method: 'POST', body: { file } });
+  const force_lines = () => [...document.querySelectorAll('[data-im-force]:checked')].map((c) => Number(c.dataset.imForce));
+  const send = (dry) => api(`/api/funds/${f.id}/import${dry ? '?dry=1' : ''}`, { method: 'POST', body: { file, force_lines: dry ? [] : force_lines() } });
   $('#fd-im-close').onclick = closeModal;
   $('#fd-im-file').onchange = async (e) => {
     const fl = e.target.files[0]; if (!fl) return;
@@ -1159,8 +1160,8 @@ function openImport(f) {
       const r = await send(true);
       $('#fd-im-result').innerHTML = r.errors.length
         ? `<p class="low">Có ${r.errors.length} dòng lỗi, chưa ghi gì. Sửa file rồi chọn lại:</p><ul>${r.errors.slice(0, 30).map((x) => `<li>Dòng ${x.line}: ${esc(x.error)}</li>`).join('')}</ul>`
-        : `<p>${r.count} khoản thu, tổng <b>${money(r.total)}</b>. Bấm Ghi sổ để nhập.</p>`;
-      $('#fd-im-save').disabled = !!r.errors.length;
+        : `<p>${r.count} khoản thu, tổng <b>${money(r.total)}</b>. Bấm Ghi sổ để nhập.</p>${dupList(r.warnings || [], 'im')}`;
+      $('#fd-im-save').disabled = !!r.errors.length || !(r.count || (r.warnings || []).length);
     } catch (er) { $('#fd-im-result').innerHTML = `<p class="low">${esc(er.message)}</p>`; }
   };
   $('#fd-im-save').onclick = async () => {
@@ -1171,6 +1172,15 @@ function openImport(f) {
       closeModal(); await loadFunds();
     } catch (er) { toast(er.message, true); $('#fd-im-save').disabled = false; }
   };
+}
+
+// Dòng nghi trùng với khoản đã có (cùng số tiền, lệch ≤ 1 ngày): mặc định bỏ qua, tích "Không trùng" để vẫn ghi
+const dupNote = (m) => `Có thể đã có: ${esc(m.code)} · ${esc(m.fund || '')} · ${esc(viDay(m.day || ''))}${m.payer_name ? ' · ' + esc(m.payer_name) : ''}${m.bank_ref ? ' · ' + esc(m.bank_ref) : ''}`;
+function dupList(list, kind) {
+  if (!list.length) return '';
+  return `<p class="low">${list.length} dòng có thể trùng khoản đã ghi (cùng số tiền, lệch tối đa 1 ngày), sẽ bỏ qua. Tích "Không trùng" nếu đó là khoản khác.</p>
+    <ul class="fd-dup">${list.map((w) => `<li>Dòng ${w.line}: ${dupNote(w)}
+      <label><input type="checkbox" data-${kind}-force="${w.line}"> Không trùng, vẫn ghi</label></li>`).join('')}</ul>`;
 }
 
 /* ---------------- Nhập sao kê VietQR (cả thôn) ---------------- */
@@ -1190,18 +1200,23 @@ function openStatement() {
       file = await fileToDataUrl(fl);
       const r = await api('/api/fund-statement?dry=1', { method: 'POST', body: { file } });
       // Dòng máy chưa nhận ra quỹ lên đầu để thủ quỹ chọn tay
-      rows = r.rows.sort((a, b) => (a.dup || a.error ? 2 : a.fund_id ? 1 : 0) - (b.dup || b.error ? 2 : b.fund_id ? 1 : 0));
-      const unknown = rows.filter((x) => !x.dup && !x.error && !x.fund_id).length;
+      const rank = (x) => (x.dup || x.error ? 3 : x.maybe ? 2 : x.fund_id ? 1 : 0);
+      rows = r.rows.sort((a, b) => rank(a) - rank(b));
+      const unknown = rows.filter((x) => rank(x) === 0).length;
+      const maybe = rows.filter((x) => rank(x) === 2).length;
       const opts = (sel) => `<option value="">— Chưa rõ quỹ —</option>${r.funds.map((x) => `<option value="${x.id}"${x.id === sel ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}`;
       const fresh = rows.filter((x) => !x.dup && !x.error);
       $('#fd-st-result').innerHTML = `<p>${fresh.length} giao dịch mới, tổng <b>${money(fresh.reduce((s, x) => s + x.amount, 0))}</b>
         · ${rows.filter((x) => x.dup).length} đã có · ${r.skipped} không phải tiền vào thành công.</p>
+        ${maybe ? `<p class="low">${maybe} giao dịch có thể đã ghi tay hoặc nhập từ Excel (cùng số tiền, lệch tối đa 1 ngày), sẽ bỏ qua. Tích "Không trùng" nếu là khoản khác.</p>` : ''}
         ${unknown ? `<p class="low">${unknown} giao dịch máy chưa nhận ra quỹ (đánh dấu "Chọn quỹ"). Chọn tay, hoặc để trống để xử lý sau ở mục Tiền vào chưa rõ quỹ.</p>` : ''}
         <div class="fd-todo">${rows.map((x) => `<div class="fd-task${x.dup || x.error ? ' muted' : ''}">
           <div class="fd-task-main"><div class="fd-task-amt">${money(x.amount || 0)}</div><div>${esc(x.content || '—')}</div>
-            <div class="meta">${esc(x.txn || '')} · ${esc(x.time || '')}${x.dup ? ' · đã có, bỏ qua' : ''}${x.error ? ' · ' + esc(x.error) : ''}</div></div>
+            <div class="meta">${esc(x.txn || '')} · ${esc(x.time || '')}${x.dup ? ' · đã có, bỏ qua' : ''}${x.error ? ' · ' + esc(x.error) : ''}</div>
+            ${x.maybe ? `<div class="low">${dupNote(x.maybe)}. Sẽ bỏ qua.</div>
+              <label><input type="checkbox" data-st-force="${esc(x.txn)}"> Không trùng, vẫn ghi</label>` : ''}</div>
           ${x.dup || x.error ? '' : `<div class="fd-task-side">
-            ${x.fund_id ? '<span class="badge">Máy đoán</span>' : '<span class="badge pending">Chọn quỹ</span>'}
+            ${x.maybe ? '<span class="badge pending">Nghi trùng</span>' : x.fund_id ? '<span class="badge">Máy đoán</span>' : '<span class="badge pending">Chọn quỹ</span>'}
             <select class="field" data-st-fund="${esc(x.txn)}" aria-label="Quỹ nhận">${opts(x.fund_id)}</select>
             <input class="field" data-st-payer="${esc(x.txn)}" placeholder="Người nộp" aria-label="Người nộp" value="${esc(x.payer_name || '')}"></div>`}
         </div>`).join('')}</div>`;
@@ -1212,7 +1227,8 @@ function openStatement() {
     const picks = {};
     for (const x of rows) {
       const s = document.querySelector(`[data-st-fund="${CSS.escape(x.txn || '')}"]`);
-      if (s) picks[x.txn] = { fund_id: Number(s.value) || null, payer_name: document.querySelector(`[data-st-payer="${CSS.escape(x.txn)}"]`).value };
+      if (s) picks[x.txn] = { fund_id: Number(s.value) || null, payer_name: document.querySelector(`[data-st-payer="${CSS.escape(x.txn)}"]`).value,
+        force: !!document.querySelector(`[data-st-force="${CSS.escape(x.txn)}"]:checked`) };
     }
     $('#fd-st-save').disabled = true;
     try {

@@ -854,6 +854,8 @@ router.post('/funds/:id/import', requirePerm('fund.entry'), wrap((req, res) => {
   if (rows.length > IMPORT_MAX) bad(`Mỗi lần nhập tối đa ${IMPORT_MAX} dòng`);
   const errors = [];
   const seenRefs = new Set();
+  const warnings = []; const nearUsed = new Set(); // dòng nghi trùng với khoản VietQR: bỏ qua, trừ dòng thủ quỹ xác nhận (force_lines)
+  const forced = new Set((Array.isArray(req.body?.force_lines) ? req.body.force_lines : []).map(Number));
   const clean = rows.map((x, i) => {
     const line = Number(x?.line) || i + 2; // dòng 1 của file là tiêu đề
     const err = (m) => { errors.push({ line, error: m }); return null; };
@@ -866,19 +868,26 @@ router.post('/funds/:id/import', requirePerm('fund.entry'), wrap((req, res) => {
     const date = importDate(x?.date);
     try { entryDate(date); } catch (e) { return err(e.message); }
     const bankRef = source === 'manual' ? str(x?.bank_ref, 80) : '';
+    if (bankRef && bankTxnByRef(bankRef)) return err(`Mã giao dịch ${bankRef} đã có từ VietQR (sao kê / tự động), không nhập lại`);
     if (bankRef && (seenRefs.has(bankRef) || db.prepare('SELECT 1 FROM fund_entries WHERE bank_ref=?').get(bankRef))) return err(`Mã giao dịch ${bankRef} bị trùng`);
     if (bankRef) seenRefs.add(bankRef);
+    // Chuyển khoản không ghi mã giao dịch mà đã có khoản VietQR cùng số tiền, cùng ngày: hỏi lại thay vì ghi trùng
+    if (source === 'manual' && !bankRef && !forced.has(line)) {
+      const near = entryNear('vietqr', amount, importDate(x?.date) || today(), nearUsed);
+      if (near) { warnings.push({ line, ...near }); return null; }
+    }
     return { amount, source, date, bank_ref: bankRef, payer_name: x?.payer_name, payer_group: x?.payer_group, household_code: str(x?.household_code, 20) || undefined, anonymous: /^(x|1|có|co|true)$/i.test(str(x?.anonymous, 10)), note: str(x?.note, 500) };
   });
-  const total = clean.reduce((s, x) => s + (x ? x.amount : 0), 0);
-  if (errors.length || req.query.dry === '1') return ok(res, { count: rows.length, total, errors, imported: 0 });
+  const good = clean.filter(Boolean);
+  const total = good.reduce((s, x) => s + x.amount, 0);
+  if (errors.length || req.query.dry === '1') return ok(res, { count: good.length, total, errors, warnings, imported: 0 });
   db.exec('BEGIN IMMEDIATE');
   try {
-    for (const x of clean) insertIncome(req, f, x);
+    for (const x of good) insertIncome(req, f, x);
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
-  log(req, 'fund_entry.import', 'fund', f.id, { count: clean.length, total });
-  ok(res, { count: clean.length, total, errors: [], imported: clean.length });
+  log(req, 'fund_entry.import', 'fund', f.id, { count: good.length, total, skipped_maybe_dup: warnings.length });
+  ok(res, { count: good.length, total, errors: [], warnings, imported: good.length });
 }));
 
 /* ---------- Nhập sao kê VietQR (cả thôn) ---------- */
@@ -908,11 +917,27 @@ function guessFund(list, content) {
   }
   return best && !tie ? best.id : null;
 }
+// Giao dịch ngân hàng đã nhận theo mã FT: webhook VietQR gửi mã FT trong referencenumber (đã kiểm trên production 13/11/2026)
+const bankTxnByRef = (ref) => db.prepare('SELECT * FROM vietqr_transactions WHERE transactionid=? OR raw_json LIKE ?').get(ref, `%"referencenumber":"${ref}"%`);
+// Khoản thu cùng số tiền, ghi trong khoảng ±1 ngày quanh `day`, chưa khớp dòng nào khác (used: id đã khớp).
+// source='manual': khoản ghi tay chưa có mã giao dịch; source='vietqr': khoản từ webhook / sao kê.
+// ponytail: chỉ so số tiền + ngày; hai người cùng nộp một số tiền trong ngày sẽ bị nghi trùng, thủ quỹ bỏ chọn ở bước xem lại.
+function entryNear(source, amount, day, used) {
+  const refCond = source === 'manual' ? "(e.bank_ref IS NULL OR e.bank_ref = '')" : '1=1';
+  const rows = db.prepare(`SELECT e.id, e.code, e.amount, e.payer_name, e.bank_ref, f.name fund_name, substr(e.approved_at,1,10) day FROM fund_entries e JOIN funds f ON f.id=e.fund_id
+    WHERE e.type='in' AND e.status IN ('approved','submitted','draft') AND e.source=? AND ${refCond} AND e.amount=?
+      AND date(COALESCE(e.approved_at, e.created_at)) BETWEEN date(?, '-1 day') AND date(?, '+1 day') ORDER BY e.id`).all(source, amount, day, day);
+  const hit = rows.find((x) => !used.has(x.id));
+  if (!hit) return null;
+  used.add(hit.id);
+  return { code: hit.code, fund: hit.fund_name, payer_name: hit.payer_name, day: hit.day, bank_ref: hit.bank_ref };
+}
 function statementRows(req, file) {
   if (!file) bad('Chọn file sao kê');
   const list = db.prepare("SELECT * FROM funds WHERE status='active' AND locked_at IS NULL AND payment_methods <> 'cash' ORDER BY id").all().filter((f) => canSeeFund(req, f));
   const all = fileRows(file, STMT_COLS);
   if (all.length > IMPORT_MAX) bad(`Mỗi lần nhập tối đa ${IMPORT_MAX} dòng`);
+  const used = new Set(); // mỗi khoản đã có chỉ khớp một dòng sao kê
   const seen = new Set(); // cùng mã giao dịch lặp trong file: giữ dòng đầu
   const incoming = all.filter((x) => / DEN$/.test(fold(x.kind)) && fold(x.status) === 'THANH CONG' && !seen.has(x.txn) && seen.add(x.txn));
   const rows = incoming.map((x) => {
@@ -925,13 +950,12 @@ function statementRows(req, file) {
     if (!amountOk(amount)) return { ...base, error: 'Số tiền không hợp lệ' };
     if (!t) return { ...base, error: 'Thời gian không hợp lệ' };
     const time = `${t[3]}-${t[2]}-${t[1]} ${t[4]}`;
-    // Chống trùng với khoản webhook đã nhận: khớp transactionid, hoặc mã FT nếu webhook gửi trong referencenumber.
-    // ponytail: chưa xác nhận webhook thật gửi mã FT ở trường nào; xác nhận rồi bỏ nhánh LIKE thừa.
-    const dup = !!(db.prepare('SELECT 1 FROM vietqr_transactions WHERE transactionid=? OR raw_json LIKE ?').get(txn, `%"referencenumber":"${txn}"%`)
-      || db.prepare('SELECT 1 FROM fund_entries WHERE bank_ref=?').get(txn));
+    const dup = !!(bankTxnByRef(txn) || db.prepare('SELECT 1 FROM fund_entries WHERE bank_ref=?').get(txn));
+    // Khoản chuyển khoản đã ghi tay / nhập Excel mà không kèm mã giao dịch: cùng số tiền, lệch tối đa 1 ngày -> "có thể đã nhập"
+    const maybe = dup ? null : entryNear('manual', amount, time.slice(0, 10), used);
     const house = hh.getHousehold(hh.householdInContent(content));
-    return { ...base, time, dup, payer_name: house?.head_name || payerOf(content), payer_group: house?.hamlet || null,
-      household_code: house?.code || null, fund_id: dup ? null : guessFund(list, content) };
+    return { ...base, time, dup, maybe, payer_name: house?.head_name || payerOf(content), payer_group: house?.hamlet || null,
+      household_code: house?.code || null, fund_id: dup || maybe ? null : guessFund(list, content) };
   });
   return { rows, list, skipped: all.length - incoming.length };
 }
@@ -946,8 +970,8 @@ router.post('/fund-statement', requirePerm('fund.entry'), wrap((req, res) => {
   db.exec('BEGIN IMMEDIATE');
   try {
     for (const r of rows) {
-      if (r.dup || r.error) continue;
       const p = picks[r.txn] || {};
+      if (r.dup || r.error || (r.maybe && !p.force)) continue; // nghi trùng: chỉ ghi khi thủ quỹ xác nhận "không trùng"
       const fid = p.fund_id === undefined ? r.fund_id : Number(p.fund_id) || null;
       const f = fid ? list.find((x) => x.id === fid) : null;
       if (fid && !f) bad(`Dòng ${r.line}: quỹ đã chọn không nhận chuyển khoản`);
