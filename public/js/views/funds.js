@@ -223,6 +223,8 @@ function bindHome() {
   }
   const ib = $('#fd-home-inbox');
   if (ib) ib.onclick = () => { view = 'inbox'; pane(true); render(); window.scrollTo({ top: 0 }); };
+  const st = $('#fd-home-stmt');
+  if (st) st.onclick = openStatement;
   const grid = $('#fd-funds');
   if (!grid) return;
   grid.onclick = (e) => {
@@ -265,6 +267,7 @@ function renderHome() {
       <div class="fd-home-head">
         <div><h2>Danh sách quỹ <span class="muted">(${funds.length})</span></h2>
           <p class="muted fd-home-sub">${counts.collecting} đang thu · ${counts.stopped} ngừng thu · ${counts.locked} khoá sổ</p></div>
+        ${can('fund.entry') ? '<button class="btn" id="fd-home-stmt">Nhập sao kê VietQR</button>' : ''}
         <div class="fd-home-filters">
           <div class="fd-search-wrap">${icon('search')}<input class="field" id="fd-home-q" type="search" placeholder="Tìm quỹ, nội dung" aria-label="Tìm quỹ" value="${esc(fundView.q)}"></div>
           <select class="field" id="fd-home-status" aria-label="Lọc theo trạng thái">
@@ -635,6 +638,7 @@ function openQueueClassify(t) {
     <p class="muted" style="margin:-8px 0 14px">${money(t.amount)} · ${esc(t.transactionid)} · ${esc(viDT(t.created_at))}<br>Nội dung: ${esc(t.content || '—')}</p>
     <label class="fld">Quỹ nhận *<select class="field" id="fd-q-fund"><option value="">— Chọn quỹ —</option>${active.map((x) => `<option value="${x.id}" ${x.id === guess?.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
     ${guess ? '<p class="muted fd-small">Đã chọn sẵn theo mã trong nội dung chuyển khoản. Kiểm tra lại trước khi ghi.</p>' : ''}
+    <label class="fld">Người nộp<input class="field" id="fd-q-payer" value="${esc(t.payer_name || '')}" placeholder="Để trống nếu không rõ"></label>
     <p class="muted fd-small">Ghi xong là khoản thu đã ghi sổ, không đổi quỹ được nữa. Sai thì lập bút toán điều chỉnh.</p>
     <div class="modal-actions"><button class="btn" id="fd-q-cancel">Hủy</button><button class="btn primary" id="fd-q-ok">Ghi sổ</button></div>`);
   $('#fd-q-cancel').onclick = closeModal;
@@ -642,7 +646,7 @@ function openQueueClassify(t) {
     const fund_id = Number($('#fd-q-fund').value);
     if (!fund_id) { toast('Chọn quỹ nhận khoản tiền này', true); $('#fd-q-fund').focus(); return; }
     try {
-      await api(`/api/vietqr/transactions/${t.id}/classify`, { method: 'POST', body: { fund_id } });
+      await api(`/api/vietqr/transactions/${t.id}/classify`, { method: 'POST', body: { fund_id, payer_name: $('#fd-q-payer').value } });
       toast(`Đã ghi ${money(t.amount)} vào quỹ`); closeModal(); await loadFunds();
     } catch (e) { toast(e.message, true); }
   };
@@ -1166,6 +1170,56 @@ function openImport(f) {
       toast(`Đã ghi sổ ${r.imported} khoản thu, tổng ${money(r.total)}`);
       closeModal(); await loadFunds();
     } catch (er) { toast(er.message, true); $('#fd-im-save').disabled = false; }
+  };
+}
+
+/* ---------------- Nhập sao kê VietQR (cả thôn) ---------------- */
+// Máy đoán quỹ và người chuyển cho từng giao dịch; thủ quỹ sửa rồi ghi. Để trống quỹ thì vào "Tiền vào chưa rõ quỹ".
+function openStatement() {
+  modal(`<h2>Nhập sao kê VietQR</h2>
+    <p class="muted fd-form-hint">Chọn file "Danh sách giao dịch" tải từ VietQR. Chỉ lấy tiền vào thành công; giao dịch đã có trong hệ thống tự bỏ qua.</p>
+    <label class="fld">File Excel (.xlsx)<input class="field" type="file" id="fd-st-file" accept=".xlsx,.csv"></label>
+    <div id="fd-st-result"></div>
+    <div class="modal-actions"><button class="btn" id="fd-st-close">Hủy</button><button class="btn primary" id="fd-st-save" disabled>Ghi sổ</button></div>`);
+  let file = null; let rows = [];
+  $('#fd-st-close').onclick = closeModal;
+  $('#fd-st-file').onchange = async (e) => {
+    const fl = e.target.files[0]; if (!fl) return;
+    $('#fd-st-save').disabled = true;
+    try {
+      file = await fileToDataUrl(fl);
+      const r = await api('/api/fund-statement?dry=1', { method: 'POST', body: { file } });
+      // Dòng máy chưa nhận ra quỹ lên đầu để thủ quỹ chọn tay
+      rows = r.rows.sort((a, b) => (a.dup || a.error ? 2 : a.fund_id ? 1 : 0) - (b.dup || b.error ? 2 : b.fund_id ? 1 : 0));
+      const unknown = rows.filter((x) => !x.dup && !x.error && !x.fund_id).length;
+      const opts = (sel) => `<option value="">— Chưa rõ quỹ —</option>${r.funds.map((x) => `<option value="${x.id}"${x.id === sel ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}`;
+      const fresh = rows.filter((x) => !x.dup && !x.error);
+      $('#fd-st-result').innerHTML = `<p>${fresh.length} giao dịch mới, tổng <b>${money(fresh.reduce((s, x) => s + x.amount, 0))}</b>
+        · ${rows.filter((x) => x.dup).length} đã có · ${r.skipped} không phải tiền vào thành công.</p>
+        ${unknown ? `<p class="low">${unknown} giao dịch máy chưa nhận ra quỹ (đánh dấu "Chọn quỹ"). Chọn tay, hoặc để trống để xử lý sau ở mục Tiền vào chưa rõ quỹ.</p>` : ''}
+        <div class="fd-todo">${rows.map((x) => `<div class="fd-task${x.dup || x.error ? ' muted' : ''}">
+          <div class="fd-task-main"><div class="fd-task-amt">${money(x.amount || 0)}</div><div>${esc(x.content || '—')}</div>
+            <div class="meta">${esc(x.txn || '')} · ${esc(x.time || '')}${x.dup ? ' · đã có, bỏ qua' : ''}${x.error ? ' · ' + esc(x.error) : ''}</div></div>
+          ${x.dup || x.error ? '' : `<div class="fd-task-side">
+            ${x.fund_id ? '<span class="badge">Máy đoán</span>' : '<span class="badge pending">Chọn quỹ</span>'}
+            <select class="field" data-st-fund="${esc(x.txn)}" aria-label="Quỹ nhận">${opts(x.fund_id)}</select>
+            <input class="field" data-st-payer="${esc(x.txn)}" placeholder="Người nộp" aria-label="Người nộp" value="${esc(x.payer_name || '')}"></div>`}
+        </div>`).join('')}</div>`;
+      $('#fd-st-save').disabled = !fresh.length;
+    } catch (er) { $('#fd-st-result').innerHTML = `<p class="low">${esc(er.message)}</p>`; }
+  };
+  $('#fd-st-save').onclick = async () => {
+    const picks = {};
+    for (const x of rows) {
+      const s = document.querySelector(`[data-st-fund="${CSS.escape(x.txn || '')}"]`);
+      if (s) picks[x.txn] = { fund_id: Number(s.value) || null, payer_name: document.querySelector(`[data-st-payer="${CSS.escape(x.txn)}"]`).value };
+    }
+    $('#fd-st-save').disabled = true;
+    try {
+      const r = await api('/api/fund-statement', { method: 'POST', body: { file, picks } });
+      toast(`Đã ghi ${r.booked} khoản vào quỹ${r.queued ? `, ${r.queued} khoản chờ chọn quỹ` : ''}`);
+      closeModal(); await loadFunds();
+    } catch (er) { toast(er.message, true); $('#fd-st-save').disabled = false; }
   };
 }
 

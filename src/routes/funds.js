@@ -55,7 +55,7 @@ function entryDate(d) {
 }
 
 // Mọi route sổ quỹ chỉ cho tenant cộng đồng (trước đây /fund-entries lọt khỏi chốt này).
-router.use(['/funds', '/fund-accounts', '/fund-types', '/fund-entries', '/fund-inbox', '/fund-treasurers', '/fund-notices', '/fund-documents', '/fund-requests', '/households'], (req, res, next) => {
+router.use(['/funds', '/fund-statement', '/fund-accounts', '/fund-types', '/fund-entries', '/fund-inbox', '/fund-treasurers', '/fund-notices', '/fund-documents', '/fund-requests', '/households'], (req, res, next) => {
   if (!req.tenant || req.tenant.kind !== 'community') return fail(res, 'Sổ quỹ chỉ dành cho tài khoản cộng đồng', 403);
   next();
 });
@@ -815,7 +815,7 @@ function insertIncome(req, f, b) {
 const IMPORT_MAX = 2000;
 // file: data URL / base64 của .xlsx hoặc .csv theo file mẫu. Dòng 1 là tiêu đề; cột nhận theo tiêu đề (bỏ dấu), không theo vị trí.
 const IMPORT_COLS = { ngay: 'date', 'nguoi nop': 'payer_name', xom: 'payer_group', 'dia chi': 'payer_group', 'ma ho': 'household_code', 'so tien': 'amount', 'hinh thuc': 'source', 'ma giao dich': 'bank_ref', 'ghi chu': 'note', 'an danh': 'anonymous' };
-function fileRows(file) {
+function fileRows(file, cols = IMPORT_COLS) {
   const buf = Buffer.from(String(file).replace(/^data:[^,]*,/, ''), 'base64');
   if (buf.length > ATTACH_MAX) bad('File quá 5MB');
   let table;
@@ -828,7 +828,7 @@ function fileRows(file) {
     table = text.split(/\r?\n/).filter((l) => l.trim()).map((l) => [...l.matchAll(new RegExp(`("([^"]|"")*"|[^${sep}]*)(${sep}|$)`, 'g'))]
       .slice(0, -1).map((m) => m[1].replace(/^"|"$/g, '').replace(/""/g, '"').trim()));
   }
-  const keys = (table[0] || []).map((h) => IMPORT_COLS[removeVietnamese(String(h).replace(/\(.*$/, '')).toLowerCase().trim()]);
+  const keys = (table[0] || []).map((h) => cols[removeVietnamese(String(h).replace(/\(.*$/, '')).toLowerCase().trim()]);
   if (!keys.includes('amount')) bad('Không thấy cột "Số tiền". Dùng file mẫu để nhập');
   return table.slice(1).map((r, i) => {
     const o = { line: i + 2 };
@@ -879,6 +879,92 @@ router.post('/funds/:id/import', requirePerm('fund.entry'), wrap((req, res) => {
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   log(req, 'fund_entry.import', 'fund', f.id, { count: clean.length, total });
   ok(res, { count: clean.length, total, errors: [], imported: clean.length });
+}));
+
+/* ---------- Nhập sao kê VietQR (cả thôn) ---------- */
+// File "Danh sách giao dịch" tải từ VietQR: chỉ lấy tiền vào thành công. Mỗi dòng đoán quỹ (mã nội dung CK, rồi tên quỹ)
+// và tách tên người chuyển; thủ quỹ xem lại rồi ghi. Chọn quỹ thì ghi sổ ngay, để trống thì vào hàng chờ chưa rõ quỹ.
+const STMT_COLS = { 'thoi gian tt': 'time', 'so tien': 'amount', loai: 'kind', 'trang thai': 'status', 'ma giao dich': 'txn', 'noi dung tt': 'content', 'tai khoan nhan': 'account' };
+const fold = (x) => removeVietnamese(String(x || '')).toUpperCase();
+// Tên chủ tài khoản chuyển tiền theo hai mẫu nội dung ngân hàng: "... CT tu <số TK> <TÊN> toi ..." và "<TÊN> chuyen tien ...".
+// Là chủ tài khoản, không chắc là người nộp (chuyển hộ), nên thủ quỹ sửa được ở bước xem lại.
+function payerOf(content) {
+  const s = ` ${fold(content)} `;
+  const m = / CT TU \d+ ([A-Z ]+?) TOI /.exec(s) || /^ ([A-Z ]+?) CHUYEN (?:TIEN|KHOAN) /.exec(s);
+  return m ? m[1].trim().slice(0, 120) : null;
+}
+// Đoán quỹ: mã nội dung CK trước; không có thì quỹ có nhiều từ trong tên (ít nhất 2) xuất hiện trong nội dung, hoà thì không đoán.
+// ponytail: so từ đơn giản; người dân hay viết tắt ("DDK") thì không bắt được, thủ quỹ chọn tay ở bước xem lại.
+const NAME_STOP = new Set(['QUY', 'NAM', 'THON', 'XOM', 'CUA', 'VA', 'CHO']);
+function guessFund(list, content) {
+  const byCode = fundForContent(list.map((f) => f.id), content);
+  if (byCode) return byCode;
+  const words = new Set(fold(content).split(' '));
+  let best = null; let tie = false;
+  for (const f of list) {
+    const n = new Set(fold(f.name).split(' ').filter((w) => w.length > 1 && !NAME_STOP.has(w) && !/^\d+$/.test(w) && words.has(w))).size;
+    if (n < 2) continue;
+    if (!best || n > best.n) { best = { id: f.id, n }; tie = false; } else if (n === best.n) tie = true;
+  }
+  return best && !tie ? best.id : null;
+}
+function statementRows(req, file) {
+  if (!file) bad('Chọn file sao kê');
+  const list = db.prepare("SELECT * FROM funds WHERE status='active' AND locked_at IS NULL AND payment_methods <> 'cash' ORDER BY id").all().filter((f) => canSeeFund(req, f));
+  const all = fileRows(file, STMT_COLS);
+  if (all.length > IMPORT_MAX) bad(`Mỗi lần nhập tối đa ${IMPORT_MAX} dòng`);
+  const seen = new Set(); // cùng mã giao dịch lặp trong file: giữ dòng đầu
+  const incoming = all.filter((x) => / DEN$/.test(fold(x.kind)) && fold(x.status) === 'THANH CONG' && !seen.has(x.txn) && seen.add(x.txn));
+  const rows = incoming.map((x) => {
+    const txn = str(x.txn, 80);
+    const amount = Number.isFinite(Number(x.amount)) ? round(Number(x.amount)) : Number(String(x.amount).replace(/\D/g, '')); // ô số Excel hoặc "200.000"
+    const t = /^(\d{2})-(\d{2})-(\d{4}) (\d{2}:\d{2}:\d{2})$/.exec(str(x.time, 30));
+    const content = str(x.content, 255);
+    const base = { line: x.line, txn, amount, content, account: str(x.account, 40) };
+    if (!/^[A-Za-z0-9-]+$/.test(txn)) return { ...base, error: 'Thiếu mã giao dịch' };
+    if (!amountOk(amount)) return { ...base, error: 'Số tiền không hợp lệ' };
+    if (!t) return { ...base, error: 'Thời gian không hợp lệ' };
+    const time = `${t[3]}-${t[2]}-${t[1]} ${t[4]}`;
+    // Chống trùng với khoản webhook đã nhận: khớp transactionid, hoặc mã FT nếu webhook gửi trong referencenumber.
+    // ponytail: chưa xác nhận webhook thật gửi mã FT ở trường nào; xác nhận rồi bỏ nhánh LIKE thừa.
+    const dup = !!(db.prepare('SELECT 1 FROM vietqr_transactions WHERE transactionid=? OR raw_json LIKE ?').get(txn, `%"referencenumber":"${txn}"%`)
+      || db.prepare('SELECT 1 FROM fund_entries WHERE bank_ref=?').get(txn));
+    const house = hh.getHousehold(hh.householdInContent(content));
+    return { ...base, time, dup, payer_name: house?.head_name || payerOf(content), payer_group: house?.hamlet || null,
+      household_code: house?.code || null, fund_id: dup ? null : guessFund(list, content) };
+  });
+  return { rows, list, skipped: all.length - incoming.length };
+}
+router.post('/fund-statement', requirePerm('fund.entry'), wrap((req, res) => {
+  const { rows, list, skipped } = statementRows(req, req.body?.file);
+  if (req.query.dry === '1') return ok(res, { rows, skipped, funds: list.map((f) => ({ id: f.id, name: f.name })) });
+  const picks = req.body?.picks || {}; // { [mã giao dịch]: { fund_id, payer_name } }, thiếu thì dùng đoán của máy
+  const by = req.user.full_name || req.user.username;
+  const insTxn = db.prepare(`INSERT INTO vietqr_transactions(transactionid,bank_account,amount,content,order_id,trans_type,matched,note,raw_json,category,bank_time,created_at)
+    VALUES (?,?,?,?,'','C',?,?,?,?,?,?)`);
+  let booked = 0; let queued = 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const r of rows) {
+      if (r.dup || r.error) continue;
+      const p = picks[r.txn] || {};
+      const fid = p.fund_id === undefined ? r.fund_id : Number(p.fund_id) || null;
+      const f = fid ? list.find((x) => x.id === fid) : null;
+      if (fid && !f) bad(`Dòng ${r.line}: quỹ đã chọn không nhận chuyển khoản`);
+      const raw = JSON.stringify({ source: 'statement', referencenumber: r.txn, line: r.line });
+      insTxn.run(r.txn, r.account, r.amount, r.content, f ? 1 : 0, f ? 'Nhập sao kê, ghi vào quỹ ' + f.name : 'Nhập sao kê, chưa rõ quỹ', raw,
+        f ? (f.kind === 'donation' ? 'donation' : 'fund') : 'unclassified', r.time, r.time);
+      if (!f) { queued++; continue; }
+      db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,note,payer_name,payer_group,household_code,status,created_by,created_by_name,approved_by,approved_by_name,created_at,approved_at)
+        VALUES (?,?,'in',?,'vietqr',?,?,?,?,?,'approved',?,?,?,?,?,?)`)
+        .run(makeCode(db, PREFIX.in, 'fund_entries', 'code', new Date(r.time.replace(' ', 'T'))), f.id, r.amount, r.txn, r.content,
+          str(p.payer_name, 120) || r.payer_name, r.payer_group, r.household_code, req.user.id, by, req.user.id, by, r.time, r.time);
+      booked++;
+    }
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  log(req, 'fund_statement.import', 'fund', null, { booked, queued });
+  ok(res, { booked, queued });
 }));
 
 // File mẫu để thủ quỹ điền rồi nhập lại
@@ -1131,7 +1217,7 @@ function processFundPayment(code, fundId, p) {
 }
 
 // GĐ3.2: thủ quỹ ghi một giao dịch chưa phân loại vào quỹ. Gọi trong transaction của route phân loại.
-function bookUnclassified(req, t, fundId, by) {
+function bookUnclassified(req, t, fundId, by, payerName) {
   const f = fundFor(req, fundId);
   if (!f) throw Object.assign(new Error('Không tìm thấy quỹ'), { code: 404 });
   if (f.status !== 'active') throw Object.assign(new Error(NOT_COLLECTING), { code: 400 });
@@ -1141,7 +1227,7 @@ function bookUnclassified(req, t, fundId, by) {
   const house = hh.getHousehold(hh.householdInContent(t.content));
   db.prepare(`INSERT INTO fund_entries(code,fund_id,type,amount,source,bank_ref,note,payer_name,payer_group,household_code,status,created_by,created_by_name,approved_by,approved_by_name,approved_at)
     VALUES (?,?,'in',?,'vietqr',?,?,?,?,?,'approved',?,?,?,?,datetime('now','localtime'))`)
-    .run(code, f.id, t.amount, t.transactionid, t.content || 'Phân loại từ hàng chờ', house?.head_name || null, house?.hamlet || null, house?.code || null,
+    .run(code, f.id, t.amount, t.transactionid, t.content || 'Phân loại từ hàng chờ', str(payerName, 120) || house?.head_name || payerOf(t.content), house?.hamlet || null, house?.code || null,
       req.user.id, by, req.user.id, by);
   log(req, 'fund_entry.create', 'fund_entry', null, { code, from_transaction: t.transactionid, amount: t.amount });
   return { fund: f, code, category: f.kind === 'donation' ? 'donation' : 'fund' };
@@ -1149,6 +1235,7 @@ function bookUnclassified(req, t, fundId, by) {
 
 module.exports = router;
 module.exports.bookUnclassified = bookUnclassified;
+module.exports.payerOf = payerOf;
 module.exports.resolveFundByBank = resolveFundByBank;
 module.exports.processFundPayment = processFundPayment;
 module.exports.balanceOf = balanceOf;
